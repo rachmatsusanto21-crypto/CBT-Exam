@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Sparkles,
   BookOpen,
@@ -16,17 +16,26 @@ import {
   Key,
   Shuffle,
   ShieldCheck,
-  ShieldAlert
+  ShieldAlert,
+  Image as ImageIcon,
+  Link as LinkIcon,
+  Upload,
+  Share2,
+  ListOrdered,
+  Type,
+  AlignLeft,
+  X
 } from "lucide-react";
-import { ExamPackage, Question, QuestionOption, QuestionType } from "../types";
-import { getGeminiRequestHeaders, getCustomGeminiApiKey } from "../utils/storage";
-import { generateQuestionsWithGemini } from "../utils/geminiApi";
+import { ExamPackage, Question, QuestionOption, QuestionType, MatchingPair } from "../types";
+import { generateQuestionsWithGemini, generateImageWithAi } from "../utils/geminiApi";
+import { DirectStudentShareModal } from "./DirectStudentShareModal";
 
 interface AIGeneratorAndEditorProps {
   activeExam: ExamPackage;
   onUpdateExam: (updated: ExamPackage) => void;
   onPreviewSlides: () => void;
   onOpenGeminiModal?: () => void;
+  activeToken?: string;
 }
 
 export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
@@ -34,6 +43,7 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
   onUpdateExam,
   onPreviewSlides,
   onOpenGeminiModal,
+  activeToken,
 }) => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
@@ -53,16 +63,37 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
   const [selectedQuestionId, setSelectedQuestionId] = useState<string>(activeExam.questions[0]?.id || "");
   const [editingQuestion, setEditingQuestion] = useState<Question | null>(activeExam.questions[0] || null);
 
+  // Image insertion tab state
+  const [imageTab, setImageTab] = useState<"ai" | "url" | "upload">("ai");
+  const [aiImagePrompt, setAiImagePrompt] = useState("");
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+  const [imageError, setImageError] = useState<string | null>(null);
+  const [imageUrlInput, setImageUrlInput] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Share Modal State
+  const [showShareModal, setShowShareModal] = useState(false);
+
   useEffect(() => {
     if (activeExam.questions.length > 0) {
       const found = activeExam.questions.find((q) => q.id === selectedQuestionId) || activeExam.questions[0];
       setSelectedQuestionId(found.id);
       setEditingQuestion({ ...found });
+      setAiImagePrompt(found.imagePrompt || found.questionText || "");
+      setImageUrlInput(found.imageUrl || "");
     } else {
       setSelectedQuestionId("");
       setEditingQuestion(null);
     }
   }, [activeExam.id]);
+
+  const handleSelectQuestion = (q: Question) => {
+    setSelectedQuestionId(q.id);
+    setEditingQuestion({ ...q });
+    setAiImagePrompt(q.imagePrompt || q.questionText || "");
+    setImageUrlInput(q.imageUrl || "");
+    setImageError(null);
+  };
 
   const handleGenerateAI = async () => {
     setIsGenerating(true);
@@ -124,6 +155,8 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
       totalScore,
       updatedAt: new Date().toISOString(),
     });
+    setAiSuccessMsg("Perubahan butir soal berhasil disimpan.");
+    setTimeout(() => setAiSuccessMsg(null), 3000);
   };
 
   const handleAddNewQuestionManual = () => {
@@ -163,59 +196,195 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
   };
 
   const handleDeleteQuestion = (id: string) => {
-    if (activeExam.questions.length <= 1) {
-      alert("Naskah soal minimal harus memiliki 1 butir pertanyaan.");
-      return;
-    }
-    const filtered = activeExam.questions
-      .filter((q) => q.id !== id)
-      .map((q, idx) => ({ ...q, questionNumber: idx + 1 }));
-
-    const totalScore = filtered.reduce((acc, q) => acc + q.score, 0);
+    const filtered = activeExam.questions.filter((q) => q.id !== id);
+    const renumbered = filtered.map((q, i) => ({ ...q, questionNumber: i + 1 }));
+    const totalScore = renumbered.reduce((acc, q) => acc + q.score, 0);
 
     onUpdateExam({
       ...activeExam,
-      questions: filtered,
+      questions: renumbered,
       totalScore,
       updatedAt: new Date().toISOString(),
     });
 
-    if (filtered[0]) {
-      setSelectedQuestionId(filtered[0].id);
-      setEditingQuestion(filtered[0]);
+    if (renumbered.length > 0) {
+      setSelectedQuestionId(renumbered[0].id);
+      setEditingQuestion(renumbered[0]);
+    } else {
+      setSelectedQuestionId("");
+      setEditingQuestion(null);
     }
   };
 
   const updateOptionText = (key: string, text: string) => {
     if (!editingQuestion) return;
-    const updatedOptions = editingQuestion.options.map((opt) =>
+    const newOptions = editingQuestion.options.map((opt) =>
       opt.key === key ? { ...opt, text } : opt
     );
-    setEditingQuestion({ ...editingQuestion, options: updatedOptions });
+    setEditingQuestion({ ...editingQuestion, options: newOptions });
   };
 
+  // Matching pair helpers
+  const handleAddMatchingPair = () => {
+    if (!editingQuestion) return;
+    const currentPairs = editingQuestion.matchingPairs || [];
+    const newPair: MatchingPair = {
+      id: `pair-${Date.now()}-${currentPairs.length + 1}`,
+      left: `Pernyataan / Konsep ${currentPairs.length + 1}`,
+      right: `Pasangan Cocok ${currentPairs.length + 1}`,
+    };
+    setEditingQuestion({
+      ...editingQuestion,
+      matchingPairs: [...currentPairs, newPair],
+    });
+  };
+
+  const handleUpdateMatchingPair = (pairId: string, field: "left" | "right", value: string) => {
+    if (!editingQuestion || !editingQuestion.matchingPairs) return;
+    const updated = editingQuestion.matchingPairs.map((p) =>
+      p.id === pairId ? { ...p, [field]: value } : p
+    );
+    setEditingQuestion({ ...editingQuestion, matchingPairs: updated });
+  };
+
+  const handleDeleteMatchingPair = (pairId: string) => {
+    if (!editingQuestion || !editingQuestion.matchingPairs) return;
+    const updated = editingQuestion.matchingPairs.filter((p) => p.id !== pairId);
+    setEditingQuestion({ ...editingQuestion, matchingPairs: updated });
+  };
+
+  // Image Insertion Handlers
+  const handleGenerateAiImage = async () => {
+    if (!editingQuestion) return;
+    const promptToUse = aiImagePrompt.trim() || editingQuestion.questionText;
+    if (!promptToUse) {
+      setImageError("Masukkan deskripsi atau prompt gambar yang ingin dibuat.");
+      return;
+    }
+
+    setIsGeneratingImage(true);
+    setImageError(null);
+
+    try {
+      const res = await generateImageWithAi({
+        prompt: promptToUse,
+        subject: activeExam.teacherProfile.subject || subject,
+        questionContext: editingQuestion.stimulus || editingQuestion.questionText,
+      });
+
+      const updatedQ: Question = {
+        ...editingQuestion,
+        imageUrl: res.imageUrl,
+        imageCaption: res.caption || promptToUse,
+        imagePrompt: promptToUse,
+      };
+
+      setEditingQuestion(updatedQ);
+
+      // Auto update in exam package
+      const updatedList = activeExam.questions.map((q) =>
+        q.id === updatedQ.id ? updatedQ : q
+      );
+      onUpdateExam({ ...activeExam, questions: updatedList, updatedAt: new Date().toISOString() });
+    } catch (err: any) {
+      setImageError(err.message || "Gagal membuat gambar AI.");
+    } finally {
+      setIsGeneratingImage(false);
+    }
+  };
+
+  const handleApplyUrlImage = () => {
+    if (!editingQuestion) return;
+    if (!imageUrlInput.trim()) {
+      setImageError("Masukkan URL gambar yang valid.");
+      return;
+    }
+
+    const updatedQ: Question = {
+      ...editingQuestion,
+      imageUrl: imageUrlInput.trim(),
+      imageCaption: editingQuestion.imageCaption || "Gambar Pendukung Soal",
+    };
+    setEditingQuestion(updatedQ);
+
+    const updatedList = activeExam.questions.map((q) =>
+      q.id === updatedQ.id ? updatedQ : q
+    );
+    onUpdateExam({ ...activeExam, questions: updatedList, updatedAt: new Date().toISOString() });
+    setImageError(null);
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!editingQuestion || !e.target.files || e.target.files.length === 0) return;
+    const file = e.target.files[0];
+
+    if (!file.type.startsWith("image/")) {
+      setImageError("File yang diunggah harus berupa gambar (JPG, PNG, WebP, SVG).");
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setImageError("Ukuran gambar maksimal 5 MB.");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const base64 = event.target?.result as string;
+      const updatedQ: Question = {
+        ...editingQuestion,
+        imageUrl: base64,
+        imageCaption: file.name.replace(/\.[^/.]+$/, ""),
+      };
+      setEditingQuestion(updatedQ);
+
+      const updatedList = activeExam.questions.map((q) =>
+        q.id === updatedQ.id ? updatedQ : q
+      );
+      onUpdateExam({ ...activeExam, questions: updatedList, updatedAt: new Date().toISOString() });
+      setImageError(null);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveImage = () => {
+    if (!editingQuestion) return;
+    const updatedQ: Question = {
+      ...editingQuestion,
+      imageUrl: undefined,
+      imageCaption: undefined,
+      imagePrompt: undefined,
+    };
+    setEditingQuestion(updatedQ);
+    setImageUrlInput("");
+
+    const updatedList = activeExam.questions.map((q) =>
+      q.id === updatedQ.id ? updatedQ : q
+    );
+    onUpdateExam({ ...activeExam, questions: updatedList, updatedAt: new Date().toISOString() });
+  };
+
+  // Anti-Cheating toggles
   const handleToggleShuffleQuestions = () => {
-    const nextState = !activeExam.shuffleQuestions;
-    const updated: ExamPackage = {
+    const updated = {
       ...activeExam,
-      shuffleQuestions: nextState,
+      shuffleQuestions: !activeExam.shuffleQuestions,
       updatedAt: new Date().toISOString(),
     };
     onUpdateExam(updated);
   };
 
   const handleToggleShuffleOptions = () => {
-    const nextState = !activeExam.shuffleOptions;
-    const updated: ExamPackage = {
+    const updated = {
       ...activeExam,
-      shuffleOptions: nextState,
+      shuffleOptions: !activeExam.shuffleOptions,
       updatedAt: new Date().toISOString(),
     };
     onUpdateExam(updated);
   };
 
   const handleSetAllShuffle = (enable: boolean) => {
-    const updated: ExamPackage = {
+    const updated = {
       ...activeExam,
       shuffleQuestions: enable,
       shuffleOptions: enable,
@@ -225,30 +394,26 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
   };
 
   return (
-    <div id="ai-generator-editor-view" className="space-y-6">
-      {/* Header Info Card */}
-      <div className="bg-[#121214] rounded-2xl p-6 border border-slate-800 shadow-md flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+    <div className="space-y-6">
+      {/* Top Action Bar with Direct Student Link */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#121214] p-5 rounded-2xl border border-slate-800 shadow-sm">
         <div>
-          <div className="flex items-center gap-2 text-indigo-400 font-medium text-xs">
-            <Sparkles className="w-4 h-4" />
-            <span>AI Question Engine & Slide Editor</span>
-          </div>
-          <h2 className="text-xl sm:text-2xl font-bold text-white mt-1">{activeExam.title}</h2>
-          <p className="text-slate-400 text-xs mt-1 flex flex-wrap items-center gap-2">
-            <span>Kode: <span className="font-mono font-semibold bg-[#1a1a1c] border border-slate-800 text-indigo-300 px-2 py-0.5 rounded">{activeExam.code}</span></span>
-            <span>•</span>
-            <span>Mata Pelajaran: <span className="font-semibold text-slate-300">{activeExam.teacherProfile.subject}</span></span>
-            <span>•</span>
-            <span>Total: <span className="font-semibold text-indigo-400">{activeExam.questions.length} Soal ({activeExam.totalScore} Poin)</span></span>
+          <h2 className="text-lg font-black text-white flex items-center gap-2">
+            <span>Editor Butir Soal & Generator AI</span>
+            <span className="text-xs px-2.5 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 font-bold">
+              {activeExam.questions.length} Butir ({activeExam.totalScore} Poin)
+            </span>
+          </h2>
+          <p className="text-xs text-slate-400 mt-1 flex items-center gap-2 flex-wrap">
+            <span>Mata Pelajaran: <strong className="text-slate-200">{activeExam.teacherProfile.subject}</strong></span>
             <span>•</span>
             <span
               onClick={handleToggleShuffleQuestions}
               className={`inline-flex items-center gap-1 px-2 py-0.5 rounded font-semibold text-[11px] cursor-pointer transition-all ${
                 activeExam.shuffleQuestions
-                  ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20"
+                  ? "bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 hover:bg-indigo-500/20"
                   : "bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700"
               }`}
-              title="Klik untuk ubah pengaturan acak soal"
             >
               <Shuffle className="w-3 h-3" />
               Acak Soal: {activeExam.shuffleQuestions ? "ON" : "OFF"}
@@ -260,7 +425,6 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                   ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20"
                   : "bg-slate-800 text-slate-400 border border-slate-700 hover:bg-slate-700"
               }`}
-              title="Klik untuk ubah pengaturan acak opsi jawaban"
             >
               <ShieldCheck className="w-3 h-3" />
               Acak Opsi: {activeExam.shuffleOptions ? "ON" : "OFF"}
@@ -268,14 +432,24 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5 flex-wrap">
+          {/* Direct Student Share Link Button */}
+          <button
+            id="share-student-link-btn"
+            onClick={() => setShowShareModal(true)}
+            className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-xs transition-all shadow-lg shadow-emerald-950 cursor-pointer"
+          >
+            <Share2 className="w-4 h-4" />
+            <span>Bagikan Link Siswa</span>
+          </button>
+
           <button
             id="preview-slides-btn"
             onClick={onPreviewSlides}
-            className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium text-xs transition-all shadow-lg shadow-indigo-950 cursor-pointer"
+            className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold text-xs transition-all shadow-lg shadow-indigo-950 cursor-pointer"
           >
             <Layers className="w-4 h-4" />
-            <span>Tinjau Mode Slides</span>
+            <span>Tinjau Slides CBT</span>
           </button>
         </div>
       </div>
@@ -312,14 +486,8 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
               </span>
             </div>
 
-            <p className="text-xs text-slate-400 leading-relaxed">
-              Cegah siswa saling mencocokkan jawaban atau mencontek saat ujian serentak dengan mengacak nomor butir soal dan posisi abjad pilihan jawaban.
-            </p>
-
-            <div className="space-y-2.5">
-              {/* Toggle 1: Acak Urutan Soal */}
+            <div className="space-y-2">
               <div
-                id="toggle-shuffle-questions-container"
                 onClick={handleToggleShuffleQuestions}
                 className="p-3 bg-[#161618] rounded-xl border border-slate-800 hover:border-slate-700 transition-all flex items-center justify-between gap-3 cursor-pointer group"
               >
@@ -327,43 +495,23 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                   <div className="flex items-center gap-2">
                     <Shuffle className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
                     <span className="text-xs font-bold text-white group-hover:text-indigo-300 transition-colors">
-                      Acak Urutan Butir Soal
+                      Acak Urutan Soal
                     </span>
                   </div>
                   <p className="text-[11px] text-slate-400 leading-tight">
-                    Setiap siswa menerima urutan nomor soal yang berbeda secara acak.
+                    Setiap siswa menerima urutan nomor soal yang berbeda.
                   </p>
                 </div>
-
-                <button
-                  type="button"
-                  id="toggle-shuffle-questions-btn"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleToggleShuffleQuestions();
-                  }}
-                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                    activeExam.shuffleQuestions ? "bg-emerald-600" : "bg-slate-800"
+                <div
+                  className={`w-9 h-5 rounded-full transition-colors flex items-center p-0.5 ${
+                    activeExam.shuffleQuestions ? "bg-emerald-600 justify-end" : "bg-slate-800 justify-start"
                   }`}
-                  role="switch"
-                  aria-checked={activeExam.shuffleQuestions}
-                  title={
-                    activeExam.shuffleQuestions
-                      ? "Klik untuk menonaktifkan pengacakan soal"
-                      : "Klik untuk mengaktifkan pengacakan soal"
-                  }
                 >
-                  <span
-                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
-                      activeExam.shuffleQuestions ? "translate-x-5" : "translate-x-0"
-                    }`}
-                  />
-                </button>
+                  <div className="w-4 h-4 bg-white rounded-full shadow-md" />
+                </div>
               </div>
 
-              {/* Toggle 2: Acak Opsi Jawaban */}
               <div
-                id="toggle-shuffle-options-container"
                 onClick={handleToggleShuffleOptions}
                 className="p-3 bg-[#161618] rounded-xl border border-slate-800 hover:border-slate-700 transition-all flex items-center justify-between gap-3 cursor-pointer group"
               >
@@ -371,58 +519,37 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                   <div className="flex items-center gap-2">
                     <Sliders className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                     <span className="text-xs font-bold text-white group-hover:text-emerald-300 transition-colors">
-                      Acak Pilihan Jawaban (A-E)
+                      Acak Opsi Pilihan (A-E)
                     </span>
                   </div>
                   <p className="text-[11px] text-slate-400 leading-tight">
-                    Posisi abjad opsi A, B, C, D, E diacak per siswa tanpa mengubah kebenaran kunci.
+                    Posisi abjad opsi A-E diacak otomatis per siswa.
                   </p>
                 </div>
-
-                <button
-                  type="button"
-                  id="toggle-shuffle-options-btn"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleToggleShuffleOptions();
-                  }}
-                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                    activeExam.shuffleOptions ? "bg-emerald-600" : "bg-slate-800"
+                <div
+                  className={`w-9 h-5 rounded-full transition-colors flex items-center p-0.5 ${
+                    activeExam.shuffleOptions ? "bg-emerald-600 justify-end" : "bg-slate-800 justify-start"
                   }`}
-                  role="switch"
-                  aria-checked={activeExam.shuffleOptions}
-                  title={
-                    activeExam.shuffleOptions
-                      ? "Klik untuk menonaktifkan pengacakan pilihan"
-                      : "Klik untuk mengaktifkan pengacakan pilihan"
-                  }
                 >
-                  <span
-                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
-                      activeExam.shuffleOptions ? "translate-x-5" : "translate-x-0"
-                    }`}
-                  />
-                </button>
+                  <div className="w-4 h-4 bg-white rounded-full shadow-md" />
+                </div>
               </div>
             </div>
 
-            {/* Quick Bulk Actions */}
             <div className="flex items-center gap-2 pt-1">
               <button
                 type="button"
-                id="enable-all-shuffle-btn"
                 onClick={() => handleSetAllShuffle(true)}
                 className="flex-1 py-1.5 px-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 rounded-lg text-[11px] font-semibold transition-all cursor-pointer text-center"
               >
-                Aktifkan Semua (Anti-Contek)
+                Aktifkan Semua
               </button>
               <button
                 type="button"
-                id="disable-all-shuffle-btn"
                 onClick={() => handleSetAllShuffle(false)}
                 className="py-1.5 px-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg text-[11px] font-semibold transition-all cursor-pointer text-center"
               >
-                Reset Statis
+                Reset
               </button>
             </div>
           </div>
@@ -484,20 +611,41 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                 />
               </div>
 
+              {/* Question Type Selector */}
+              <div>
+                <label className="block font-medium text-slate-300 mb-1">Ragam Jenis Soal</label>
+                <select
+                  value={questionType}
+                  onChange={(e) => setQuestionType(e.target.value as QuestionType)}
+                  className="w-full px-3 py-2 bg-[#1a1a1c] border border-slate-800 rounded-xl text-slate-200 focus:border-indigo-500 focus:outline-none text-xs font-semibold"
+                >
+                  <option value="pilihan_ganda" className="bg-[#121214]">Pilihan Ganda (A-E)</option>
+                  <option value="menjodohkan" className="bg-[#121214]">Mencocokkan / Menjodohkan (Matching)</option>
+                  <option value="isian_singkat" className="bg-[#121214]">Isian Pendek / Singkat (Short Answer)</option>
+                  <option value="uraian" className="bg-[#121214]">Uraian / Esai Komprehensif</option>
+                </select>
+              </div>
+
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block font-medium text-slate-300 mb-1">Jumlah Butir</label>
+                  <label className="block font-medium text-slate-300 mb-1">Jumlah Butir (Sampai 50)</label>
                   <select
                     value={count}
                     onChange={(e) => setCount(Number(e.target.value))}
-                    className="w-full px-3 py-2 bg-[#1a1a1c] border border-slate-800 rounded-xl text-slate-200 focus:border-indigo-500 focus:outline-none text-xs"
+                    className="w-full px-3 py-2 bg-[#1a1a1c] border border-slate-800 rounded-xl text-slate-200 focus:border-indigo-500 focus:outline-none text-xs font-bold"
                   >
                     <option value={3} className="bg-[#121214]">3 Soal</option>
                     <option value={5} className="bg-[#121214]">5 Soal</option>
                     <option value={10} className="bg-[#121214]">10 Soal</option>
                     <option value={15} className="bg-[#121214]">15 Soal</option>
+                    <option value={20} className="bg-[#121214]">20 Soal</option>
+                    <option value={25} className="bg-[#121214]">25 Soal</option>
+                    <option value={30} className="bg-[#121214]">30 Soal</option>
+                    <option value={40} className="bg-[#121214]">40 Soal</option>
+                    <option value={50} className="bg-[#121214]">50 Soal (Maksimal)</option>
                   </select>
                 </div>
+
                 <div>
                   <label className="block font-medium text-slate-300 mb-1">Kesukaran</label>
                   <select
@@ -529,7 +677,7 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                   value={instructions}
                   onChange={(e) => setInstructions(e.target.value)}
                   className="w-full px-3 py-2 bg-[#1a1a1c] border border-slate-800 rounded-xl text-slate-200 focus:border-indigo-500 focus:outline-none text-xs placeholder-slate-500"
-                  placeholder="Misal: Sertakan narasi kasus kehidupan sehari-hari"
+                  placeholder="Misal: Sertakan narasi kasus kehidupan sehari-hari..."
                 />
               </div>
 
@@ -551,17 +699,17 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                 id="generate-ai-questions-btn"
                 onClick={handleGenerateAI}
                 disabled={isGenerating}
-                className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl font-semibold text-xs transition-all shadow-lg shadow-indigo-950 cursor-pointer"
+                className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl font-bold text-xs transition-all shadow-lg shadow-indigo-950 cursor-pointer"
               >
                 {isGenerating ? (
                   <>
                     <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>Menyusun Soal AI...</span>
+                    <span>Menyusun {count} Butir Soal AI...</span>
                   </>
                 ) : (
                   <>
                     <Sparkles className="w-4 h-4" />
-                    <span>Generate Soal dengan Gemini</span>
+                    <span>Generate {count} Soal dengan Gemini</span>
                   </>
                 )}
               </button>
@@ -571,7 +719,9 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
           {/* Question List Navigation */}
           <div className="bg-[#121214] rounded-2xl p-5 border border-slate-800 shadow-sm space-y-3">
             <div className="flex items-center justify-between">
-              <span className="font-semibold text-slate-200 text-xs">Daftar Soal ({activeExam.questions.length})</span>
+              <span className="font-semibold text-slate-200 text-xs">
+                Daftar Soal ({activeExam.questions.length})
+              </span>
               <button
                 onClick={handleAddNewQuestionManual}
                 className="flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 font-medium px-2 py-1 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/20 rounded-lg cursor-pointer"
@@ -581,14 +731,11 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
               </button>
             </div>
 
-            <div className="max-h-[340px] overflow-y-auto space-y-2 pr-1">
+            <div className="max-h-[360px] overflow-y-auto space-y-2 pr-1">
               {activeExam.questions.map((q, idx) => (
                 <div
                   key={q.id}
-                  onClick={() => {
-                    setSelectedQuestionId(q.id);
-                    setEditingQuestion({ ...q });
-                  }}
+                  onClick={() => handleSelectQuestion(q)}
                   className={`p-3 rounded-xl border text-left cursor-pointer transition-all ${
                     selectedQuestionId === q.id
                       ? "border-indigo-500 bg-indigo-950/40 text-white ring-1 ring-indigo-500/30"
@@ -596,9 +743,21 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                   }`}
                 >
                   <div className="flex items-center justify-between text-xs">
-                    <span className="font-semibold text-indigo-300">Slide #{idx + 1}</span>
-                    <span className="font-mono px-2 py-0.5 bg-[#121214] text-slate-300 border border-slate-800 rounded text-[10px]">
-                      Kunci: {q.correctAnswer} | {q.score} Poin
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-bold text-indigo-300">#{idx + 1}</span>
+                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 uppercase">
+                        {q.type === "menjodohkan"
+                          ? "Mencocokkan"
+                          : q.type === "isian_singkat"
+                          ? "Isian"
+                          : q.type === "uraian"
+                          ? "Uraian"
+                          : "Pilgan"}
+                      </span>
+                      {q.imageUrl && <ImageIcon className="w-3 h-3 text-emerald-400" />}
+                    </div>
+                    <span className="font-mono text-slate-400 text-[10px]">
+                      {q.score} Poin
                     </span>
                   </div>
                   <p className="text-xs text-slate-300 line-clamp-2 mt-1 font-normal">{q.questionText}</p>
@@ -611,15 +770,37 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
         {/* Right Side: Detailed Question Editor */}
         <div className="lg:col-span-8">
           {editingQuestion ? (
-            <div className="bg-[#121214] rounded-2xl p-6 border border-slate-800 shadow-sm space-y-5">
-              <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+            <div className="bg-[#121214] rounded-2xl p-6 border border-slate-800 shadow-sm space-y-6">
+              {/* Question Editor Top Bar */}
+              <div className="flex items-center justify-between pb-4 border-b border-slate-800 flex-wrap gap-2">
                 <div className="flex items-center gap-2">
                   <span className="px-3 py-1 bg-indigo-600 text-white rounded-lg font-bold text-xs">
                     Soal #{editingQuestion.questionNumber}
                   </span>
-                  <span className="text-xs font-medium text-slate-400 uppercase tracking-wide">
-                    Slide Presentasi {editingQuestion.questionNumber + 3}
-                  </span>
+                  <select
+                    value={editingQuestion.type || "pilihan_ganda"}
+                    onChange={(e) => {
+                      const newType = e.target.value as QuestionType;
+                      setEditingQuestion({
+                        ...editingQuestion,
+                        type: newType,
+                        matchingPairs:
+                          newType === "menjodohkan" && (!editingQuestion.matchingPairs || editingQuestion.matchingPairs.length === 0)
+                            ? [
+                                { id: "p1", left: "Pernyataan / Konsep A", right: "Pasangan Cocok 1" },
+                                { id: "p2", left: "Pernyataan / Konsep B", right: "Pasangan Cocok 2" },
+                                { id: "p3", left: "Pernyataan / Konsep C", right: "Pasangan Cocok 3" },
+                              ]
+                            : editingQuestion.matchingPairs,
+                      });
+                    }}
+                    className="px-2.5 py-1 bg-[#1a1a1c] border border-slate-700 text-indigo-300 rounded-lg text-xs font-semibold focus:outline-none"
+                  >
+                    <option value="pilihan_ganda">Tipe: Pilihan Ganda (A-E)</option>
+                    <option value="menjodohkan">Tipe: Mencocokkan / Menjodohkan</option>
+                    <option value="isian_singkat">Tipe: Isian Pendek / Singkat</option>
+                    <option value="uraian">Tipe: Uraian / Esai</option>
+                  </select>
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -628,11 +809,11 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                     className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-rose-400 hover:bg-rose-500/10 rounded-lg border border-rose-500/20 font-medium cursor-pointer"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
-                    <span>Hapus Soal</span>
+                    <span>Hapus</span>
                   </button>
                   <button
                     onClick={handleSaveQuestionEdit}
-                    className="flex items-center gap-1.5 px-4 py-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-semibold cursor-pointer shadow-sm"
+                    className="flex items-center gap-1.5 px-4 py-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-bold cursor-pointer shadow-sm"
                   >
                     <CheckCircle2 className="w-3.5 h-3.5" />
                     <span>Simpan Perubahan</span>
@@ -640,7 +821,7 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                 </div>
               </div>
 
-              {/* Topic & Score */}
+              {/* Topic, Cognitive Level & Score */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-slate-300 mb-1">Subtopik / Pokok Bahasan</label>
@@ -679,6 +860,214 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                 </div>
               </div>
 
+              {/* ========================================================================= */}
+              {/* IMAGE ATTACHMENT / AI IMAGE GENERATOR FOR QUESTION */}
+              {/* ========================================================================= */}
+              <div className="p-4 bg-[#161618] rounded-2xl border border-slate-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <ImageIcon className="w-4 h-4 text-indigo-400" />
+                    <span className="text-xs font-bold text-white">Gambar / Diagram Pendukung Soal</span>
+                  </div>
+                  {editingQuestion.imageUrl && (
+                    <button
+                      type="button"
+                      onClick={handleRemoveImage}
+                      className="text-[11px] text-rose-400 hover:text-rose-300 flex items-center gap-1 cursor-pointer"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      <span>Hapus Gambar</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* If image exists, show preview and caption editor */}
+                {editingQuestion.imageUrl ? (
+                  <div className="space-y-3">
+                    <div className="relative rounded-2xl overflow-hidden bg-black/60 border border-slate-700 flex items-center justify-center max-h-64 p-2">
+                      <img
+                        src={editingQuestion.imageUrl}
+                        alt={editingQuestion.imageCaption || "Gambar Soal"}
+                        className="max-h-60 object-contain rounded-xl"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[11px] text-slate-400 mb-1">Keterangan Gambar (Caption)</label>
+                        <input
+                          type="text"
+                          value={editingQuestion.imageCaption || ""}
+                          onChange={(e) =>
+                            setEditingQuestion({ ...editingQuestion, imageCaption: e.target.value })
+                          }
+                          className="w-full px-3 py-1.5 bg-[#1a1a1c] border border-slate-800 rounded-xl text-slate-200 text-xs"
+                          placeholder="Misal: Gambar 1.1 Struktur Jaringan"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] text-slate-400 mb-1">Ganti dengan Prompt AI Lain</label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={aiImagePrompt}
+                            onChange={(e) => setAiImagePrompt(e.target.value)}
+                            className="flex-1 px-3 py-1.5 bg-[#1a1a1c] border border-slate-800 rounded-xl text-slate-200 text-xs"
+                            placeholder="Prompt visual baru..."
+                          />
+                          <button
+                            type="button"
+                            onClick={handleGenerateAiImage}
+                            disabled={isGeneratingImage}
+                            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold cursor-pointer shrink-0 disabled:opacity-50"
+                          >
+                            {isGeneratingImage ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : "Regenerate"}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  /* Image Insertion Controls (AI Prompt, URL Link, or Upload File) */
+                  <div className="space-y-3">
+                    {/* Tabs */}
+                    <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
+                      <button
+                        type="button"
+                        onClick={() => setImageTab("ai")}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                          imageTab === "ai"
+                            ? "bg-indigo-600 text-white shadow-sm"
+                            : "bg-[#1a1a1c] text-slate-400 hover:text-white"
+                        }`}
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Generate AI (Prompt)</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setImageTab("url")}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                          imageTab === "url"
+                            ? "bg-indigo-600 text-white shadow-sm"
+                            : "bg-[#1a1a1c] text-slate-400 hover:text-white"
+                        }`}
+                      >
+                        <LinkIcon className="w-3.5 h-3.5" />
+                        <span>Tautan URL</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setImageTab("upload")}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+                          imageTab === "upload"
+                            ? "bg-indigo-600 text-white shadow-sm"
+                            : "bg-[#1a1a1c] text-slate-400 hover:text-white"
+                        }`}
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>Unggah File</span>
+                      </button>
+                    </div>
+
+                    {/* Tab 1: AI Prompt */}
+                    {imageTab === "ai" && (
+                      <div className="space-y-2">
+                        <label className="block text-[11px] text-slate-400">
+                          Masukkan deskripsi visual / diagram yang ingin dibuat AI untuk soal nomor #{editingQuestion.questionNumber}:
+                        </label>
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                          <input
+                            type="text"
+                            value={aiImagePrompt}
+                            onChange={(e) => setAiImagePrompt(e.target.value)}
+                            placeholder="Contoh: Diagram organel sel hewan dengan label mitokondria dan nukleus..."
+                            className="flex-1 px-3.5 py-2 bg-[#1a1a1c] border border-slate-800 rounded-xl text-slate-200 text-xs focus:border-indigo-500 focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleGenerateAiImage}
+                            disabled={isGeneratingImage}
+                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-md shadow-indigo-950 cursor-pointer shrink-0"
+                          >
+                            {isGeneratingImage ? (
+                              <>
+                                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                <span>Membuat Visual AI...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Sparkles className="w-3.5 h-3.5" />
+                                <span>Buat Gambar AI</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Tab 2: URL Link */}
+                    {imageTab === "url" && (
+                      <div className="space-y-2">
+                        <label className="block text-[11px] text-slate-400">
+                          Masukkan URL tautan gambar langsung (https://...):
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="url"
+                            value={imageUrlInput}
+                            onChange={(e) => setImageUrlInput(e.target.value)}
+                            placeholder="https://example.com/diagram.png"
+                            className="flex-1 px-3.5 py-2 bg-[#1a1a1c] border border-slate-800 rounded-xl text-slate-200 text-xs focus:border-indigo-500 focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleApplyUrlImage}
+                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold cursor-pointer shrink-0"
+                          >
+                            Terapkan
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Tab 3: Upload File */}
+                    {imageTab === "upload" && (
+                      <div className="space-y-2">
+                        <input
+                          type="file"
+                          ref={fileInputRef}
+                          onChange={handleFileUpload}
+                          accept="image/*"
+                          className="hidden"
+                        />
+                        <div
+                          onClick={() => fileInputRef.current?.click()}
+                          className="p-6 border-2 border-dashed border-slate-700 hover:border-indigo-500 rounded-2xl text-center cursor-pointer bg-[#1a1a1c]/60 hover:bg-[#1a1a1c] transition-all space-y-1"
+                        >
+                          <Upload className="w-6 h-6 text-slate-400 mx-auto" />
+                          <div className="text-xs font-semibold text-slate-200">
+                            Klik untuk memilih gambar atau seret file ke sini
+                          </div>
+                          <div className="text-[11px] text-slate-400">
+                            Mendukung JPG, PNG, WebP, SVG (Maksimal 5 MB)
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {imageError && (
+                      <div className="p-2.5 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-xs flex items-center gap-2">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                        <span>{imageError}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {/* Stimulus */}
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1">
@@ -711,64 +1100,181 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                 />
               </div>
 
-              {/* Options & Key */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-medium text-slate-300">
-                    Opsi Pilihan Jawaban & Kunci Jawaban Benar
-                  </label>
-                  <span className="text-[11px] text-slate-500">
-                    Klik huruf lingkaran untuk menetapkan Kunci Jawaban
-                  </span>
-                </div>
+              {/* ========================================================================= */}
+              {/* DYNAMIC ANSWER CONTROLS ACCORDING TO QUESTION TYPE */}
+              {/* ========================================================================= */}
 
-                <div className="space-y-2.5">
-                  {editingQuestion.options.map((opt) => {
-                    const isCorrect = editingQuestion.correctAnswer.toUpperCase() === opt.key.toUpperCase();
-                    return (
-                      <div
-                        key={opt.key}
-                        className={`flex items-center gap-2 p-2.5 rounded-xl border transition-all ${
-                          isCorrect
-                            ? "bg-emerald-500/10 border-emerald-500/40 ring-1 ring-emerald-500/20"
-                            : "bg-[#1a1a1c] border-slate-800 hover:border-slate-700"
-                        }`}
-                      >
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setEditingQuestion({ ...editingQuestion, correctAnswer: opt.key })
-                          }
-                          className={`w-8 h-8 rounded-lg font-bold text-xs flex items-center justify-center shrink-0 cursor-pointer transition-all ${
+              {/* TYPE 1: PILIHAN GANDA (A-E) */}
+              {(editingQuestion.type === "pilihan_ganda" ||
+                editingQuestion.type === "pilihan_ganda_kompleks" ||
+                !editingQuestion.type) && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-medium text-slate-300">
+                      Opsi Pilihan Jawaban & Kunci Jawaban Benar
+                    </label>
+                    <span className="text-[11px] text-slate-500">
+                      Klik huruf lingkaran untuk menetapkan Kunci Jawaban
+                    </span>
+                  </div>
+
+                  <div className="space-y-2.5">
+                    {editingQuestion.options.map((opt) => {
+                      const isCorrect = editingQuestion.correctAnswer.toUpperCase() === opt.key.toUpperCase();
+                      return (
+                        <div
+                          key={opt.key}
+                          className={`flex items-center gap-2 p-2.5 rounded-xl border transition-all ${
                             isCorrect
-                              ? "bg-emerald-600 text-white shadow-sm"
-                              : "bg-[#121214] text-slate-300 border border-slate-700 hover:bg-slate-800"
+                              ? "bg-emerald-500/10 border-emerald-500/40 ring-1 ring-emerald-500/20"
+                              : "bg-[#1a1a1c] border-slate-800 hover:border-slate-700"
                           }`}
                         >
-                          {opt.key}
-                        </button>
-                        <input
-                          type="text"
-                          value={opt.text}
-                          onChange={(e) => updateOptionText(opt.key, e.target.value)}
-                          className="flex-1 bg-transparent border-none text-slate-200 text-xs focus:outline-none px-1"
-                          placeholder={`Teks pilihan ${opt.key}`}
-                        />
-                        {isCorrect && (
-                          <span className="text-[10px] font-bold text-emerald-400 px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/20 rounded">
-                            KUNCI BENAR
-                          </span>
-                        )}
-                      </div>
-                    );
-                  })}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setEditingQuestion({ ...editingQuestion, correctAnswer: opt.key })
+                            }
+                            className={`w-8 h-8 rounded-lg font-bold text-xs flex items-center justify-center shrink-0 cursor-pointer transition-all ${
+                              isCorrect
+                                ? "bg-emerald-600 text-white shadow-sm"
+                                : "bg-[#121214] text-slate-300 border border-slate-700 hover:bg-slate-800"
+                            }`}
+                          >
+                            {opt.key}
+                          </button>
+                          <input
+                            type="text"
+                            value={opt.text}
+                            onChange={(e) => updateOptionText(opt.key, e.target.value)}
+                            className="flex-1 bg-transparent border-none text-slate-200 text-xs focus:outline-none px-1"
+                            placeholder={`Teks pilihan ${opt.key}`}
+                          />
+                          {isCorrect && (
+                            <span className="text-[10px] font-bold text-emerald-400 px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/20 rounded">
+                              KUNCI BENAR
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
+              )}
+
+              {/* TYPE 2: MENCOCOKKAN / MENJODOHKAN */}
+              {editingQuestion.type === "menjodohkan" && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className="text-xs font-bold text-slate-200">
+                        Pasangan Soal Menjodohkan (Pernyataan Kiri ↔ Pasangan Kanan)
+                      </label>
+                      <p className="text-[11px] text-slate-400">
+                        Siswa akan mencocokkan setiap item di kolom kiri dengan pilihan yang tepat di kolom kanan.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleAddMatchingPair}
+                      className="px-2.5 py-1 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Tambah Pasangan</span>
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    {(editingQuestion.matchingPairs || []).map((pair, pIdx) => (
+                      <div
+                        key={pair.id || pIdx}
+                        className="p-3 bg-[#1a1a1c] rounded-xl border border-slate-800 flex items-center gap-3"
+                      >
+                        <span className="w-6 h-6 rounded-lg bg-indigo-600/20 text-indigo-400 font-bold text-xs flex items-center justify-center shrink-0">
+                          {pIdx + 1}
+                        </span>
+
+                        <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <input
+                            type="text"
+                            value={pair.left}
+                            onChange={(e) => handleUpdateMatchingPair(pair.id, "left", e.target.value)}
+                            className="px-3 py-1.5 bg-[#121214] border border-slate-700 rounded-lg text-slate-200 text-xs focus:border-indigo-500 focus:outline-none"
+                            placeholder="Pernyataan / Item Kiri..."
+                          />
+                          <input
+                            type="text"
+                            value={pair.right}
+                            onChange={(e) => handleUpdateMatchingPair(pair.id, "right", e.target.value)}
+                            className="px-3 py-1.5 bg-[#121214] border border-slate-700 rounded-lg text-emerald-300 text-xs focus:border-emerald-500 focus:outline-none"
+                            placeholder="Pasangan Cocok Kanan..."
+                          />
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteMatchingPair(pair.id)}
+                          className="p-1.5 text-slate-400 hover:text-rose-400 rounded-lg hover:bg-rose-500/10 cursor-pointer shrink-0"
+                          title="Hapus baris pasangan"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* TYPE 3: ISIAN PENDEK / SINGKAT */}
+              {editingQuestion.type === "isian_singkat" && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-200 mb-1">
+                      Kunci Jawaban Isian Singkat
+                    </label>
+                    <p className="text-[11px] text-slate-400 mb-2">
+                      Masukkan kata atau angka yang tepat. Jika ada beberapa alternatif penulisan kata yang sama-sama benar, pisahkan dengan tanda koma (contoh: <em>fotosintesis, photosynthesis, fotosintesa</em>).
+                    </p>
+                    <input
+                      type="text"
+                      value={editingQuestion.correctAnswer}
+                      onChange={(e) =>
+                        setEditingQuestion({ ...editingQuestion, correctAnswer: e.target.value })
+                      }
+                      className="w-full px-3.5 py-2.5 bg-[#1a1a1c] border border-emerald-500/40 rounded-xl text-emerald-300 text-xs font-mono font-bold focus:border-emerald-500 focus:outline-none"
+                      placeholder="Misal: Klorofil, Zat Hijau Daun"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* TYPE 4: URAIAN / ESAI */}
+              {editingQuestion.type === "uraian" && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-200 mb-1">
+                      Rubrik Penilaian & Contoh Jawaban Ideal (Kunci Acuan)
+                    </label>
+                    <p className="text-[11px] text-slate-400 mb-2">
+                      Tuliskan poin-poin rubrik penilaian atau esai referensi untuk memudahkan guru saat mengoreksi jawaban siswa.
+                    </p>
+                    <textarea
+                      rows={3}
+                      value={editingQuestion.sampleAnswer || ""}
+                      onChange={(e) =>
+                        setEditingQuestion({ ...editingQuestion, sampleAnswer: e.target.value })
+                      }
+                      className="w-full px-3 py-2 bg-[#1a1a1c] border border-slate-800 rounded-xl text-slate-200 text-xs focus:border-indigo-500 focus:outline-none placeholder-slate-600"
+                      placeholder="Poin 1: Menyebutkan definisi (skor 5). Poin 2: Menjelaskan 2 contoh penerapan (skor 5)..."
+                    />
+                  </div>
+                </div>
+              )}
 
               {/* Explanation */}
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1">
-                  Pembahasan / Rasionalisasi Kunci Jawaban
+                  Pembahasan / Rasionalisasi Jawaban
                 </label>
                 <textarea
                   rows={2}
@@ -790,6 +1296,14 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
           )}
         </div>
       </div>
+
+      {/* Share Direct Student Link Modal */}
+      <DirectStudentShareModal
+        isOpen={showShareModal}
+        onClose={() => setShowShareModal(false)}
+        exam={activeExam}
+        token={activeToken}
+      />
     </div>
   );
 };

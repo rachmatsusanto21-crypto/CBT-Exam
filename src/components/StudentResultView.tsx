@@ -11,7 +11,11 @@ import {
   ChevronRight,
   BookOpen,
   ArrowLeft,
-  GraduationCap
+  GraduationCap,
+  Image as ImageIcon,
+  ArrowRightLeft,
+  FileEdit,
+  AlignLeft
 } from "lucide-react";
 import { ExamPackage, StudentExamSession } from "../types";
 import { generateStudentRemediation } from "../utils/geminiApi";
@@ -54,7 +58,7 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
     .map((q) => ({
       questionText: q.questionText,
       studentAnswer: session.answers[q.id]?.selectedOption || "Tidak Dijawab",
-      correctAnswer: q.correctAnswer,
+      correctAnswer: q.correctAnswer || (q.matchingPairs ? JSON.stringify(q.matchingPairs) : ""),
       explanation: q.explanation,
       topicTag: q.topicTag,
     }));
@@ -138,114 +142,107 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
           </div>
         </div>
 
-        {/* Metrics Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 max-w-2xl mx-auto pt-2">
-          <div className="p-3 bg-[#161618] rounded-2xl border border-slate-800">
-            <div className="text-xs text-slate-400 font-medium">Benar</div>
-            <div className="text-xl font-extrabold text-emerald-400 flex items-center justify-center gap-1 mt-1">
-              <CheckCircle className="w-4 h-4" />
-              <span>{correctCount} Soal</span>
-            </div>
+        {/* Quick Stats Grid */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 max-w-2xl mx-auto text-xs">
+          <div className="bg-[#161618] p-3 rounded-2xl border border-slate-800">
+            <span className="text-slate-400 block mb-1">Benar</span>
+            <span className="text-lg font-bold text-emerald-400">{correctCount} Soal</span>
           </div>
-
-          <div className="p-3 bg-[#161618] rounded-2xl border border-slate-800">
-            <div className="text-xs text-slate-400 font-medium">Salah</div>
-            <div className="text-xl font-extrabold text-rose-400 flex items-center justify-center gap-1 mt-1">
-              <XCircle className="w-4 h-4" />
-              <span>{incorrectCount} Soal</span>
-            </div>
+          <div className="bg-[#161618] p-3 rounded-2xl border border-slate-800">
+            <span className="text-slate-400 block mb-1">Belum Tepat</span>
+            <span className="text-lg font-bold text-rose-400">{incorrectCount} Soal</span>
           </div>
-
-          <div className="p-3 bg-[#161618] rounded-2xl border border-slate-800">
-            <div className="text-xs text-slate-400 font-medium">Durasi Ujian</div>
-            <div className="text-xl font-extrabold text-slate-200 flex items-center justify-center gap-1 mt-1">
-              <Clock className="w-4 h-4 text-slate-400" />
-              <span>{durationMinutes} Menit</span>
-            </div>
+          <div className="bg-[#161618] p-3 rounded-2xl border border-slate-800">
+            <span className="text-slate-400 block mb-1">Durasi Pengerjaan</span>
+            <span className="text-lg font-bold text-indigo-300">{durationMinutes} Menit</span>
           </div>
-
-          <div className="p-3 bg-[#161618] rounded-2xl border border-slate-800">
-            <div className="text-xs text-slate-400 font-medium">Akurasi</div>
-            <div className="text-xl font-extrabold text-indigo-400 flex items-center justify-center gap-1 mt-1">
-              <Award className="w-4 h-4 text-indigo-400" />
-              <span>{session.percentage}%</span>
-            </div>
+          <div className="bg-[#161618] p-3 rounded-2xl border border-slate-800">
+            <span className="text-slate-400 block mb-1">Integritas Ujian</span>
+            <span className="text-lg font-bold text-emerald-400">
+              {(session.violationCount || 0) === 0 ? "100% Tertib" : `${session.violationCount}x Peringatan`}
+            </span>
           </div>
         </div>
 
-        {/* Navigation Tabs */}
-        <div className="flex flex-wrap justify-center gap-3 pt-4 border-t border-slate-800">
-          <button
-            onClick={() => setActiveTab("summary")}
-            className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-              activeTab === "summary"
-                ? "bg-indigo-600 text-white shadow-md shadow-indigo-950"
-                : "bg-[#1a1a1c] text-slate-400 hover:bg-slate-800 hover:text-white border border-slate-700"
-            }`}
-          >
-            Ringkasan & Remedial AI
-          </button>
-          {exam.allowReviewExplanation && (
-            <button
-              onClick={() => setActiveTab("review")}
-              className={`px-4 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-                activeTab === "review"
-                  ? "bg-indigo-600 text-white shadow-md shadow-indigo-950"
-                  : "bg-[#1a1a1c] text-slate-400 hover:bg-slate-800 hover:text-white border border-slate-700"
-              }`}
-            >
-              Pembahasan Lengkap Butir Soal
-            </button>
-          )}
+        {/* Action Buttons */}
+        <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
           <button
             onClick={handlePrintResult}
-            className="flex items-center gap-1.5 px-4 py-2 bg-[#1a1a1c] hover:bg-slate-800 text-slate-300 border border-slate-700 rounded-xl text-xs font-semibold cursor-pointer"
+            className="flex items-center gap-2 px-5 py-2.5 bg-[#1a1a1c] hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold cursor-pointer transition-colors"
           >
-            <Printer className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Cetak Kartu Hasil</span>
+            <Printer className="w-4 h-4 text-indigo-400" />
+            <span>Cetak Lembar Nilai</span>
           </button>
+
           <button
             onClick={onExit}
-            className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold cursor-pointer shadow-md shadow-indigo-950"
+            className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold cursor-pointer transition-all shadow-md shadow-indigo-950"
           >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Kembali ke Menu Utama</span>
+            <span>Selesai & Keluar</span>
+            <ChevronRight className="w-4 h-4" />
           </button>
         </div>
       </div>
 
-      {/* Tab Content: Summary & AI Remediation */}
+      {/* Tabs Navigation: Summary vs Detailed Review */}
+      <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
+        <button
+          onClick={() => setActiveTab("summary")}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+            activeTab === "summary"
+              ? "bg-indigo-600 text-white shadow-sm"
+              : "bg-[#161618] text-slate-400 hover:text-white"
+          }`}
+        >
+          Ringkasan & Diagnosis AI
+        </button>
+
+        {exam.allowReviewExplanation && (
+          <button
+            onClick={() => setActiveTab("review")}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              activeTab === "review"
+                ? "bg-indigo-600 text-white shadow-sm"
+                : "bg-[#161618] text-slate-400 hover:text-white"
+            }`}
+          >
+            Pembahasan Butir Soal ({questionsList.length})
+          </button>
+        )}
+      </div>
+
+      {/* Tab Content: Summary & Gemini AI Remediation */}
       {activeTab === "summary" && (
         <div className="space-y-6">
-          {/* AI Remediation Box */}
-          <div className="bg-[#121214] rounded-3xl p-6 border border-slate-800 shadow-sm space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-2 text-white font-bold text-base">
-                <Sparkles className="w-5 h-5 text-indigo-400 animate-pulse" />
-                <span>Analisis Pembelajaran & Remedial Cerdas Gemini AI</span>
+          {/* Gemini AI Remediation Card */}
+          <div className="bg-[#121214] rounded-2xl p-6 border border-indigo-900/40 shadow-sm space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-indigo-400 font-bold text-sm">
+                <Sparkles className="w-4 h-4 animate-pulse" />
+                <span>Diagnosis Remedial & Rekomendasi Belajar AI</span>
               </div>
+
               <button
-                id="generate-remediation-btn"
                 onClick={handleGenerateAiRemediation}
                 disabled={isAnalyzingAi}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-800 text-white rounded-xl text-xs font-semibold transition-all cursor-pointer shadow-md shadow-indigo-950"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 rounded-xl text-xs font-bold transition-all cursor-pointer disabled:opacity-50"
               >
                 {isAnalyzingAi ? (
                   <>
                     <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    <span>Menganalisis Jawaban...</span>
+                    <span>Menganalisis...</span>
                   </>
                 ) : (
                   <>
                     <Sparkles className="w-3.5 h-3.5" />
-                    <span>{aiAnalysis ? "Perbarui Rekomendasi" : "Buat Rekomendasi Remedial AI"}</span>
+                    <span>{aiAnalysis ? "Analisis Ulang AI" : "Generate Analisis AI"}</span>
                   </>
                 )}
               </button>
             </div>
 
             {aiAnalysis ? (
-              <div className="bg-[#161618] rounded-2xl p-5 border border-slate-800 text-slate-200 text-sm leading-relaxed whitespace-pre-line space-y-2">
+              <div className="p-4 bg-[#161618] rounded-xl border border-slate-800 text-xs text-slate-300 leading-relaxed whitespace-pre-line">
                 {aiAnalysis}
               </div>
             ) : (
@@ -268,7 +265,7 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
             {questionsList.map((q, idx) => {
               const studentAnswerObj = session.answers[q.id];
               const studentAns = studentAnswerObj?.selectedOption || "Kosong";
-              const isRight = studentAnswerObj?.isCorrect || studentAns === q.correctAnswer;
+              const isRight = studentAnswerObj?.isCorrect;
 
               return (
                 <div
@@ -292,7 +289,7 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
                     </div>
 
                     <div className="flex items-center gap-2 text-xs font-semibold">
-                      <span className="text-slate-400">Jawaban Anda: </span>
+                      <span className="text-slate-400">Status: </span>
                       <span
                         className={`px-2 py-0.5 rounded font-bold ${
                           isRight
@@ -300,10 +297,10 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
                             : "bg-rose-500/10 text-rose-400 border border-rose-500/20"
                         }`}
                       >
-                        {studentAns} ({isRight ? "Benar" : "Salah"})
+                        {isRight ? "Benar" : "Perlu Evaluasi"}
                       </span>
                       <span className="bg-[#1a1a1c] text-slate-300 border border-slate-700 px-2 py-0.5 rounded">
-                        Kunci: {q.correctAnswer}
+                        Skor: {studentAnswerObj?.scoreEarned || 0} / {q.score}
                       </span>
                     </div>
                   </div>
@@ -314,51 +311,111 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
                     </div>
                   )}
 
+                  {q.imageUrl && (
+                    <div className="p-2 bg-black/60 rounded-xl border border-slate-800 max-h-56 flex items-center justify-center overflow-hidden">
+                      <img src={q.imageUrl} alt="Visual Soal" className="max-h-52 object-contain rounded-lg" />
+                    </div>
+                  )}
+
                   <p className="text-sm font-semibold text-white">{q.questionText}</p>
 
-                  <div className="space-y-2">
-                    {q.options.map((opt) => {
-                      const isCorrectKey = opt.key === q.correctAnswer;
-                      const isStudentSelected = opt.key === studentAns;
+                  {/* Options display for multiple choice */}
+                  {(!q.type || q.type === "pilihan_ganda" || q.type === "pilihan_ganda_kompleks" || q.type === "benar_salah") && (
+                    <div className="space-y-2">
+                      {q.options.map((opt) => {
+                        const isCorrectKey = opt.key.toUpperCase() === q.correctAnswer.toUpperCase();
+                        const isStudentSelected = opt.key.toUpperCase() === studentAns.toUpperCase();
 
-                      let optStyle = "bg-[#161618] border-slate-800 text-slate-300";
-                      if (isCorrectKey) {
-                        optStyle = "bg-emerald-950/40 border-emerald-500/50 text-emerald-200 font-semibold";
-                      } else if (isStudentSelected && !isRight) {
-                        optStyle = "bg-rose-950/40 border-rose-500/50 text-rose-200 font-semibold";
-                      }
+                        let optStyle = "bg-[#161618] border-slate-800 text-slate-300";
+                        if (isCorrectKey) {
+                          optStyle = "bg-emerald-950/40 border-emerald-500/50 text-emerald-200 font-semibold";
+                        } else if (isStudentSelected && !isRight) {
+                          optStyle = "bg-rose-950/40 border-rose-500/50 text-rose-200 font-semibold";
+                        }
 
-                      return (
-                        <div
-                          key={opt.key}
-                          className={`p-3 rounded-xl border text-xs flex items-center justify-between ${optStyle}`}
-                        >
-                          <div className="flex items-center gap-2">
-                            <span className="w-6 h-6 rounded font-bold flex items-center justify-center bg-[#222226] text-slate-200 border border-slate-700">
-                              {opt.key}
-                            </span>
-                            <span>{opt.text}</span>
+                        return (
+                          <div
+                            key={opt.key}
+                            className={`p-3 rounded-xl border text-xs flex items-center justify-between ${optStyle}`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="w-6 h-6 rounded font-bold flex items-center justify-center bg-[#222226] text-slate-200 border border-slate-700">
+                                {opt.key}
+                              </span>
+                              <span>{opt.text}</span>
+                            </div>
+
+                            {isCorrectKey && (
+                              <span className="text-[11px] font-bold text-emerald-400 px-2 py-0.5 bg-emerald-500/20 border border-emerald-500/30 rounded">
+                                KUNCI JAWABAN
+                              </span>
+                            )}
+                            {isStudentSelected && !isCorrectKey && (
+                              <span className="text-[11px] font-bold text-rose-400 px-2 py-0.5 bg-rose-500/20 border border-rose-500/30 rounded">
+                                PILIHAN ANDA
+                              </span>
+                            )}
                           </div>
+                        );
+                      })}
+                    </div>
+                  )}
 
-                          {isCorrectKey && (
-                            <span className="text-[11px] font-bold text-emerald-400 px-2 py-0.5 bg-emerald-500/20 border border-emerald-500/30 rounded">
-                              KUNCI JAWABAN
-                            </span>
-                          )}
-                          {isStudentSelected && !isCorrectKey && (
-                            <span className="text-[11px] font-bold text-rose-400 px-2 py-0.5 bg-rose-500/20 border border-rose-500/30 rounded">
-                              PILIHAN ANDA
-                            </span>
-                          )}
+                  {/* Matching Pairs review */}
+                  {q.type === "menjodohkan" && (
+                    <div className="p-3 bg-[#161618] rounded-xl border border-slate-800 space-y-2 text-xs">
+                      <div className="font-bold text-slate-300">Pasangan Kunci Jawaban yang Benar:</div>
+                      <div className="space-y-1">
+                        {(q.matchingPairs || []).map((p, pIdx) => (
+                          <div key={p.id || pIdx} className="flex items-center justify-between p-2 bg-[#121214] rounded-lg border border-slate-800">
+                            <span className="text-slate-200">{p.left}</span>
+                            <span className="text-emerald-400 font-bold">↔ {p.right}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Short Answer review */}
+                  {q.type === "isian_singkat" && (
+                    <div className="p-3 bg-[#161618] rounded-xl border border-slate-800 space-y-2 text-xs">
+                      <div>
+                        <span className="text-slate-400">Jawaban Anda: </span>
+                        <strong className={isRight ? "text-emerald-400" : "text-rose-400"}>{studentAns || "Kosong"}</strong>
+                      </div>
+                      <div>
+                        <span className="text-slate-400">Kunci Jawaban Acuan: </span>
+                        <strong className="text-emerald-400">{q.correctAnswer}</strong>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Essay review */}
+                  {q.type === "uraian" && (
+                    <div className="p-3 bg-[#161618] rounded-xl border border-slate-800 space-y-2 text-xs">
+                      <div>
+                        <span className="text-slate-400 block mb-1 font-semibold">Jawaban Uraian Anda:</span>
+                        <p className="p-2.5 bg-[#121214] rounded-lg border border-slate-800 text-slate-200 leading-relaxed whitespace-pre-line">
+                          {studentAns || "Tidak ada jawaban tertulis."}
+                        </p>
+                      </div>
+                      {q.sampleAnswer && (
+                        <div>
+                          <span className="text-indigo-400 block mb-1 font-semibold">Rubrik Penilaian Acuan:</span>
+                          <p className="p-2.5 bg-[#121214] rounded-lg border border-indigo-500/20 text-slate-300 leading-relaxed">
+                            {q.sampleAnswer}
+                          </p>
                         </div>
-                      );
-                    })}
-                  </div>
+                      )}
+                    </div>
+                  )}
 
-                  <div className="p-3.5 bg-indigo-500/10 rounded-xl border border-indigo-500/20 text-xs text-slate-300 space-y-1">
-                    <span className="font-bold text-indigo-300 block">Pembahasan Guru / AI:</span>
-                    <p className="text-slate-300 leading-relaxed">{q.explanation}</p>
-                  </div>
+                  {q.explanation && (
+                    <div className="p-3.5 bg-indigo-500/10 rounded-xl border border-indigo-500/20 text-xs text-slate-300 space-y-1">
+                      <span className="font-bold text-indigo-300 block">Pembahasan Guru / AI:</span>
+                      <p className="text-slate-300 leading-relaxed">{q.explanation}</p>
+                    </div>
+                  )}
                 </div>
               );
             })}

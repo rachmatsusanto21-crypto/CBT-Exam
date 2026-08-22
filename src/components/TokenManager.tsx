@@ -11,10 +11,12 @@ import {
   ShieldCheck,
   CreditCard,
   Copy,
-  Check
+  Check,
+  Share2
 } from "lucide-react";
 import { ExamPackage, SchoolProfile, StudentTokenItem } from "../types";
 import { exportTokensToExcel, printTokenCards } from "../utils/sheetExport";
+import { DirectStudentShareModal } from "./DirectStudentShareModal";
 
 interface TokenManagerProps {
   exam: ExamPackage;
@@ -32,6 +34,7 @@ export const TokenManager: React.FC<TokenManagerProps> = ({
   onUpdateTokens,
 }) => {
   const [copiedToken, setCopiedToken] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [batchClass, setBatchClass] = useState("X MIPA 1");
   const [studentNamesInput, setStudentNamesInput] = useState(
     "Ahmad Rizki Maulana\nAnisa Rahmawati\nBagas Surya Putra\nCitra Dewi Lestari\nDimas Arya Pratama\nEka Putri Handayani\nFajar Hidayat\nGita Permata Sari"
@@ -117,6 +120,13 @@ export const TokenManager: React.FC<TokenManagerProps> = ({
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => setIsShareModalOpen(true)}
+              className="flex items-center gap-1.5 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-lg shadow-indigo-950"
+            >
+              <Share2 className="w-4 h-4" />
+              <span>Bagikan Link Siswa</span>
+            </button>
             <button
               onClick={() => exportTokensToExcel(exam, examTokens, school)}
               className="flex items-center gap-1.5 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold transition-all cursor-pointer shadow-lg shadow-emerald-950"
@@ -302,6 +312,14 @@ export const TokenManager: React.FC<TokenManagerProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Direct Student Share Modal */}
+      <DirectStudentShareModal
+        isOpen={isShareModalOpen}
+        onClose={() => setIsShareModalOpen(false)}
+        exam={exam}
+        token={exam.sessionToken}
+      />
     </div>
   );
 };

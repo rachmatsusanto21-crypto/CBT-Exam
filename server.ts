@@ -115,15 +115,24 @@ app.post("/api/gemini/generate-questions", async (req, res) => {
 
     const ai = getGeminiClient(customKey);
 
+    const typeGuide =
+      questionType === "menjodohkan"
+        ? "Tipe Soal: menjodohkan (berikan minimal 3-4 pasang pernyataan kiri 'left' dan pasangan cocok 'right' pada matchingPairs, serta kunci jawaban). "
+        : questionType === "isian_singkat"
+        ? "Tipe Soal: isian_singkat (pertanyaan langsung dengan jawaban singkat 1-3 kata pada correctAnswer). "
+        : questionType === "uraian"
+        ? "Tipe Soal: uraian (pertanyaan esai/analisis mendalam dengan rubrik atau contoh jawaban ideal pada sampleAnswer). "
+        : "Tipe Soal: pilihan_ganda (4-5 opsi A, B, C, D, E dengan kunci correctAnswer huruf kapital). ";
+
     const prompt = `Anda adalah seorang ahli pembuat soal ujian kurikulum merdeka / nasional Indonesia yang sangat berpengalaman.
 Buatlah ${count} butir soal ujian dengan ketentuan:
 - Mata Pelajaran: ${subject || "Umum"}
 - Jenjang / Kelas: ${gradeLevel || "SMP / SMA"}
 - Topik / Materi: ${topic || "Umum"}
 - Tingkat Kesukaran: ${difficulty} (mudah, sedang, sukar, atau variatif HOTS)
-- Tipe Soal Utama: ${questionType} (pilihan_ganda dengan 4-5 opsi A, B, C, D, E)
+- Tipe Soal Utama: ${questionType}. ${typeGuide}
 - Bobot Nilai per Soal: ${defaultScorePerQuestion} poin
-- Instruksi Tambahan: ${additionalInstructions || "Sajikan soal berbasis stimulus kontekstual, studi kasus, atau data penalaran"}
+- Instruksi Tambahan: ${additionalInstructions || "Sajikan soal berbasis stimulus kontekstual, studi kasus nyata, atau data penalaran"}
 
 Kembalikan format JSON yang valid persis sesuai skema yang diminta.`;
 
@@ -132,7 +141,7 @@ Kembalikan format JSON yang valid persis sesuai skema yang diminta.`;
       contents: prompt,
       config: {
         systemInstruction:
-          "Anda adalah pembuat soal ujian profesional. Berikan soal berkualitas tinggi, tanpa bias, opsi pengecoh yang masuk akal, stimulus bacaan/kasus relevan, kunci jawaban yang tepat, dan pembahasan yang lengkap dan mendidik.",
+          "Anda adalah pembuat soal ujian profesional. Berikan soal berkualitas tinggi, stimulus bacaan/kasus relevan, kunci jawaban tepat, dan pembahasan lengkap.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -147,9 +156,9 @@ Kembalikan format JSON yang valid persis sesuai skema yang diminta.`;
                 properties: {
                   id: { type: Type.STRING, description: "Unique ID e.g. q1, q2" },
                   questionNumber: { type: Type.INTEGER, description: "Nomor urut soal" },
-                  stimulus: { type: Type.STRING, description: "Teks stimulus, cerita kasus, data, atau narasi soal (boleh kosong jika soal langsung)" },
-                  questionText: { type: Type.STRING, description: "Pertanyaan inti yang jelas" },
-                  type: { type: Type.STRING, description: "pilihan_ganda | pilihan_ganda_kompleks | benar_salah | isian_singkat" },
+                  stimulus: { type: Type.STRING, description: "Teks stimulus, narasi kasus, atau tabel pendukung" },
+                  questionText: { type: Type.STRING, description: "Pertanyaan inti yang jelas dan tegas" },
+                  type: { type: Type.STRING, description: "pilihan_ganda | menjodohkan | isian_singkat | uraian" },
                   options: {
                     type: Type.ARRAY,
                     items: {
@@ -160,12 +169,26 @@ Kembalikan format JSON yang valid persis sesuai skema yang diminta.`;
                       },
                       required: ["key", "text"]
                     },
-                    description: "Daftar opsi jawaban untuk pilihan ganda"
+                    description: "Daftar opsi untuk pilihan ganda"
                   },
-                  correctAnswer: { type: Type.STRING, description: "Kunci jawaban benar, misal 'A' atau 'B' (atau jika kompleks dipisah koma 'A,C')" },
+                  matchingPairs: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        id: { type: Type.STRING },
+                        left: { type: Type.STRING, description: "Pernyataan / Item Kiri" },
+                        right: { type: Type.STRING, description: "Pasangan Cocok / Item Kanan" }
+                      },
+                      required: ["left", "right"]
+                    },
+                    description: "Daftar pasangan untuk tipe soal menjodohkan"
+                  },
+                  correctAnswer: { type: Type.STRING, description: "Kunci jawaban benar (huruf A-E, kata isian singkat, atau format matching)" },
                   score: { type: Type.NUMBER, description: "Bobot skor nilai butir soal ini" },
-                  explanation: { type: Type.STRING, description: "Pembahasan lengkap dan alasan jawaban benar" },
-                  cognitiveLevel: { type: Type.STRING, description: "Level kognitif: C1-Mengingat, C2-Memahami, C3-Menerapkan, C4-Menganalisis, C5-Mengevaluasi, C6-Mencipta (HOTS)" },
+                  explanation: { type: Type.STRING, description: "Pembahasan lengkap dan alasan rasional jawaban benar" },
+                  sampleAnswer: { type: Type.STRING, description: "Rubrik / contoh jawaban ideal untuk soal uraian" },
+                  cognitiveLevel: { type: Type.STRING, description: "Level kognitif: C1, C2, C3, C4, C5, C6 (HOTS)" },
                   topicTag: { type: Type.STRING, description: "Subtopik materi spesifik" }
                 },
                 required: ["questionText", "correctAnswer", "score", "explanation"]
@@ -186,6 +209,98 @@ Kembalikan format JSON yang valid persis sesuai skema yang diminta.`;
     res.status(500).json({
       success: false,
       error: error.message || "Gagal membuat soal dengan Gemini AI."
+    });
+  }
+});
+
+// AI Question Image Generator Endpoint
+app.post("/api/gemini/generate-image", async (req, res) => {
+  try {
+    const customKey = (req.headers["x-gemini-api-key"] as string) || req.body?.apiKey;
+    const { prompt, subject = "Pendidikan", questionContext = "" } = req.body;
+
+    if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
+      return res.status(400).json({ success: false, error: "Prompt gambar tidak boleh kosong." });
+    }
+
+    const ai = getGeminiClient(customKey);
+
+    // Strategy 1: Try Imagen 3 first if supported
+    try {
+      const imagenRes = await ai.models.generateImages({
+        model: "imagen-3.0-generate-002",
+        prompt: `Educational illustration for high school exam question: ${prompt.trim()}. Clear, accurate, educational diagram, vector style, white or dark background, no blurry text, high contrast.`,
+        config: {
+          numberOfImages: 1,
+          outputMimeType: "image/jpeg",
+          aspectRatio: "4:3",
+        },
+      });
+
+      if (imagenRes.generatedImages && imagenRes.generatedImages[0]?.image?.imageBytes) {
+        const base64Data = imagenRes.generatedImages[0].image.imageBytes;
+        const dataUrl = `data:image/jpeg;base64,${base64Data}`;
+        return res.json({
+          success: true,
+          imageUrl: dataUrl,
+          caption: prompt.trim(),
+          source: "imagen-3",
+        });
+      }
+    } catch (imagenErr) {
+      console.log("Imagen 3 generation unavailable, falling back to SVG diagram generation:", imagenErr);
+    }
+
+    // Strategy 2: Generate crisp, clean pedagogical SVG illustration with Gemini Flash
+    const svgPrompt = `Anda adalah desainer grafis materi edukasi dan diagram ilmiah profesional.
+Buatlah ilustrasi grafis/diagram vektor SVG yang mendidik, jelas, presisi, dan indah berdasarkan prompt berikut:
+"${prompt.trim()}"
+Konteks Soal / Pelajaran: ${subject}. ${questionContext ? `Konteks: ${questionContext}` : ""}
+
+Ketentuan SVG:
+- Output HANYA kode XML <svg>...</svg> murni tanpa markdown, tanpa backtick \`\`\`, tanpa teks lain di luar tag <svg>.
+- Gunakan viewBox="0 0 600 400" dengan aspect ratio 3:2 atau 4:3.
+- Gunakan skema warna modern, kontras tinggi, elegan (cocok pada background gelap/terang).
+- Sertakan label teks yang jelas, panah penunjuk, bentuk geometri / diagram / anatomi yang rapi jika diperlukan.
+- Tambahkan background rect bergradasi halus di dalam SVG.`;
+
+    const svgResponse = await ai.models.generateContent({
+      model: "gemini-3.7-flash",
+      contents: svgPrompt,
+      config: {
+        systemInstruction:
+          "Anda hanya menghasilkan kode SVG murni valid yang siap dirender di browser sebagai gambar vektor edukasi.",
+      },
+    });
+
+    let rawSvg = svgResponse.text?.trim() || "";
+    // Clean markdown code fence if model included it
+    if (rawSvg.startsWith("```")) {
+      rawSvg = rawSvg.replace(/^```(svg|xml)?\s*/i, "").replace(/```\s*$/i, "").trim();
+    }
+
+    if (rawSvg.includes("<svg") && rawSvg.includes("</svg>")) {
+      // Extract from first <svg to last </svg>
+      const startIdx = rawSvg.indexOf("<svg");
+      const endIdx = rawSvg.lastIndexOf("</svg>") + 6;
+      const cleanSvg = rawSvg.substring(startIdx, endIdx);
+      const encodedSvg = encodeURIComponent(cleanSvg);
+      const dataUrl = `data:image/svg+xml;charset=utf-8,${encodedSvg}`;
+
+      return res.json({
+        success: true,
+        imageUrl: dataUrl,
+        caption: prompt.trim(),
+        source: "svg_vector",
+      });
+    }
+
+    throw new Error("Gagal menyusun visual gambar dari prompt yang diberikan.");
+  } catch (error: any) {
+    console.error("Error generating image:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Gagal membuat gambar dengan AI.",
     });
   }
 });

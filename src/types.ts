@@ -31,22 +31,35 @@ export interface QuestionOption {
   text: string;
 }
 
+export interface MatchingPair {
+  id: string;
+  left: string; // e.g. "Mitokondria" atau "Revolusi Industri 1.0"
+  right: string; // e.g. "Penghasil Energi Sel (ATP)" atau "Penemuan Mesin Uap"
+}
+
 export type QuestionType =
   | "pilihan_ganda"
+  | "menjodohkan"
+  | "isian_singkat"
+  | "uraian"
   | "pilihan_ganda_kompleks"
-  | "benar_salah"
-  | "isian_singkat";
+  | "benar_salah";
 
 export interface Question {
   id: string;
   questionNumber: number;
   stimulus?: string; // Teks bacaan/cerita/tabel pendukung
+  imageUrl?: string; // Gambar pendukung (URL, Base64, atau AI Generated)
+  imageCaption?: string; // Keterangan gambar (e.g. "Gambar 1.1 Struktur Organel Sel")
+  imagePrompt?: string; // Prompt yang digunakan saat generate gambar dengan AI
   questionText: string;
   type: QuestionType;
-  options: QuestionOption[];
-  correctAnswer: string; // "A" atau "A,C"
+  options: QuestionOption[]; // Digunakan untuk pilihan_ganda / benar_salah
+  matchingPairs?: MatchingPair[]; // Digunakan untuk tipe soal menjodohkan
+  correctAnswer: string; // "A", atau teks jawaban isian singkat, atau format pasangan menjodohkan
   score: number; // Bobot skor, misal 10
   explanation: string; // Pembahasan lengkap
+  sampleAnswer?: string; // Rubrik / contoh jawaban ideal untuk soal uraian
   cognitiveLevel?: string; // e.g. "C4 - Menganalisis (HOTS)"
   topicTag?: string;
 }

@@ -15,7 +15,9 @@ import {
   Monitor,
   CheckCircle,
   Menu,
-  X
+  X,
+  Share2,
+  ExternalLink
 } from "lucide-react";
 import {
   ExamPackage,
@@ -49,14 +51,50 @@ import { TokenManager } from "./components/TokenManager";
 import { SchoolProfileAndPrintView } from "./components/SchoolProfileAndPrintView";
 import { BackupRestoreView } from "./components/BackupRestoreView";
 import { GeminiApiKeyModal } from "./components/GeminiApiKeyModal";
+import { DirectStudentShareModal } from "./components/DirectStudentShareModal";
 import { getGeminiRequestHeaders } from "./utils/storage";
 
 export default function App() {
+  // Direct Student Link Detection
+  const [isDirectStudentMode, setIsDirectStudentMode] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    const params = new URLSearchParams(window.location.search);
+    return params.get("mode") === "student";
+  });
+
+  const [urlToken, setUrlToken] = useState<string>(() => {
+    if (typeof window === "undefined") return "";
+    const params = new URLSearchParams(window.location.search);
+    return params.get("token") || "";
+  });
+
   // Navigation & View State
   const [activeTab, setActiveTab] = useState<NavigationTab>("student_exam");
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isGeminiModalOpen, setIsGeminiModalOpen] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [geminiStatus, setGeminiStatus] = useState<{ configured: boolean; source: string } | null>(null);
+
+  // App Data State
+  const [schoolProfile, setSchoolProfileState] = useState<SchoolProfile>(getSchoolProfile);
+  const [exams, setExamsState] = useState<ExamPackage[]>(getExamPackages);
+  const [activeExamId, setActiveExamIdState] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const examParam = params.get("examId") || params.get("code");
+      const all = getExamPackages();
+      if (examParam) {
+        const found = all.find((e) => e.id === examParam || e.code.toUpperCase() === examParam.toUpperCase());
+        if (found) return found.id;
+      }
+    }
+    const saved = getActiveExamId();
+    const all = getExamPackages();
+    return all.some((e) => e.id === saved) ? saved : all[0]?.id || "";
+  });
+  const [tokens, setTokensState] = useState<StudentTokenItem[]>(getStudentTokens);
+  const [history, setHistoryState] = useState<StudentExamSession[]>(getExamHistory);
+  const [activeSession, setActiveSessionState] = useState<StudentExamSession | null>(getActiveStudentSession);
 
   // Check Gemini API Key Status
   const checkGeminiStatus = async () => {
@@ -74,17 +112,26 @@ export default function App() {
     checkGeminiStatus();
   }, []);
 
-  // App Data State
-  const [schoolProfile, setSchoolProfileState] = useState<SchoolProfile>(getSchoolProfile);
-  const [exams, setExamsState] = useState<ExamPackage[]>(getExamPackages);
-  const [activeExamId, setActiveExamIdState] = useState<string>(() => {
-    const saved = getActiveExamId();
-    const all = getExamPackages();
-    return all.some((e) => e.id === saved) ? saved : all[0]?.id || "";
-  });
-  const [tokens, setTokensState] = useState<StudentTokenItem[]>(getStudentTokens);
-  const [history, setHistoryState] = useState<StudentExamSession[]>(getExamHistory);
-  const [activeSession, setActiveSessionState] = useState<StudentExamSession | null>(getActiveStudentSession);
+  // Listen to popstate / url changes
+  useEffect(() => {
+    const handleUrlCheck = () => {
+      const params = new URLSearchParams(window.location.search);
+      const isStudent = params.get("mode") === "student";
+      setIsDirectStudentMode(isStudent);
+      const token = params.get("token");
+      if (token) setUrlToken(token);
+      const examParam = params.get("examId") || params.get("code");
+      if (examParam) {
+        const found = exams.find((e) => e.id === examParam || e.code.toUpperCase() === examParam.toUpperCase());
+        if (found) {
+          setActiveExamIdState(found.id);
+          saveActiveExamId(found.id);
+        }
+      }
+    };
+    window.addEventListener("popstate", handleUrlCheck);
+    return () => window.removeEventListener("popstate", handleUrlCheck);
+  }, [exams]);
 
   // Active Exam
   const activeExam = exams.find((e) => e.id === activeExamId) || exams[0] || createNewExamPackage("Ujian Standar");
@@ -182,7 +229,7 @@ export default function App() {
     const percentage = Math.round((totalScoreEarned / maxScore) * 100);
     const passed = percentage >= (activeExam.teacherProfile.passingGrade || 75);
 
-    const updatedSession: StudentExamSession = {
+    const finalized: StudentExamSession = {
       ...s,
       status: "submitted",
       submitTime: new Date().toISOString(),
@@ -192,13 +239,14 @@ export default function App() {
       passed,
     };
 
-    handleSubmitStudentExam(updatedSession);
+    handleSubmitStudentExam(finalized);
   };
 
   const handleResetStudentSession = (sessionId: string) => {
-    const updatedHistory = history.filter((h) => h.id !== sessionId);
+    const updatedHistory = history.filter((item) => item.id !== sessionId);
     setHistoryState(updatedHistory);
     saveExamHistory(updatedHistory);
+
     if (activeSession?.id === sessionId) {
       setActiveSessionState(null);
       saveActiveStudentSession(null);
@@ -209,163 +257,190 @@ export default function App() {
     setSchoolProfileState(getSchoolProfile());
     const allExams = getExamPackages();
     setExamsState(allExams);
-    const savedActive = getActiveExamId();
-    setActiveExamIdState(allExams.some((e) => e.id === savedActive) ? savedActive : allExams[0]?.id || "");
+    setActiveExamIdState(getActiveExamId() || allExams[0]?.id || "");
     setTokensState(getStudentTokens());
     setHistoryState(getExamHistory());
     setActiveSessionState(getActiveStudentSession());
   };
 
-  // Nav Items Definition
-  const navTabs: { id: NavigationTab; label: string; icon: React.FC<{ className?: string }> }[] = [
-    { id: "student_exam", label: "Mode Ujian Siswa (Slides)", icon: GraduationCap },
-    { id: "monitoring", label: "Monitoring & Penilaian", icon: Monitor },
-    { id: "ai_generator", label: "AI Generator & Editor Soal", icon: Sparkles },
-    { id: "item_analysis", label: "Analisis Butir & Riwayat", icon: BarChart3 },
-    { id: "tokens", label: "Token & Kode Soal", icon: Key },
-    { id: "school_profile", label: "Profil Sekolah & Kop Docs", icon: Building2 },
-    { id: "backup_restore", label: "Backup & Restore", icon: Cloud },
+  // Navigation Items
+  const navTabs = [
+    { id: "student_exam" as NavigationTab, label: "Mode Siswa (Slide CBT)", icon: Play },
+    { id: "monitoring" as NavigationTab, label: "Live Monitoring Guru", icon: Monitor },
+    { id: "ai_generator" as NavigationTab, label: "Editor Soal & AI Gemini", icon: Sparkles },
+    { id: "item_analysis" as NavigationTab, label: "Analisis Butir & Nilai", icon: BarChart3 },
+    { id: "tokens" as NavigationTab, label: "Token & Kode Akses", icon: Key },
+    { id: "school_profile" as NavigationTab, label: "Profil & Cetak Naskah", icon: Building2 },
+    { id: "backup_restore" as NavigationTab, label: "Sinkronisasi Cloud", icon: Cloud },
   ];
 
+  // =========================================================================
+  // STANDALONE DIRECT STUDENT LINK VIEW (NO TEACHER NAVIGATION / DISTRACTIONS)
+  // =========================================================================
+  if (isDirectStudentMode) {
+    return (
+      <div className="min-h-screen bg-[#09090b] text-slate-100 flex flex-col justify-between selection:bg-indigo-600 selection:text-white">
+        <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-6 lg:p-8">
+          <StudentSlideExam
+            exam={activeExam}
+            tokens={tokens}
+            currentSession={activeSession}
+            onSaveSession={handleSaveStudentSession}
+            onSubmitExam={handleSubmitStudentExam}
+            onExit={() => {
+              // Switch back to normal admin mode
+              const url = new URL(window.location.href);
+              url.searchParams.delete("mode");
+              url.searchParams.delete("token");
+              url.searchParams.delete("examId");
+              window.history.pushState({}, "", url.toString());
+              setIsDirectStudentMode(false);
+              setActiveTab("monitoring");
+            }}
+            initialToken={urlToken}
+            isDirectLink={true}
+          />
+        </main>
+
+        <footer className="bg-[#0c0c0e] border-t border-slate-850 py-3 px-4 text-center text-xs text-slate-500">
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
+            <div className="text-[11px] text-slate-400">
+              {activeExam.schoolProfile.schoolName} • SlideExam CBT Siswa
+            </div>
+            <button
+              onClick={() => {
+                const url = new URL(window.location.href);
+                url.searchParams.delete("mode");
+                window.history.pushState({}, "", url.toString());
+                setIsDirectStudentMode(false);
+                setActiveTab("monitoring");
+              }}
+              className="text-[11px] text-indigo-400 hover:text-indigo-300 font-semibold cursor-pointer underline"
+            >
+              Masuk ke Dashboard Guru / Admin
+            </button>
+          </div>
+        </footer>
+      </div>
+    );
+  }
+
+  // =========================================================================
+  // TEACHER / ADMIN WORKSPACE VIEW
+  // =========================================================================
   return (
-    <div className="min-h-screen bg-[#09090b] text-slate-300 flex flex-col font-sans selection:bg-indigo-600 selection:text-white">
-      {/* Top Main Navigation Bar */}
-      <header className="bg-[#0c0c0e] border-b border-slate-800 sticky top-0 z-40 shadow-md">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16 gap-4">
-            {/* Brand Logo & Name */}
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white shadow-lg shadow-indigo-600/30 font-bold shrink-0">
-                <GraduationCap className="w-6 h-6" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h1 className="font-bold text-white text-base sm:text-lg tracking-tight">
-                    SlideExam <span className="text-indigo-400">CBT</span>
-                  </h1>
-                  <span className="px-2 py-0.5 bg-indigo-500/10 text-indigo-400 font-semibold rounded text-[10px] uppercase border border-indigo-500/20 hidden sm:inline">
-                    Gemini AI
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-500 hidden md:block">
-                  Aplikasi Ujian Berbasis Presentasi Slides & Penilaian Otomatis
-                </p>
-              </div>
+    <div className="min-h-screen bg-[#09090b] text-slate-100 flex flex-col selection:bg-indigo-600 selection:text-white">
+      {/* Top Header Bar */}
+      <header className="sticky top-0 z-40 bg-[#0c0c0e]/95 backdrop-blur-md border-b border-slate-800">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
+          {/* Logo & School Name */}
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-indigo-600 flex items-center justify-center text-white shadow-lg shadow-indigo-950 shrink-0">
+              <GraduationCap className="w-6 h-6" />
             </div>
-
-            {/* Exam Package Switcher (for Teacher/Admin) */}
-            <div className="hidden lg:flex items-center gap-2 bg-[#1a1a1c] px-3 py-1.5 rounded-xl border border-slate-800">
-              <span className="text-xs text-slate-400 font-medium">Naskah:</span>
-              <select
-                value={activeExamId}
-                onChange={(e) => handleSelectExamId(e.target.value)}
-                className="bg-transparent text-xs font-semibold text-slate-200 focus:outline-none max-w-[200px] truncate cursor-pointer"
-              >
-                {exams.map((e) => (
-                  <option key={e.id} value={e.id} className="bg-[#121214] text-slate-200">
-                    {e.title} ({e.code})
-                  </option>
-                ))}
-              </select>
-              <button
-                onClick={handleCreateNewExam}
-                className="p-1 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors cursor-pointer"
-                title="Buat Paket Ujian Baru"
-              >
-                <Plus className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
-            {/* Desktop Active Mode Tab Selector & Gemini Key Button */}
-            <div className="flex items-center gap-2">
-              <button
-                id="btn-gemini-key"
-                onClick={() => setIsGeminiModalOpen(true)}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
-                  geminiStatus?.configured
-                    ? "bg-indigo-950/40 hover:bg-indigo-900/50 border-indigo-500/40 text-indigo-300 shadow-sm"
-                    : "bg-amber-950/30 hover:bg-amber-900/40 border-amber-500/40 text-amber-300 animate-pulse"
-                }`}
-                title="Hubungkan atau kelola Kunci API Gemini AI"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-                <span className="hidden sm:inline">Kunci API Gemini</span>
-                <span
-                  className={`w-2 h-2 rounded-full ${
-                    geminiStatus?.configured ? "bg-emerald-400 shadow-xs shadow-emerald-400" : "bg-amber-400"
-                  }`}
-                />
-              </button>
-
-              <button
-                id="btn-mode-siswa"
-                onClick={() => setActiveTab("student_exam")}
-                className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-                  activeTab === "student_exam"
-                    ? "bg-indigo-600 text-white shadow-lg shadow-indigo-600/30"
-                    : "bg-[#1a1a1c] hover:bg-slate-800 text-slate-300 border border-slate-800"
-                }`}
-              >
-                <Play className="w-3.5 h-3.5 fill-current text-white" />
-                <span>Mode Siswa</span>
-              </button>
-
-              {/* Mobile Menu Button */}
-              <button
-                onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-                className="p-2 rounded-xl bg-[#1a1a1c] border border-slate-800 text-slate-300 md:hidden cursor-pointer"
-              >
-                {isMobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-              </button>
+            <div className="hidden sm:block">
+              <div className="flex items-center gap-2">
+                <span className="font-extrabold text-sm text-white tracking-tight">SlideExam AI CBT</span>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold">
+                  v2.6 Multi-Format
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 truncate max-w-[200px] lg:max-w-xs">
+                {schoolProfile.schoolName}
+              </p>
             </div>
           </div>
 
-          {/* Secondary Desktop Horizontal Tabs */}
-          <div className="hidden md:flex space-x-1 py-1.5 overflow-x-auto scrollbar-none border-t border-slate-800/80 text-xs font-medium">
+          {/* Active Exam Selector Dropdown & Direct Share */}
+          <div className="flex items-center gap-2">
+            <div className="relative flex items-center">
+              <select
+                id="active-exam-selector"
+                value={activeExamId}
+                onChange={(e) => handleSelectExamId(e.target.value)}
+                className="bg-[#161618] text-slate-200 text-xs font-semibold rounded-xl pl-3 pr-8 py-2 border border-slate-700 hover:border-slate-600 focus:outline-none focus:border-indigo-500 appearance-none cursor-pointer max-w-[170px] sm:max-w-[240px] truncate"
+              >
+                {exams.map((e) => (
+                  <option key={e.id} value={e.id} className="bg-[#121214] text-slate-200">
+                    {e.title} ({e.questions.length} Soal)
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="w-3.5 h-3.5 text-slate-400 absolute right-2.5 pointer-events-none" />
+            </div>
+
+            {/* Quick Share Link Modal Trigger */}
+            <button
+              onClick={() => setIsShareModalOpen(true)}
+              className="p-2 sm:px-3 sm:py-2 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-sm shrink-0"
+              title="Bagikan Tautan Ujian Siswa Langsung"
+            >
+              <Share2 className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="hidden md:inline">Bagikan Link Siswa</span>
+            </button>
+
+            <button
+              onClick={handleCreateNewExam}
+              className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors cursor-pointer shrink-0"
+              title="Buat Paket Naskah Ujian Baru"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Gemini API Key Status Badge */}
+          <div className="hidden lg:flex items-center gap-2">
+            <button
+              onClick={() => setIsGeminiModalOpen(true)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold cursor-pointer transition-all ${
+                geminiStatus?.configured
+                  ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20"
+                  : "bg-amber-500/10 border-amber-500/30 text-amber-400 hover:bg-amber-500/20"
+              }`}
+            >
+              <Sparkles className="w-3.5 h-3.5 animate-pulse" />
+              <span>{geminiStatus?.configured ? "Gemini AI Aktif" : "Set Kunci Gemini"}</span>
+            </button>
+          </div>
+
+          {/* Mobile Menu Toggle */}
+          <div className="flex md:hidden">
+            <button
+              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              className="p-2 rounded-xl bg-[#161618] text-slate-300 border border-slate-700 cursor-pointer"
+            >
+              {isMobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+            </button>
+          </div>
+        </div>
+
+        {/* Desktop Navigation Tabs */}
+        <div className="hidden md:flex border-t border-slate-800/80 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto overflow-x-auto scrollbar-none">
+          <nav className="flex space-x-1 py-1.5 min-w-max">
             {navTabs.map((tab) => {
               const Icon = tab.icon;
               const isActive = activeTab === tab.id;
               return (
                 <button
                   key={tab.id}
-                  id={`nav-tab-${tab.id}`}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`flex items-center gap-2 px-3.5 py-2 rounded-xl transition-all cursor-pointer whitespace-nowrap ${
+                  className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
                     isActive
-                      ? "bg-[#1a1a1c] text-white border border-slate-700 shadow-sm"
-                      : "text-slate-400 hover:text-white hover:bg-[#121214]"
+                      ? "bg-indigo-600 text-white shadow-md shadow-indigo-950"
+                      : "text-slate-400 hover:text-slate-200 hover:bg-[#161618]"
                   }`}
                 >
-                  <Icon className={`w-3.5 h-3.5 ${isActive ? "text-indigo-400" : "text-slate-500"}`} />
+                  <Icon className="w-3.5 h-3.5" />
                   <span>{tab.label}</span>
                 </button>
               );
             })}
-          </div>
+          </nav>
         </div>
 
-        {/* Mobile Dropdown Menu */}
+        {/* Mobile Navigation Drawer */}
         {isMobileMenuOpen && (
-          <div className="md:hidden border-t border-slate-800 bg-[#0c0c0e] px-4 py-3 space-y-2">
-            {/* Exam selector mobile */}
-            <div className="p-2.5 bg-[#121214] rounded-xl border border-slate-800 space-y-1">
-              <label className="text-[11px] font-bold text-slate-400 uppercase">Pilih Naskah Ujian:</label>
-              <select
-                value={activeExamId}
-                onChange={(e) => {
-                  handleSelectExamId(e.target.value);
-                  setIsMobileMenuOpen(false);
-                }}
-                className="w-full bg-[#1a1a1c] text-slate-200 border border-slate-700 rounded-lg p-2 text-xs font-semibold"
-              >
-                {exams.map((e) => (
-                  <option key={e.id} value={e.id} className="bg-[#121214] text-slate-200">
-                    {e.title} ({e.code})
-                  </option>
-                ))}
-              </select>
-            </div>
-
+          <div className="md:hidden border-t border-slate-800 bg-[#0c0c0e] p-4 space-y-3 animate-in slide-in-from-top-2">
             <div className="space-y-1">
               {navTabs.map((tab) => {
                 const Icon = tab.icon;
@@ -424,6 +499,7 @@ export default function App() {
             onUpdateExam={handleUpdateActiveExam}
             onPreviewSlides={() => setActiveTab("student_exam")}
             onOpenGeminiModal={() => setIsGeminiModalOpen(true)}
+            activeToken={activeExam.sessionToken}
           />
         )}
 
@@ -462,6 +538,14 @@ export default function App() {
           <BackupRestoreView onDataRestored={handleReloadAllData} />
         )}
       </main>
+
+      {/* Direct Student Share Modal */}
+      <DirectStudentShareModal
+        isOpen={isShareModalOpen}
+        onClose={() => setIsShareModalOpen(false)}
+        exam={activeExam}
+        token={activeExam.sessionToken}
+      />
 
       {/* Gemini API Key Configuration Modal */}
       <GeminiApiKeyModal

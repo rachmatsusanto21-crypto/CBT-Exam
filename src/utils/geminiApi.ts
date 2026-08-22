@@ -165,6 +165,97 @@ export async function testGeminiConnection(keyToTest?: string): Promise<GeminiTe
   };
 }
 
+export interface GenerateImageParams {
+  prompt: string;
+  subject?: string;
+  questionContext?: string;
+}
+
+export interface GenerateImageResult {
+  imageUrl: string;
+  caption?: string;
+  source: string;
+}
+
+/**
+ * Generate educational question image/diagram with AI (Imagen or SVG vector)
+ */
+export async function generateImageWithAi(params: GenerateImageParams): Promise<GenerateImageResult> {
+  const customKey = getCustomGeminiApiKey();
+
+  // Try server endpoint first
+  try {
+    const headers = getGeminiRequestHeaders();
+    const res = await fetch("/api/gemini/generate-image", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(params),
+    });
+
+    const parsed = await safeParseResponse(res);
+    if (parsed.isJson && parsed.data?.success && parsed.data?.imageUrl) {
+      return {
+        imageUrl: parsed.data.imageUrl,
+        caption: parsed.data.caption || params.prompt,
+        source: parsed.data.source || "server-ai",
+      };
+    }
+  } catch (err) {
+    console.warn("Server generate-image endpoint failed, attempting client fallback:", err);
+  }
+
+  // Client-side fallback with @google/genai
+  if (customKey) {
+    try {
+      const ai = new GoogleGenAI({ apiKey: customKey });
+
+      // Try generating SVG illustration via Gemini Flash
+      const svgPrompt = `Anda adalah desainer diagram ilmiah dan materi pembelajaran sekolah.
+Buatlah gambar/diagram vektor SVG yang bersih, kontras tinggi, proporsional, dan sangat rapi berdasarkan deskripsi berikut:
+"${params.prompt}"
+Mata Pelajaran: ${params.subject || "Pendidikan Umum"}. ${params.questionContext ? `Konteks: ${params.questionContext}` : ""}
+
+Ketentuan SVG:
+- Output HANYA tag XML <svg>...</svg> murni tanpa pembuka/penutup markdown (\`\`\`).
+- viewBox="0 0 600 400" dengan aspect ratio 3:2 atau 4:3.
+- Background rect warna gelap elegan (#1e293b atau gradien modern) dan elemen diagram berwarna cerah kontras (#38bdf8, #818cf8, #34d399, #f43f5e, #fbbf24).
+- Lengkapi dengan label teks penjelas yang jelas dan panah jika perlu.`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.7-flash",
+        contents: svgPrompt,
+        config: {
+          systemInstruction:
+            "Anda hanya menghasilkan kode SVG XML murni valid tanpa teks pengantar atau penutup apapun.",
+        },
+      });
+
+      let rawSvg = response.text?.trim() || "";
+      if (rawSvg.startsWith("```")) {
+        rawSvg = rawSvg.replace(/^```(svg|xml)?\s*/i, "").replace(/```\s*$/i, "").trim();
+      }
+
+      if (rawSvg.includes("<svg") && rawSvg.includes("</svg>")) {
+        const startIdx = rawSvg.indexOf("<svg");
+        const endIdx = rawSvg.lastIndexOf("</svg>") + 6;
+        const cleanSvg = rawSvg.substring(startIdx, endIdx);
+        const encodedSvg = encodeURIComponent(cleanSvg);
+        const dataUrl = `data:image/svg+xml;charset=utf-8,${encodedSvg}`;
+
+        return {
+          imageUrl: dataUrl,
+          caption: params.prompt,
+          source: "client_svg_ai",
+        };
+      }
+    } catch (clientErr: any) {
+      throw new Error(clientErr?.message || "Gagal membuat visual gambar dari Gemini AI.");
+    }
+  }
+
+  throw new Error("Kunci API Gemini belum terhubung untuk membuat gambar AI.");
+}
+
 /**
  * Generate Questions with Gemini AI
  */
@@ -199,9 +290,15 @@ export async function generateQuestionsWithGemini(
             { key: "C", text: "Opsi C" },
             { key: "D", text: "Opsi D" },
           ],
+          matchingPairs: q.matchingPairs || (q.type === "menjodohkan" ? [
+            { id: "m1", left: "Pernyataan 1", right: "Pasangan A" },
+            { id: "m2", left: "Pernyataan 2", right: "Pasangan B" },
+            { id: "m3", left: "Pernyataan 3", right: "Pasangan C" },
+          ] : undefined),
           correctAnswer: q.correctAnswer || "A",
           score: q.score || params.defaultScorePerQuestion || 20,
           explanation: q.explanation || "Pembahasan otomatis AI",
+          sampleAnswer: q.sampleAnswer || "",
           cognitiveLevel: q.cognitiveLevel || "C4 - HOTS",
           topicTag: q.topicTag || params.topic,
         }));
@@ -216,7 +313,6 @@ export async function generateQuestionsWithGemini(
     }
   } catch (err: any) {
     console.warn("Server generation failed, trying direct client fallback if key is available:", err);
-    // If not a standard server JSON error with clear message, continue to client fallback
     if (!customKey) {
       throw new Error(
         err.message || "Gagal menghubungkan ke server pembuat soal. Pastikan Kunci API Gemini telah dimasukkan."
@@ -239,7 +335,7 @@ Buatlah ${params.count} butir soal ujian dengan ketentuan:
 - Jenjang / Kelas: ${params.gradeLevel || "SMP / SMA"}
 - Topik / Materi: ${params.topic || "Umum"}
 - Tingkat Kesukaran: ${params.difficulty} (mudah, sedang, sukar, atau variatif HOTS)
-- Tipe Soal Utama: ${params.questionType} (pilihan_ganda dengan opsi A, B, C, D, E)
+- Tipe Soal Utama: ${params.questionType} (pilihan_ganda, menjodohkan, isian_singkat, atau uraian)
 - Bobot Nilai per Soal: ${params.defaultScorePerQuestion || 20} poin
 - Instruksi Tambahan: ${params.additionalInstructions || "Sajikan soal berbasis stimulus kontekstual dan penalaran HOTS"}
 
@@ -267,7 +363,7 @@ Kembalikan format JSON yang valid persis sesuai skema yang diminta.`;
                   questionNumber: { type: Type.INTEGER, description: "Nomor soal" },
                   stimulus: { type: Type.STRING, description: "Stimulus atau narasi kasus" },
                   questionText: { type: Type.STRING, description: "Pertanyaan inti" },
-                  type: { type: Type.STRING, description: "Tipe soal" },
+                  type: { type: Type.STRING, description: "pilihan_ganda | menjodohkan | isian_singkat | uraian" },
                   options: {
                     type: Type.ARRAY,
                     items: {
@@ -279,9 +375,22 @@ Kembalikan format JSON yang valid persis sesuai skema yang diminta.`;
                       required: ["key", "text"],
                     },
                   },
+                  matchingPairs: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        id: { type: Type.STRING },
+                        left: { type: Type.STRING },
+                        right: { type: Type.STRING },
+                      },
+                      required: ["left", "right"],
+                    },
+                  },
                   correctAnswer: { type: Type.STRING, description: "Kunci jawaban benar" },
                   score: { type: Type.NUMBER, description: "Bobot nilai" },
                   explanation: { type: Type.STRING, description: "Pembahasan" },
+                  sampleAnswer: { type: Type.STRING, description: "Contoh / rubrik jawaban uraian" },
                   cognitiveLevel: { type: Type.STRING, description: "Level kognitif" },
                   topicTag: { type: Type.STRING, description: "Subtopik materi" },
                 },
@@ -307,9 +416,11 @@ Kembalikan format JSON yang valid persis sesuai skema yang diminta.`;
         { key: "C", text: "Opsi C" },
         { key: "D", text: "Opsi D" },
       ],
+      matchingPairs: q.matchingPairs,
       correctAnswer: q.correctAnswer || "A",
       score: q.score || params.defaultScorePerQuestion || 20,
       explanation: q.explanation || "Pembahasan otomatis AI",
+      sampleAnswer: q.sampleAnswer || "",
       cognitiveLevel: q.cognitiveLevel || "C4 - HOTS",
       topicTag: q.topicTag || params.topic,
     }));
