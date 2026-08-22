@@ -520,6 +520,7 @@ export default function App() {
             tokens={tokens}
             onUpdateExamToken={handleUpdateExamToken}
             onUpdateTokens={handleUpdateTokens}
+            onUpdateExam={handleUpdateActiveExam}
           />
         )}
 

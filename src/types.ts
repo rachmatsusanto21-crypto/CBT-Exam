@@ -11,6 +11,7 @@ export interface SchoolProfile {
   principalNIP: string;
   logoLeftUrl?: string; // e.g. Logo Dinas / Tut Wuri Handayani
   logoRightUrl?: string; // e.g. Logo Sekolah
+  kopSuratUrl?: string; // Banner kop surat lengkap resmi sekolah (menggantikan logo default & kop teks jika diunggah)
   motto?: string;
 }
 

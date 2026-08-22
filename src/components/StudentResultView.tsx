@@ -15,10 +15,16 @@ import {
   Image as ImageIcon,
   ArrowRightLeft,
   FileEdit,
-  AlignLeft
+  AlignLeft,
+  BarChart3,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  Users
 } from "lucide-react";
 import { ExamPackage, StudentExamSession } from "../types";
 import { generateStudentRemediation } from "../utils/geminiApi";
+import { getExamHistory } from "../utils/storage";
 
 interface StudentResultViewProps {
   session: StudentExamSession;
@@ -92,6 +98,23 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
   const correctCount = Object.values(session.answers).filter((a) => (a as any).isCorrect).length;
   const incorrectCount = questionsList.length - correctCount;
   const durationMinutes = Math.round(session.timeSpentSeconds / 60);
+
+  // Compute Class Statistics for Bar Chart Comparison
+  const allHistory = getExamHistory();
+  const sameExamHistory = allHistory.filter(
+    (h) => h.examCode === exam.code || h.className === session.className
+  );
+  
+  const classScores = sameExamHistory.length > 0 
+    ? sameExamHistory.map((h) => h.totalScoreEarned)
+    : [Math.round(exam.teacherProfile.passingGrade + 2), Math.round(exam.teacherProfile.passingGrade - 5), session.totalScoreEarned];
+  
+  const classAvgScore = Math.round(
+    classScores.reduce((acc, curr) => acc + curr, 0) / classScores.length
+  );
+  const highestClassScore = Math.max(...classScores, session.totalScoreEarned);
+  const scoreDiff = session.totalScoreEarned - classAvgScore;
+  const maxScale = Math.max(session.maxScore || 100, 100);
 
   return (
     <div id="student-result-view" className="max-w-4xl mx-auto space-y-6 py-6">
@@ -214,6 +237,123 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
       {/* Tab Content: Summary & Gemini AI Remediation */}
       {activeTab === "summary" && (
         <div className="space-y-6">
+          {/* Bar Chart Summary: Student Score vs Class Average */}
+          <div
+            id="student-score-vs-class-barchart"
+            className="bg-[#121214] rounded-2xl p-6 border border-slate-800 shadow-sm space-y-5"
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2 text-white font-bold text-sm">
+                <BarChart3 className="w-4 h-4 text-emerald-400" />
+                <span>Grafik Komparasi Skor Siswa vs Rata-Rata Kelas</span>
+              </div>
+              <div className="flex items-center gap-2 text-xs">
+                {scoreDiff > 0 ? (
+                  <span className="flex items-center gap-1 font-semibold text-emerald-400 bg-emerald-500/10 px-2.5 py-0.5 rounded-full border border-emerald-500/20">
+                    <TrendingUp className="w-3.5 h-3.5" />
+                    +{scoreDiff} Poin di atas rata-rata kelas
+                  </span>
+                ) : scoreDiff < 0 ? (
+                  <span className="flex items-center gap-1 font-semibold text-amber-400 bg-amber-500/10 px-2.5 py-0.5 rounded-full border border-amber-500/20">
+                    <TrendingDown className="w-3.5 h-3.5" />
+                    {scoreDiff} Poin dari rata-rata kelas
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 font-semibold text-slate-400 bg-slate-800 px-2.5 py-0.5 rounded-full">
+                    <Minus className="w-3.5 h-3.5" />
+                    Setara rata-rata kelas
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Horizontal Bar Visualizer */}
+            <div className="space-y-4 pt-1">
+              {/* Bar 1: Skor Anda */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs font-semibold">
+                  <span className="text-white flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block" />
+                    <span>Skor Anda ({session.studentName})</span>
+                  </span>
+                  <span className="font-mono font-bold text-emerald-400 text-sm">
+                    {session.totalScoreEarned} / {session.maxScore}
+                  </span>
+                </div>
+                <div className="w-full bg-[#1a1a1c] h-5 rounded-xl overflow-hidden p-0.5 border border-slate-800">
+                  <div
+                    className={`h-full rounded-lg transition-all duration-500 flex items-center justify-end px-2 ${
+                      session.passed ? "bg-gradient-to-r from-emerald-600 to-teal-400" : "bg-gradient-to-r from-amber-600 to-rose-400"
+                    }`}
+                    style={{ width: `${Math.min(100, Math.max(8, (session.totalScoreEarned / maxScale) * 100))}%` }}
+                  >
+                    <span className="text-[10px] font-bold text-white drop-shadow">
+                      {Math.round((session.totalScoreEarned / maxScale) * 100)}%
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Bar 2: Rata-Rata Kelas */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs font-semibold">
+                  <span className="text-slate-300 flex items-center gap-1.5">
+                    <Users className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Rata-Rata Kelas ({session.className || "Angkatan"})</span>
+                  </span>
+                  <span className="font-mono font-bold text-indigo-300 text-sm">
+                    {classAvgScore} / {session.maxScore}
+                  </span>
+                </div>
+                <div className="w-full bg-[#1a1a1c] h-5 rounded-xl overflow-hidden p-0.5 border border-slate-800">
+                  <div
+                    className="h-full rounded-lg bg-gradient-to-r from-indigo-600 to-indigo-400 transition-all duration-500 flex items-center justify-end px-2"
+                    style={{ width: `${Math.min(100, Math.max(8, (classAvgScore / maxScale) * 100))}%` }}
+                  >
+                    <span className="text-[10px] font-bold text-white drop-shadow">
+                      {Math.round((classAvgScore / maxScale) * 100)}%
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Bar 3: Batas Kelulusan KKM */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs font-semibold">
+                  <span className="text-slate-400 flex items-center gap-1.5">
+                    <GraduationCap className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Batas KKM Minimum</span>
+                  </span>
+                  <span className="font-mono font-bold text-amber-400 text-sm">
+                    {exam.teacherProfile.passingGrade} / {session.maxScore}
+                  </span>
+                </div>
+                <div className="w-full bg-[#1a1a1c] h-5 rounded-xl overflow-hidden p-0.5 border border-slate-800">
+                  <div
+                    className="h-full rounded-lg bg-slate-700 transition-all duration-500 flex items-center justify-end px-2"
+                    style={{ width: `${Math.min(100, Math.max(8, (exam.teacherProfile.passingGrade / maxScale) * 100))}%` }}
+                  >
+                    <span className="text-[10px] font-bold text-slate-300 drop-shadow">
+                      {Math.round((exam.teacherProfile.passingGrade / maxScale) * 100)}%
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Commentary Banner */}
+            <div className="p-3 bg-[#161618] rounded-xl border border-slate-800 text-xs text-slate-300 flex items-center justify-between flex-wrap gap-2">
+              <span className="text-slate-400">
+                Nilai Tertinggi di Kelas Saat Ini: <strong className="text-emerald-400 font-mono">{highestClassScore} Poin</strong>
+              </span>
+              <span className="text-indigo-400 font-medium">
+                {session.totalScoreEarned >= classAvgScore
+                  ? "Pencapaian luar biasa! Pertahankan konsistensi belajar Anda."
+                  : "Tetap semangat! Pelajari materi pada rekomendasi diagnosis AI di bawah."}
+              </span>
+            </div>
+          </div>
+
           {/* Gemini AI Remediation Card */}
           <div className="bg-[#121214] rounded-2xl p-6 border border-indigo-900/40 shadow-sm space-y-4">
             <div className="flex items-center justify-between">

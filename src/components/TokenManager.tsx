@@ -12,7 +12,10 @@ import {
   CreditCard,
   Copy,
   Check,
-  Share2
+  Share2,
+  Edit3,
+  X,
+  Code
 } from "lucide-react";
 import { ExamPackage, SchoolProfile, StudentTokenItem } from "../types";
 import { exportTokensToExcel, printTokenCards } from "../utils/sheetExport";
@@ -24,6 +27,7 @@ interface TokenManagerProps {
   tokens: StudentTokenItem[];
   onUpdateExamToken: (newToken: string) => void;
   onUpdateTokens: (tokens: StudentTokenItem[]) => void;
+  onUpdateExam?: (updated: ExamPackage) => void;
 }
 
 export const TokenManager: React.FC<TokenManagerProps> = ({
@@ -32,15 +36,43 @@ export const TokenManager: React.FC<TokenManagerProps> = ({
   tokens,
   onUpdateExamToken,
   onUpdateTokens,
+  onUpdateExam,
 }) => {
   const [copiedToken, setCopiedToken] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [batchClass, setBatchClass] = useState("X MIPA 1");
+  const [isEditingExamCode, setIsEditingExamCode] = useState(false);
+  const [inputExamCode, setInputExamCode] = useState(exam.code);
   const [studentNamesInput, setStudentNamesInput] = useState(
     "Ahmad Rizki Maulana\nAnisa Rahmawati\nBagas Surya Putra\nCitra Dewi Lestari\nDimas Arya Pratama\nEka Putri Handayani\nFajar Hidayat\nGita Permata Sari"
   );
 
   const examTokens = tokens.filter((t) => t.examCode === exam.code);
+
+  const handleSaveExamCode = () => {
+    if (!inputExamCode.trim()) return;
+    const newCode = inputExamCode.trim().toUpperCase();
+    if (newCode === exam.code) {
+      setIsEditingExamCode(false);
+      return;
+    }
+
+    // Update tokens matching old exam code
+    const updatedTokens = tokens.map((t) =>
+      t.examCode === exam.code ? { ...t, examCode: newCode } : t
+    );
+    onUpdateTokens(updatedTokens);
+
+    if (onUpdateExam) {
+      onUpdateExam({
+        ...exam,
+        code: newCode,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    setIsEditingExamCode(false);
+  };
 
   const generateRandomTokenString = (length = 6) => {
     const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -148,12 +180,56 @@ export const TokenManager: React.FC<TokenManagerProps> = ({
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
           {/* Exam Code Card */}
           <div className="bg-[#1a1a1c] rounded-2xl p-5 border border-slate-800 space-y-2">
-            <div className="text-xs text-slate-400 uppercase font-semibold tracking-wider">
-              1. Kode Naskah Soal
+            <div className="text-xs text-slate-400 uppercase font-semibold tracking-wider flex items-center justify-between">
+              <span>1. Kode Naskah Soal</span>
+              {!isEditingExamCode ? (
+                <button
+                  id="edit-token-exam-code-btn"
+                  onClick={() => {
+                    setInputExamCode(exam.code);
+                    setIsEditingExamCode(true);
+                  }}
+                  className="text-[11px] text-indigo-400 hover:text-indigo-300 flex items-center gap-1 cursor-pointer font-medium"
+                >
+                  <Edit3 className="w-3 h-3" />
+                  <span>Ubah Kode</span>
+                </button>
+              ) : null}
             </div>
-            <div className="text-3xl font-black font-mono tracking-widest text-emerald-400">
-              {exam.code}
-            </div>
+
+            {isEditingExamCode ? (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={inputExamCode}
+                    onChange={(e) => setInputExamCode(e.target.value.toUpperCase())}
+                    className="w-full px-3 py-1.5 bg-[#26262a] border border-emerald-500 rounded-xl text-emerald-400 font-mono font-bold text-lg tracking-wider focus:outline-none"
+                    placeholder="KODE-SOAL"
+                    autoFocus
+                  />
+                  <button
+                    onClick={handleSaveExamCode}
+                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                  >
+                    Simpan
+                  </button>
+                  <button
+                    onClick={() => setIsEditingExamCode(false)}
+                    className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-xl cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-400">
+                  Mengubah kode naskah akan memperbarui seluruh token siswa terkait naskah ini.
+                </p>
+              </div>
+            ) : (
+              <div className="text-3xl font-black font-mono tracking-widest text-emerald-400">
+                {exam.code}
+              </div>
+            )}
             <p className="text-[11px] text-slate-400">
               Digunakan siswa saat memilih naskah ujian pada portal CBT.
             </p>

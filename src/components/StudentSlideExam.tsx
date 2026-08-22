@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { motion, AnimatePresence } from "motion/react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -965,37 +966,56 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
           fontSize === "large" ? "text-base" : fontSize === "xlarge" ? "text-lg" : "text-sm"
         }`}
       >
-        {/* ========================================================================= */}
-        {/* SLIDE 0: PROFIL SEKOLAH & IDENTITAS UJIAN */}
-        {/* ========================================================================= */}
-        {currentSlideIndex === 0 && (
-          <div className="space-y-6 my-auto text-center animate-in fade-in duration-300">
-            {/* Kop Surat Header Logos */}
-            <div className="flex items-center justify-center gap-6 pb-4 border-b border-slate-800 max-w-2xl mx-auto">
-              {exam.schoolProfile.logoLeftUrl && (
-                <img
-                  src={exam.schoolProfile.logoLeftUrl}
-                  alt="Logo Instansi"
-                  className="w-16 h-16 object-contain"
-                />
-              )}
-              <div className="space-y-1">
-                <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                  {exam.schoolProfile.agencyName}
-                </div>
-                <h1 className="text-2xl sm:text-3xl font-extrabold text-white uppercase tracking-tight">
-                  {exam.schoolProfile.schoolName}
-                </h1>
-                <p className="text-xs text-slate-400 italic">{exam.schoolProfile.address}</p>
-              </div>
-              {exam.schoolProfile.logoRightUrl && (
-                <img
-                  src={exam.schoolProfile.logoRightUrl}
-                  alt="Logo Sekolah"
-                  className="w-16 h-16 object-contain rounded-full shadow-sm"
-                />
-              )}
-            </div>
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={currentSlideIndex}
+            initial={{ opacity: 0, x: 18 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: -18 }}
+            transition={{ duration: 0.22, ease: "easeOut" }}
+            className="flex-1 flex flex-col justify-between"
+          >
+            {/* ========================================================================= */}
+            {/* SLIDE 0: PROFIL SEKOLAH & IDENTITAS UJIAN */}
+            {/* ========================================================================= */}
+            {currentSlideIndex === 0 && (
+              <div className="space-y-6 my-auto text-center">
+                {/* Kop Surat Header Logos / Custom Kop Surat Image */}
+                {exam.schoolProfile.kopSuratUrl ? (
+                  <div className="flex justify-center pb-4 border-b border-slate-800 max-w-3xl mx-auto">
+                    <img
+                      src={exam.schoolProfile.kopSuratUrl}
+                      alt="Kop Surat Resmi Sekolah"
+                      className="max-h-24 sm:max-h-28 object-contain rounded-lg shadow-sm"
+                    />
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center gap-6 pb-4 border-b border-slate-800 max-w-2xl mx-auto">
+                    {exam.schoolProfile.logoLeftUrl && (
+                      <img
+                        src={exam.schoolProfile.logoLeftUrl}
+                        alt="Logo Instansi"
+                        className="w-16 h-16 object-contain"
+                      />
+                    )}
+                    <div className="space-y-1">
+                      <div className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        {exam.schoolProfile.agencyName}
+                      </div>
+                      <h1 className="text-2xl sm:text-3xl font-extrabold text-white uppercase tracking-tight">
+                        {exam.schoolProfile.schoolName}
+                      </h1>
+                      <p className="text-xs text-slate-400 italic">{exam.schoolProfile.address}</p>
+                    </div>
+                    {exam.schoolProfile.logoRightUrl && (
+                      <img
+                        src={exam.schoolProfile.logoRightUrl}
+                        alt="Logo Sekolah"
+                        className="w-16 h-16 object-contain rounded-full shadow-sm"
+                      />
+                    )}
+                  </div>
+                )}
 
             <div className="space-y-2 py-4">
               <span className="px-4 py-1 bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 rounded-full font-bold text-xs uppercase tracking-wider inline-block">
@@ -1508,6 +1528,8 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
             </div>
           </div>
         )}
+        </motion.div>
+      </AnimatePresence>
       </div>
 
       {/* Quick Jump Matrix Modal / Drawer */}

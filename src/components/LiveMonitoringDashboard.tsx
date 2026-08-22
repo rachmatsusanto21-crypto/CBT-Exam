@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Users,
   Clock,
@@ -15,11 +15,26 @@ import {
   TrendingUp,
   Award,
   FileDown,
-  Printer
+  Printer,
+  Bell,
+  BellRing,
+  X,
+  UserPlus,
+  Send
 } from "lucide-react";
 import { ExamPackage, SchoolProfile, StudentExamSession, StudentTokenItem } from "../types";
 import { exportGradebookToExcel, exportItemAnalysisToExcel } from "../utils/sheetExport";
 import { generateStudentExamPdfReport } from "../utils/studentPdfReport";
+
+interface ToastNotification {
+  id: string;
+  type: "start" | "submit" | "violation" | "info";
+  title: string;
+  message: string;
+  studentName?: string;
+  className?: string;
+  time: string;
+}
 
 interface LiveMonitoringDashboardProps {
   exam: ExamPackage;
@@ -41,6 +56,71 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
   const [searchQuery, setSearchQuery] = useState("");
   const [filterClass, setFilterClass] = useState("all");
   const [selectedStudentSession, setSelectedStudentSession] = useState<StudentExamSession | null>(null);
+  const [toasts, setToasts] = useState<ToastNotification[]>([]);
+  const [showToastHistory, setShowToastHistory] = useState(false);
+  const previousHistoryRef = useRef<StudentExamSession[]>(history);
+
+  const addToast = (toast: Omit<ToastNotification, "id" | "time">) => {
+    const newToast: ToastNotification = {
+      ...toast,
+      id: `toast-${Date.now()}-${Math.random()}`,
+      time: new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+    };
+
+    setToasts((prev) => [newToast, ...prev.slice(0, 15)]);
+
+    // Auto dismiss after 6 seconds
+    setTimeout(() => {
+      setToasts((current) => current.filter((t) => t.id !== newToast.id));
+    }, 6000);
+  };
+
+  const removeToast = (id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  // Monitor changes in history to trigger live toasts
+  useEffect(() => {
+    const prevHistory = previousHistoryRef.current;
+    
+    // Check for newly started sessions
+    history.forEach((currSession) => {
+      if (currSession.examCode !== exam.code && currSession.examId !== exam.id) return;
+
+      const prevSession = prevHistory.find((p) => p.id === currSession.id);
+
+      if (!prevSession && currSession.status === "in_progress") {
+        addToast({
+          type: "start",
+          title: "Siswa Baru Mulai Ujian",
+          message: `${currSession.studentName} (${currSession.className}) baru saja login dan mulai mengerjakan ujian.`,
+          studentName: currSession.studentName,
+          className: currSession.className,
+        });
+      } else if (prevSession && prevSession.status === "in_progress" && currSession.status === "submitted") {
+        addToast({
+          type: "submit",
+          title: "Siswa Selesai Submit Ujian",
+          message: `${currSession.studentName} (${currSession.className}) berhasil mengumpulkan jawaban. Skor: ${currSession.totalScoreEarned} Poin.`,
+          studentName: currSession.studentName,
+          className: currSession.className,
+        });
+      } else if (
+        prevSession &&
+        (currSession.violationCount || 0) > (prevSession.violationCount || 0)
+      ) {
+        addToast({
+          type: "violation",
+          title: "Peringatan Integritas Terdeteksi",
+          message: `${currSession.studentName} terdeteksi berpindah jendela/tab aplikasi (${currSession.violationCount}x).`,
+          studentName: currSession.studentName,
+          className: currSession.className,
+        });
+      }
+    });
+
+    previousHistoryRef.current = history;
+  }, [history, exam.id, exam.code]);
 
   const examSessions = history.filter((s) => s.examId === exam.id);
 
@@ -115,6 +195,20 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Notification Center Button */}
+          <button
+            id="toggle-toast-history-btn"
+            onClick={() => setShowToastHistory(!showToastHistory)}
+            className="flex items-center gap-1.5 px-3.5 py-2.5 bg-[#1a1a1c] hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold shadow-sm transition-all cursor-pointer relative"
+            title="Riwayat Notifikasi Ujian Langsung"
+          >
+            <Bell className="w-4 h-4 text-amber-400" />
+            <span>Notifikasi Live</span>
+            {toasts.length > 0 && (
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping absolute -top-1 -right-1" />
+            )}
+          </button>
+
           <button
             onClick={() => exportGradebookToExcel(exam, history, school)}
             className="flex items-center gap-1.5 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold shadow-lg shadow-emerald-950 transition-all cursor-pointer"
@@ -520,6 +614,127 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
                 className="px-5 py-2 bg-[#1a1a1c] hover:bg-slate-800 text-slate-300 border border-slate-700 rounded-xl text-xs font-semibold cursor-pointer"
               >
                 Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* FLOATING TOAST NOTIFICATIONS STACK (Bottom-Right / Top-Right Live Event Popups) */}
+      <div
+        id="monitoring-toast-container"
+        className="fixed bottom-6 right-6 z-50 flex flex-col gap-2.5 max-w-sm w-full pointer-events-none"
+      >
+        {toasts.map((t) => {
+          let badgeStyle = "bg-indigo-500/20 text-indigo-300 border-indigo-500/30";
+          let icon = <BellRing className="w-4 h-4 text-indigo-400" />;
+          let borderStyle = "border-indigo-500/40";
+
+          if (t.type === "start") {
+            badgeStyle = "bg-emerald-500/20 text-emerald-300 border-emerald-500/30";
+            icon = <UserPlus className="w-4 h-4 text-emerald-400" />;
+            borderStyle = "border-emerald-500/40";
+          } else if (t.type === "submit") {
+            badgeStyle = "bg-indigo-500/20 text-indigo-300 border-indigo-500/30";
+            icon = <Send className="w-4 h-4 text-indigo-400" />;
+            borderStyle = "border-indigo-500/40";
+          } else if (t.type === "violation") {
+            badgeStyle = "bg-rose-500/20 text-rose-300 border-rose-500/30";
+            icon = <ShieldAlert className="w-4 h-4 text-rose-400" />;
+            borderStyle = "border-rose-500/50";
+          }
+
+          return (
+            <div
+              key={t.id}
+              className={`pointer-events-auto bg-[#161618]/95 backdrop-blur-md border ${borderStyle} rounded-2xl p-4 shadow-2xl space-y-1.5 animate-in slide-in-from-bottom-3 duration-200 transition-all`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <div className={`p-1.5 rounded-lg border ${badgeStyle}`}>
+                    {icon}
+                  </div>
+                  <span className="font-bold text-xs text-white">{t.title}</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-slate-500 font-mono">{t.time}</span>
+                  <button
+                    onClick={() => removeToast(t.id)}
+                    className="text-slate-500 hover:text-white p-1 rounded-md hover:bg-slate-800 cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+              <p className="text-xs text-slate-300 leading-relaxed">{t.message}</p>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Live Notification Event History Drawer */}
+      {showToastHistory && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-[#121214] border border-slate-800 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2 text-sm font-bold text-white">
+                <Bell className="w-4 h-4 text-amber-400" />
+                <span>Log Aktivitas & Notifikasi Ujian</span>
+              </div>
+              <button
+                onClick={() => setShowToastHistory(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-2 max-h-[350px] overflow-y-auto pr-1">
+              {toasts.length === 0 ? (
+                <div className="p-8 text-center text-slate-500 text-xs space-y-1">
+                  <Bell className="w-8 h-8 mx-auto text-slate-700 mb-2" />
+                  <p className="font-semibold text-slate-400">Belum Ada Notifikasi Baru</p>
+                  <p>Notifikasi akan muncul saat siswa mulai mengerjakan, submit jawaban, atau terjadi peringatan.</p>
+                </div>
+              ) : (
+                toasts.map((t) => (
+                  <div
+                    key={t.id}
+                    className="p-3 bg-[#18181b] border border-slate-800 rounded-xl space-y-1 text-xs"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-200">{t.title}</span>
+                      <span className="text-[10px] text-slate-500 font-mono">{t.time}</span>
+                    </div>
+                    <p className="text-slate-400">{t.message}</p>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="flex items-center justify-between pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => {
+                  addToast({
+                    type: "start",
+                    title: "Simulasi: Siswa Mulai Ujian",
+                    message: "Ahmad Rizki Maulana (X MIPA 1) baru saja login dan mulai mengerjakan ujian.",
+                    studentName: "Ahmad Rizki Maulana",
+                    className: "X MIPA 1",
+                  });
+                }}
+                className="px-3 py-1.5 bg-[#1a1a1c] hover:bg-slate-800 text-indigo-400 border border-indigo-500/30 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                + Tes Simulasi Notifikasi
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowToastHistory(false)}
+                className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold cursor-pointer shadow-md shadow-indigo-950"
+              >
+                Selesai
               </button>
             </div>
           </div>

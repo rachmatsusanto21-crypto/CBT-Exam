@@ -289,6 +289,21 @@ export const printFormattedExamDocument = (
   const teacher = exam.teacherProfile;
   const showKey = !!options?.includeAnswerKey;
 
+  const kopSection = school.kopSuratUrl
+    ? `<div style="text-align: center; margin-bottom: 12px; border-bottom: 3px double #000; padding-bottom: 8px;">
+        <img src="${school.kopSuratUrl}" style="max-width: 100%; max-height: 125px; object-fit: contain;" alt="Kop Surat Resmi Sekolah" />
+      </div>`
+    : `<div class="kop-wrapper">
+        ${school.logoLeftUrl ? `<img src="${school.logoLeftUrl}" class="kop-logo" alt="Logo Kiri" />` : '<div style="width:75px"></div>'}
+        <div class="kop-text">
+          <div class="kop-agency">${school.agencyName || "PEMERINTAH DAERAH"}</div>
+          <div class="kop-school">${school.schoolName || "SEKOLAH"}</div>
+          <div class="kop-address">${school.address || ""} ${school.postalCode ? `Kodepos ${school.postalCode}` : ""}</div>
+          <div class="kop-contact">Telp: ${school.phone || "-"} | Email: ${school.email || "-"} | Web: ${school.website || "-"}</div>
+        </div>
+        ${school.logoRightUrl ? `<img src="${school.logoRightUrl}" class="kop-logo" alt="Logo Kanan" />` : '<div style="width:75px"></div>'}
+      </div>`;
+
   const htmlContent = `
 <!DOCTYPE html>
 <html lang="id">
@@ -331,16 +346,7 @@ export const printFormattedExamDocument = (
   </style>
 </head>
 <body>
-  <div class="kop-wrapper">
-    ${school.logoLeftUrl ? `<img src="${school.logoLeftUrl}" class="kop-logo" alt="Logo Kiri" />` : '<div style="width:75px"></div>'}
-    <div class="kop-text">
-      <div class="kop-agency">${school.agencyName || "PEMERINTAH DAERAH"}</div>
-      <div class="kop-school">${school.schoolName || "SEKOLAH"}</div>
-      <div class="kop-address">${school.address || ""} ${school.postalCode ? `Kodepos ${school.postalCode}` : ""}</div>
-      <div class="kop-contact">Telp: ${school.phone || "-"} | Email: ${school.email || "-"} | Web: ${school.website || "-"}</div>
-    </div>
-    ${school.logoRightUrl ? `<img src="${school.logoRightUrl}" class="kop-logo" alt="Logo Kanan" />` : '<div style="width:75px"></div>'}
-  </div>
+  ${kopSection}
 
   <div class="exam-header-box">
     <div style="text-align: center; font-weight: bold; font-size: 12pt; text-transform: uppercase; margin-bottom: 6px;">

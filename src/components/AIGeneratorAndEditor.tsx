@@ -74,6 +74,24 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
   // Share Modal State
   const [showShareModal, setShowShareModal] = useState(false);
 
+  // Edit Exam Code / Title Modal State
+  const [showEditCodeModal, setShowEditCodeModal] = useState(false);
+  const [tempExamCode, setTempExamCode] = useState(activeExam.code);
+  const [tempExamTitle, setTempExamTitle] = useState(activeExam.title);
+
+  const handleSaveExamCodeAndTitle = () => {
+    if (!tempExamCode.trim()) return;
+    onUpdateExam({
+      ...activeExam,
+      code: tempExamCode.trim().toUpperCase(),
+      title: tempExamTitle.trim() || activeExam.title,
+      updatedAt: new Date().toISOString(),
+    });
+    setShowEditCodeModal(false);
+    setAiSuccessMsg("Kode Naskah Soal & Judul Ujian berhasil diperbarui!");
+    setTimeout(() => setAiSuccessMsg(null), 3000);
+  };
+
   useEffect(() => {
     if (activeExam.questions.length > 0) {
       const found = activeExam.questions.find((q) => q.id === selectedQuestionId) || activeExam.questions[0];
@@ -395,16 +413,37 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Top Action Bar with Direct Student Link */}
+      {/* Top Action Bar with Direct Student Link & Edit Exam Code */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#121214] p-5 rounded-2xl border border-slate-800 shadow-sm">
-        <div>
-          <h2 className="text-lg font-black text-white flex items-center gap-2">
-            <span>Editor Butir Soal & Generator AI</span>
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h2 className="text-lg font-black text-white flex items-center gap-2">
+              <span>{activeExam.title}</span>
+            </h2>
             <span className="text-xs px-2.5 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 font-bold">
               {activeExam.questions.length} Butir ({activeExam.totalScore} Poin)
             </span>
-          </h2>
+          </div>
+
           <p className="text-xs text-slate-400 mt-1 flex items-center gap-2 flex-wrap">
+            <span>Kode Naskah:</span>
+            <span className="font-mono font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+              {activeExam.code}
+            </span>
+            <button
+              id="edit-exam-code-btn"
+              onClick={() => {
+                setTempExamCode(activeExam.code);
+                setTempExamTitle(activeExam.title);
+                setShowEditCodeModal(true);
+              }}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700 transition-colors cursor-pointer"
+              title="Ubah Kode Naskah Soal & Judul"
+            >
+              <Edit3 className="w-3 h-3" />
+              <span>Edit Kode</span>
+            </button>
+            <span>•</span>
             <span>Mata Pelajaran: <strong className="text-slate-200">{activeExam.teacherProfile.subject}</strong></span>
             <span>•</span>
             <span
@@ -453,6 +492,72 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Edit Exam Code Modal */}
+      {showEditCodeModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+          <div className="bg-[#161618] border border-slate-700 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2 font-bold text-white text-sm">
+                <Edit3 className="w-4 h-4 text-indigo-400" />
+                <span>Edit Kode Naskah Soal & Judul</span>
+              </div>
+              <button
+                onClick={() => setShowEditCodeModal(false)}
+                className="text-slate-400 hover:text-white p-1"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="block font-medium text-slate-300 mb-1">
+                  Kode Naskah Soal <span className="text-emerald-400 font-mono">(Unik)</span>
+                </label>
+                <input
+                  type="text"
+                  value={tempExamCode}
+                  onChange={(e) => setTempExamCode(e.target.value.toUpperCase())}
+                  placeholder="Contoh: PTS-IPA-VII-2026"
+                  className="w-full px-3 py-2 bg-[#1f1f23] border border-slate-700 rounded-xl text-emerald-400 font-mono font-bold text-sm tracking-wider focus:border-emerald-500 focus:outline-none"
+                />
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Kode ini digunakan siswa saat ujian login CBT dan tautan pengerjaan langsung.
+                </p>
+              </div>
+
+              <div>
+                <label className="block font-medium text-slate-300 mb-1">Judul Naskah Soal</label>
+                <input
+                  type="text"
+                  value={tempExamTitle}
+                  onChange={(e) => setTempExamTitle(e.target.value)}
+                  placeholder="Contoh: Asesmen Sumatif Akhir Semester Informatika"
+                  className="w-full px-3 py-2 bg-[#1f1f23] border border-slate-700 rounded-xl text-slate-200 font-bold focus:border-indigo-500 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setShowEditCodeModal(false)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveExamCodeAndTitle}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-indigo-950 cursor-pointer"
+              >
+                Simpan Perubahan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Side: Gemini AI Prompt Generator & Anti-Cheating Controls */}
