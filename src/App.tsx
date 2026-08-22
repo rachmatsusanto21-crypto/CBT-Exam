@@ -500,6 +500,7 @@ export default function App() {
             onPreviewSlides={() => setActiveTab("student_exam")}
             onOpenGeminiModal={() => setIsGeminiModalOpen(true)}
             activeToken={activeExam.sessionToken}
+            school={schoolProfile}
           />
         )}
 

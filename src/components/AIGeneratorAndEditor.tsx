@@ -24,11 +24,33 @@ import {
   ListOrdered,
   Type,
   AlignLeft,
-  X
+  X,
+  FileSpreadsheet,
+  Download,
+  FileDown,
+  FileUp,
+  Printer,
+  Copy,
+  Check,
+  Info,
+  ChevronDown,
+  CheckSquare
 } from "lucide-react";
-import { ExamPackage, Question, QuestionOption, QuestionType, MatchingPair } from "../types";
+import { ExamPackage, Question, QuestionOption, QuestionType, MatchingPair, SchoolProfile } from "../types";
 import { generateQuestionsWithGemini, generateImageWithAi } from "../utils/geminiApi";
 import { DirectStudentShareModal } from "./DirectStudentShareModal";
+import { QuestionImportModal } from "./QuestionImportModal";
+import { QuestionExportModal } from "./QuestionExportModal";
+import {
+  exportQuestionsToExcel,
+  exportQuestionsToWordDoc,
+  downloadExcelQuestionTemplate,
+  downloadDocQuestionTemplate,
+  parseQuestionsFromExcel,
+  parseQuestionsFromFormattedText,
+  printFormattedExamDocument,
+} from "../utils/sheetExport";
+import { getSchoolProfile } from "../utils/storage";
 
 interface AIGeneratorAndEditorProps {
   activeExam: ExamPackage;
@@ -36,6 +58,7 @@ interface AIGeneratorAndEditorProps {
   onPreviewSlides: () => void;
   onOpenGeminiModal?: () => void;
   activeToken?: string;
+  school?: SchoolProfile;
 }
 
 export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
@@ -44,6 +67,7 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
   onPreviewSlides,
   onOpenGeminiModal,
   activeToken,
+  school,
 }) => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
@@ -78,6 +102,149 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
   const [showEditCodeModal, setShowEditCodeModal] = useState(false);
   const [tempExamCode, setTempExamCode] = useState(activeExam.code);
   const [tempExamTitle, setTempExamTitle] = useState(activeExam.title);
+
+  // Import & Export State
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportIncludeKey, setExportIncludeKey] = useState(true);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importTab, setImportTab] = useState<"excel" | "docs">("excel");
+  const [importMode, setImportMode] = useState<"append" | "replace">("append");
+
+  // Excel Import State
+  const [excelFile, setExcelFile] = useState<File | null>(null);
+  const [excelParsedQuestions, setExcelParsedQuestions] = useState<Question[] | null>(null);
+  const [excelParseError, setExcelParseError] = useState<string | null>(null);
+  const [isProcessingExcel, setIsProcessingExcel] = useState(false);
+  const excelFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Docs / Text Import State
+  const [docsInputText, setDocsInputText] = useState("");
+  const [docsParsedQuestions, setDocsParsedQuestions] = useState<Question[] | null>(null);
+  const [docsParseError, setDocsParseError] = useState<string | null>(null);
+  const [isProcessingDocs, setIsProcessingDocs] = useState(false);
+  const docsFileInputRef = useRef<HTMLInputElement>(null);
+
+  const schoolData = school || getSchoolProfile();
+
+  // Import from Excel Handlers
+  const handleExcelFileSelect = async (file: File) => {
+    setExcelFile(file);
+    setExcelParseError(null);
+    setExcelParsedQuestions(null);
+    setIsProcessingExcel(true);
+    try {
+      const buffer = await file.arrayBuffer();
+      const result = parseQuestionsFromExcel(buffer);
+      if (result.questions.length === 0) {
+        setExcelParseError(result.error || "Tidak ada butir soal valid yang ditemukan dalam file Excel ini.");
+      } else {
+        setExcelParsedQuestions(result.questions);
+      }
+    } catch (err: any) {
+      setExcelParseError(err?.message || "Gagal memproses file Excel. Pastikan format kolom sesuai template.");
+    } finally {
+      setIsProcessingExcel(false);
+    }
+  };
+
+  // Import from Docs / Formatted Text Handlers
+  const handleDocsTextParse = () => {
+    setDocsParseError(null);
+    setDocsParsedQuestions(null);
+    if (!docsInputText.trim()) {
+      setDocsParseError("Silakan tempel (paste) teks naskah soal terlebih dahulu.");
+      return;
+    }
+    setIsProcessingDocs(true);
+    try {
+      const result = parseQuestionsFromFormattedText(docsInputText);
+      if (result.questions.length === 0) {
+        setDocsParseError(result.error || "Tidak ada butir soal yang terdeteksi. Pastikan penomoran soal (1. ...) dan opsi (A. ...) sesuai.");
+      } else {
+        setDocsParsedQuestions(result.questions);
+      }
+    } catch (err: any) {
+      setDocsParseError(err?.message || "Gagal memproses format teks naskah soal.");
+    } finally {
+      setIsProcessingDocs(false);
+    }
+  };
+
+  const handleDocsFileUpload = async (file: File) => {
+    try {
+      const text = await file.text();
+      setDocsInputText(text);
+      const result = parseQuestionsFromFormattedText(text);
+      if (result.questions.length === 0) {
+        setDocsParseError(result.error || "Tidak ada butir soal yang terdeteksi dalam file teks.");
+      } else {
+        setDocsParsedQuestions(result.questions);
+      }
+    } catch (err: any) {
+      setDocsParseError("Gagal membaca file naskah dokumen.");
+    }
+  };
+
+  // Confirm and save imported questions
+  const handleConfirmImport = (questionsToImport: Question[]) => {
+    if (!questionsToImport || questionsToImport.length === 0) return;
+
+    let finalQuestions: Question[] = [];
+    if (importMode === "append") {
+      const startNum = activeExam.questions.length + 1;
+      const renumberedImported = questionsToImport.map((q, idx) => ({
+        ...q,
+        id: `q-${Date.now()}-${idx + 1}-${Math.random().toString(36).substr(2, 4)}`,
+        questionNumber: startNum + idx,
+      }));
+      finalQuestions = [...activeExam.questions, ...renumberedImported];
+    } else {
+      finalQuestions = questionsToImport.map((q, idx) => ({
+        ...q,
+        id: `q-${Date.now()}-${idx + 1}-${Math.random().toString(36).substr(2, 4)}`,
+        questionNumber: idx + 1,
+      }));
+    }
+
+    const totalScore = finalQuestions.reduce((sum, q) => sum + (q.score || 10), 0);
+    const updatedExam: ExamPackage = {
+      ...activeExam,
+      questions: finalQuestions,
+      totalScore,
+      updatedAt: new Date().toISOString(),
+    };
+
+    onUpdateExam(updatedExam);
+    setShowImportModal(false);
+    setExcelFile(null);
+    setExcelParsedQuestions(null);
+    setDocsInputText("");
+    setDocsParsedQuestions(null);
+
+    if (finalQuestions.length > 0) {
+      setSelectedQuestionId(finalQuestions[0].id);
+      setEditingQuestion(finalQuestions[0]);
+    }
+
+    setAiSuccessMsg(`Berhasil mengimpor ${questionsToImport.length} butir soal ke dalam naskah!`);
+    setTimeout(() => setAiSuccessMsg(null), 4000);
+  };
+
+  // Export handlers
+  const handleExportExcel = () => {
+    exportQuestionsToExcel(activeExam, schoolData);
+    setShowExportModal(false);
+  };
+
+  const handleExportWord = () => {
+    exportQuestionsToWordDoc(activeExam, schoolData, exportIncludeKey);
+    setShowExportModal(false);
+  };
+
+  const handlePrintDoc = () => {
+    printFormattedExamDocument(activeExam, schoolData);
+    setShowExportModal(false);
+  };
 
   const handleSaveExamCodeAndTitle = () => {
     if (!tempExamCode.trim()) return;
@@ -472,6 +639,28 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
         </div>
 
         <div className="flex items-center gap-2.5 flex-wrap">
+          {/* Import Questions Button */}
+          <button
+            id="import-questions-top-btn"
+            onClick={() => setShowImportModal(true)}
+            className="flex items-center gap-2 px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700 rounded-xl font-bold text-xs transition-all cursor-pointer shadow-sm hover:border-indigo-500/50"
+            title="Impor Soal dari File Excel (.xlsx) atau Dokumen Word / Docs"
+          >
+            <FileUp className="w-4 h-4 text-indigo-400" />
+            <span>Impor Soal</span>
+          </button>
+
+          {/* Export Questions Button */}
+          <button
+            id="export-questions-top-btn"
+            onClick={() => setShowExportModal(true)}
+            className="flex items-center gap-2 px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-700 rounded-xl font-bold text-xs transition-all cursor-pointer shadow-sm hover:border-emerald-500/50"
+            title="Ekspor Naskah Soal ke Excel (.xlsx), Word (.doc), atau Cetak PDF"
+          >
+            <FileDown className="w-4 h-4 text-emerald-400" />
+            <span>Ekspor Naskah</span>
+          </button>
+
           {/* Direct Student Share Link Button */}
           <button
             id="share-student-link-btn"
@@ -836,17 +1025,35 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
 
           {/* Question List Navigation */}
           <div className="bg-[#121214] rounded-2xl p-5 border border-slate-800 shadow-sm space-y-3">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between flex-wrap gap-2">
               <span className="font-semibold text-slate-200 text-xs">
                 Daftar Soal ({activeExam.questions.length})
               </span>
-              <button
-                onClick={handleAddNewQuestionManual}
-                className="flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 font-medium px-2 py-1 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/20 rounded-lg cursor-pointer"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Tambah Manual</span>
-              </button>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <button
+                  onClick={() => setShowImportModal(true)}
+                  className="flex items-center gap-1 text-[11px] text-slate-300 hover:text-white font-medium px-2 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg cursor-pointer transition-colors"
+                  title="Impor dari Excel / Word"
+                >
+                  <FileUp className="w-3 h-3 text-indigo-400" />
+                  <span>Impor</span>
+                </button>
+                <button
+                  onClick={() => setShowExportModal(true)}
+                  className="flex items-center gap-1 text-[11px] text-slate-300 hover:text-white font-medium px-2 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg cursor-pointer transition-colors"
+                  title="Ekspor ke Excel / Word / PDF"
+                >
+                  <FileDown className="w-3 h-3 text-emerald-400" />
+                  <span>Ekspor</span>
+                </button>
+                <button
+                  onClick={handleAddNewQuestionManual}
+                  className="flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 font-medium px-2 py-1 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/20 rounded-lg cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Tambah</span>
+                </button>
+              </div>
             </div>
 
             <div className="max-h-[360px] overflow-y-auto space-y-2 pr-1">
@@ -1421,6 +1628,26 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
         onClose={() => setShowShareModal(false)}
         exam={activeExam}
         token={activeToken}
+      />
+
+      {/* Import Questions Modal (Excel & Docs) */}
+      <QuestionImportModal
+        isOpen={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        onImportQuestions={(questions, mode) => {
+          setImportMode(mode);
+          handleConfirmImport(questions);
+        }}
+        existingQuestionsCount={activeExam.questions.length}
+        subject={activeExam.teacherProfile.subject}
+      />
+
+      {/* Export Questions Modal (Excel, Docs & Print PDF) */}
+      <QuestionExportModal
+        isOpen={showExportModal}
+        onClose={() => setShowExportModal(false)}
+        exam={activeExam}
+        school={schoolData}
       />
     </div>
   );
