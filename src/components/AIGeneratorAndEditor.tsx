@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { ExamPackage, Question, QuestionOption, QuestionType } from "../types";
 import { getGeminiRequestHeaders, getCustomGeminiApiKey } from "../utils/storage";
+import { generateQuestionsWithGemini } from "../utils/geminiApi";
 
 interface AIGeneratorAndEditorProps {
   activeExam: ExamPackage;
@@ -69,11 +70,8 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
     setAiSuccessMsg(null);
 
     try {
-      const headers = getGeminiRequestHeaders();
-      const res = await fetch("/api/gemini/generate-questions", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
+      const result = await generateQuestionsWithGemini(
+        {
           subject,
           gradeLevel,
           topic,
@@ -82,34 +80,11 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
           questionType,
           additionalInstructions: instructions,
           defaultScorePerQuestion: Number(defaultScore),
-        }),
-      });
+        },
+        activeExam.questions.length
+      );
 
-      const json = await res.json();
-      if (!json.success || !json.data) {
-        throw new Error(json.error || "Gagal menghasilkan soal dari Gemini AI.");
-      }
-
-      const generatedQuestions: Question[] = json.data.questions.map((q: any, idx: number) => ({
-        id: `q-ai-${Date.now()}-${idx + 1}`,
-        questionNumber: activeExam.questions.length + idx + 1,
-        stimulus: q.stimulus || "",
-        questionText: q.questionText,
-        type: (q.type as QuestionType) || "pilihan_ganda",
-        options: q.options || [
-          { key: "A", text: "Opsi A" },
-          { key: "B", text: "Opsi B" },
-          { key: "C", text: "Opsi C" },
-          { key: "D", text: "Opsi D" },
-        ],
-        correctAnswer: q.correctAnswer || "A",
-        score: q.score || defaultScore,
-        explanation: q.explanation || "Pembahasan otomatis AI",
-        cognitiveLevel: q.cognitiveLevel || "C4 - HOTS",
-        topicTag: q.topicTag || topic,
-      }));
-
-      const newQuestions = [...activeExam.questions, ...generatedQuestions].map((q, i) => ({
+      const newQuestions = [...activeExam.questions, ...result.questions].map((q, i) => ({
         ...q,
         questionNumber: i + 1,
       }));
@@ -118,17 +93,17 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
 
       const updatedExam: ExamPackage = {
         ...activeExam,
-        title: json.data.examTitle ? `${json.data.examTitle}` : activeExam.title,
+        title: result.examTitle ? `${result.examTitle}` : activeExam.title,
         questions: newQuestions,
         totalScore,
         updatedAt: new Date().toISOString(),
       };
 
       onUpdateExam(updatedExam);
-      setAiSuccessMsg(`Berhasil membuat ${generatedQuestions.length} butir soal baru dengan Gemini AI!`);
-      if (generatedQuestions[0]) {
-        setSelectedQuestionId(generatedQuestions[0].id);
-        setEditingQuestion(generatedQuestions[0]);
+      setAiSuccessMsg(`Berhasil membuat ${result.questions.length} butir soal baru dengan Gemini AI!`);
+      if (result.questions[0]) {
+        setSelectedQuestionId(result.questions[0].id);
+        setEditingQuestion(result.questions[0]);
       }
     } catch (err: any) {
       setAiError(err.message || "Terjadi kesalahan saat memanggil Gemini API.");

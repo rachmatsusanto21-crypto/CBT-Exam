@@ -17,8 +17,13 @@ import {
   getCustomGeminiApiKey,
   saveCustomGeminiApiKey,
   removeCustomGeminiApiKey,
-  getGeminiRequestHeaders,
 } from "../utils/storage";
+import {
+  checkGeminiStatus,
+  testGeminiConnection,
+  GeminiStatusResult,
+  GeminiTestResult,
+} from "../utils/geminiApi";
 
 interface GeminiApiKeyModalProps {
   isOpen: boolean;
@@ -35,25 +40,14 @@ export const GeminiApiKeyModal: React.FC<GeminiApiKeyModalProps> = ({
   const [showKey, setShowKey] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [isCheckingStatus, setIsCheckingStatus] = useState(false);
-  const [testResult, setTestResult] = useState<{
-    success: boolean;
-    message: string;
-    latencyMs?: number;
-  } | null>(null);
-  const [serverStatus, setServerStatus] = useState<{
-    configured: boolean;
-    source: "env" | "custom" | "none";
-    maskedKey?: string;
-    model?: string;
-  } | null>(null);
+  const [testResult, setTestResult] = useState<GeminiTestResult | null>(null);
+  const [serverStatus, setServerStatus] = useState<GeminiStatusResult | null>(null);
 
   const fetchStatus = async () => {
     setIsCheckingStatus(true);
     try {
-      const headers = getGeminiRequestHeaders();
-      const res = await fetch("/api/gemini/status", { headers });
-      const data = await res.json();
-      setServerStatus(data);
+      const status = await checkGeminiStatus();
+      setServerStatus(status);
     } catch (e) {
       console.error("Failed to check Gemini API status", e);
     } finally {
@@ -76,37 +70,12 @@ export const GeminiApiKeyModal: React.FC<GeminiApiKeyModalProps> = ({
     setTestResult(null);
 
     try {
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-      };
-      if (key) {
-        headers["x-gemini-api-key"] = key;
-      }
-
-      const res = await fetch("/api/gemini/test-connection", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ apiKey: key || undefined }),
-      });
-
-      const json = await res.json();
-      if (json.success) {
-        setTestResult({
-          success: true,
-          message: json.message || "Koneksi berhasil terhubung ke Gemini AI!",
-          latencyMs: json.latencyMs,
-        });
-      } else {
-        setTestResult({
-          success: false,
-          message: json.error || "Gagal menghubungkan ke Gemini API. Pastikan Kunci API valid.",
-          latencyMs: json.latencyMs,
-        });
-      }
+      const result = await testGeminiConnection(key);
+      setTestResult(result);
     } catch (err: any) {
       setTestResult({
         success: false,
-        message: err.message || "Gagal menghubungi server endpoint.",
+        message: err.message || "Gagal menghubungi Gemini API.",
       });
     } finally {
       setIsTesting(false);

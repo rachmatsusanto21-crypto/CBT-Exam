@@ -14,7 +14,7 @@ import {
   GraduationCap
 } from "lucide-react";
 import { ExamPackage, StudentExamSession } from "../types";
-import { getGeminiRequestHeaders } from "../utils/storage";
+import { generateStudentRemediation } from "../utils/geminiApi";
 
 interface StudentResultViewProps {
   session: StudentExamSession;
@@ -62,25 +62,19 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
   const handleGenerateAiRemediation = async () => {
     setIsAnalyzingAi(true);
     try {
-      const headers = getGeminiRequestHeaders();
-      const res = await fetch("/api/gemini/analyze-student-remediation", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          studentName: session.studentName,
-          subject: exam.teacherProfile.subject,
-          score: session.totalScoreEarned,
-          maxScore: session.maxScore,
-          wrongQuestions,
-          totalQuestions: exam.questions.length,
-        }),
+      const result = await generateStudentRemediation({
+        studentName: session.studentName,
+        subject: exam.teacherProfile.subject,
+        score: session.totalScoreEarned,
+        maxScore: session.maxScore,
+        wrongQuestions,
+        totalQuestions: exam.questions.length,
       });
 
-      const json = await res.json();
-      if (json.success && json.analysis) {
-        setAiAnalysis(json.analysis);
+      if (result) {
+        setAiAnalysis(result);
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error("AI Remediation failed", e);
     } finally {
       setIsAnalyzingAi(false);
