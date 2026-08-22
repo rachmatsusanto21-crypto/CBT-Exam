@@ -11,6 +11,85 @@ const PORT = 3000;
 
 app.use(express.json({ limit: "20mb" }));
 
+// Helper to sleep for ms
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Format friendly Gemini error message
+function formatGeminiError(error: any): string {
+  const msg = error?.message || (typeof error === "string" ? error : "");
+  if (
+    msg.includes("503") ||
+    msg.includes("high demand") ||
+    msg.includes("UNAVAILABLE") ||
+    msg.includes("temporarily overloaded")
+  ) {
+    return "Server Google Gemini sedang mengalami lonjakan trafik tinggi sementara (503 Service Unavailable). Sistem telah mencoba otomatis, silakan klik 'Coba Lagi' dalam beberapa detik.";
+  }
+  if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("quota")) {
+    return "Batas kuota harian/menit API Gemini telah tercapai (429 Too Many Requests). Silakan tunggu sebentar sebelum mencoba kembali.";
+  }
+  if (msg.includes("API_KEY_INVALID") || msg.includes("API key not valid")) {
+    return "Kunci API Gemini tidak valid atau belum diaktifkan. Silakan periksa kembali Kunci API Anda di menu 'Kunci API Gemini'.";
+  }
+  return msg || "Terjadi kesalahan saat memproses permintaan dengan Google Gemini AI.";
+}
+
+// Resilient Gemini Generate Content caller with automatic fallback models & retry on 503 / 429
+async function callGeminiWithResilience(
+  ai: GoogleGenAI,
+  params: {
+    contents: any;
+    config?: any;
+    preferredModel?: string;
+    fallbackModels?: string[];
+    maxRetries?: number;
+  }
+) {
+  const models = [
+    params.preferredModel || "gemini-3.7-flash",
+    ...(params.fallbackModels || ["gemini-flash-latest", "gemini-3.1-flash-lite"]),
+  ];
+  const maxRetries = params.maxRetries ?? 2;
+  let lastError: any = null;
+
+  for (const model of models) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents: params.contents,
+          config: params.config,
+        });
+        return { response, modelUsed: model };
+      } catch (err: any) {
+        lastError = err;
+        const errMsg = err?.message || "";
+        const isTransient =
+          errMsg.includes("503") ||
+          errMsg.includes("high demand") ||
+          errMsg.includes("UNAVAILABLE") ||
+          errMsg.includes("429") ||
+          errMsg.includes("RESOURCE_EXHAUSTED") ||
+          errMsg.includes("fetch failed");
+
+        console.warn(`[Gemini Attempt Failed] Model: ${model}, Attempt: ${attempt + 1}/${maxRetries + 1}. Error: ${errMsg}`);
+
+        if (isTransient && attempt < maxRetries) {
+          // Wait with exponential backoff before retrying same model
+          const backoffDelay = (attempt + 1) * 1200 + Math.random() * 500;
+          await sleep(backoffDelay);
+          continue;
+        } else {
+          // Break out to try next fallback model
+          break;
+        }
+      }
+    }
+  }
+
+  throw new Error(formatGeminiError(lastError));
+}
+
 // Server-Side Gemini API client
 const getGeminiClient = (customKey?: string) => {
   const apiKey = (customKey && customKey.trim()) || process.env.GEMINI_API_KEY;
@@ -72,27 +151,30 @@ app.post("/api/gemini/test-connection", async (req, res) => {
     const customKey = (req.headers["x-gemini-api-key"] as string) || req.body?.apiKey;
     const ai = getGeminiClient(customKey);
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.7-flash",
+    const { response, modelUsed } = await callGeminiWithResilience(ai, {
+      preferredModel: "gemini-3.7-flash",
+      fallbackModels: ["gemini-flash-latest", "gemini-3.1-flash-lite"],
       contents: "Balas dengan tepat satu kata: Siap.",
       config: {
         systemInstruction: "Anda adalah asisten AI pemeriksa status koneksi.",
       },
+      maxRetries: 2,
     });
 
     const latencyMs = Date.now() - startTime;
     res.json({
       success: true,
-      message: "Koneksi ke Google Gemini AI (gemini-3.7-flash) berhasil terhubung!",
+      message: `Koneksi ke Google Gemini AI (${modelUsed}) berhasil terhubung!`,
       latencyMs,
       reply: response.text?.trim() || "Siap.",
+      modelUsed,
     });
   } catch (error: any) {
     const latencyMs = Date.now() - startTime;
     console.error("Gemini test connection failed:", error);
     res.status(400).json({
       success: false,
-      error: error.message || "Gagal menghubungkan ke Gemini API. Pastikan API key valid.",
+      error: formatGeminiError(error),
       latencyMs,
     });
   }
@@ -136,8 +218,9 @@ Buatlah ${count} butir soal ujian dengan ketentuan:
 
 Kembalikan format JSON yang valid persis sesuai skema yang diminta.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.7-flash",
+    const { response, modelUsed } = await callGeminiWithResilience(ai, {
+      preferredModel: "gemini-3.7-flash",
+      fallbackModels: ["gemini-flash-latest", "gemini-3.1-flash-lite"],
       contents: prompt,
       config: {
         systemInstruction:
@@ -165,11 +248,11 @@ Kembalikan format JSON yang valid persis sesuai skema yang diminta.`;
                       type: Type.OBJECT,
                       properties: {
                         key: { type: Type.STRING, description: "A, B, C, D, atau E" },
-                        text: { type: Type.STRING, description: "Teks isi pilihan jawaban" }
+                        text: { type: Type.STRING, description: "Teks isi pilihan jawaban" },
                       },
-                      required: ["key", "text"]
+                      required: ["key", "text"],
                     },
-                    description: "Daftar opsi untuk pilihan ganda"
+                    description: "Daftar opsi untuk pilihan ganda",
                   },
                   matchingPairs: {
                     type: Type.ARRAY,
@@ -178,37 +261,37 @@ Kembalikan format JSON yang valid persis sesuai skema yang diminta.`;
                       properties: {
                         id: { type: Type.STRING },
                         left: { type: Type.STRING, description: "Pernyataan / Item Kiri" },
-                        right: { type: Type.STRING, description: "Pasangan Cocok / Item Kanan" }
+                        right: { type: Type.STRING, description: "Pasangan Cocok / Item Kanan" },
                       },
-                      required: ["left", "right"]
+                      required: ["left", "right"],
                     },
-                    description: "Daftar pasangan untuk tipe soal menjodohkan"
+                    description: "Daftar pasangan untuk tipe soal menjodohkan",
                   },
                   correctAnswer: { type: Type.STRING, description: "Kunci jawaban benar (huruf A-E, kata isian singkat, atau format matching)" },
                   score: { type: Type.NUMBER, description: "Bobot skor nilai butir soal ini" },
                   explanation: { type: Type.STRING, description: "Pembahasan lengkap dan alasan rasional jawaban benar" },
                   sampleAnswer: { type: Type.STRING, description: "Rubrik / contoh jawaban ideal untuk soal uraian" },
                   cognitiveLevel: { type: Type.STRING, description: "Level kognitif: C1, C2, C3, C4, C5, C6 (HOTS)" },
-                  topicTag: { type: Type.STRING, description: "Subtopik materi spesifik" }
+                  topicTag: { type: Type.STRING, description: "Subtopik materi spesifik" },
                 },
-                required: ["questionText", "correctAnswer", "score", "explanation"]
-              }
-            }
+                required: ["questionText", "correctAnswer", "score", "explanation"],
+              },
+            },
           },
-          required: ["examTitle", "questions"]
-        }
-      }
+          required: ["examTitle", "questions"],
+        },
+      },
     });
 
     const outputText = response.text || "{}";
     const parsedData = JSON.parse(outputText);
 
-    res.json({ success: true, data: parsedData });
+    res.json({ success: true, data: parsedData, modelUsed });
   } catch (error: any) {
     console.error("Error generating questions with Gemini:", error);
     res.status(500).json({
       success: false,
-      error: error.message || "Gagal membuat soal dengan Gemini AI."
+      error: formatGeminiError(error),
     });
   }
 });
@@ -264,8 +347,9 @@ Ketentuan SVG:
 - Sertakan label teks yang jelas, panah penunjuk, bentuk geometri / diagram / anatomi yang rapi jika diperlukan.
 - Tambahkan background rect bergradasi halus di dalam SVG.`;
 
-    const svgResponse = await ai.models.generateContent({
-      model: "gemini-3.7-flash",
+    const { response: svgResponse, modelUsed } = await callGeminiWithResilience(ai, {
+      preferredModel: "gemini-3.7-flash",
+      fallbackModels: ["gemini-flash-latest", "gemini-3.1-flash-lite"],
       contents: svgPrompt,
       config: {
         systemInstruction:
@@ -280,7 +364,6 @@ Ketentuan SVG:
     }
 
     if (rawSvg.includes("<svg") && rawSvg.includes("</svg>")) {
-      // Extract from first <svg to last </svg>
       const startIdx = rawSvg.indexOf("<svg");
       const endIdx = rawSvg.lastIndexOf("</svg>") + 6;
       const cleanSvg = rawSvg.substring(startIdx, endIdx);
@@ -291,7 +374,7 @@ Ketentuan SVG:
         success: true,
         imageUrl: dataUrl,
         caption: prompt.trim(),
-        source: "svg_vector",
+        source: `svg_vector_${modelUsed}`,
       });
     }
 
@@ -300,7 +383,7 @@ Ketentuan SVG:
     console.error("Error generating image:", error);
     res.status(500).json({
       success: false,
-      error: error.message || "Gagal membuat gambar dengan AI.",
+      error: formatGeminiError(error),
     });
   }
 });
@@ -324,18 +407,19 @@ Berikan:
 2. Rekomendasi 3 materi spesifik yang perlu dipelajari kembali
 3. Kalimat motivasi apresiatif dan membangkitkan semangat belajar siswa.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.7-flash",
+    const { response, modelUsed } = await callGeminiWithResilience(ai, {
+      preferredModel: "gemini-3.7-flash",
+      fallbackModels: ["gemini-flash-latest", "gemini-3.1-flash-lite"],
       contents: prompt,
       config: {
         systemInstruction: "Anda adalah guru konselor dan evaluator pedagogik yang hangat, memotivasi, dan memberikan saran praktis bagi kemajuan belajar siswa.",
-      }
+      },
     });
 
-    res.json({ success: true, analysis: response.text });
+    res.json({ success: true, analysis: response.text, modelUsed });
   } catch (error: any) {
     console.error("Error analyzing student:", error);
-    res.status(500).json({ success: false, error: error.message });
+    res.status(500).json({ success: false, error: formatGeminiError(error) });
   }
 });
 

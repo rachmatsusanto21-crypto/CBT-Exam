@@ -20,7 +20,8 @@ import {
   TrendingUp,
   TrendingDown,
   Minus,
-  Users
+  Users,
+  AlertCircle
 } from "lucide-react";
 import { ExamPackage, StudentExamSession } from "../types";
 import { generateStudentRemediation } from "../utils/geminiApi";
@@ -39,6 +40,7 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
 }) => {
   const [isAnalyzingAi, setIsAnalyzingAi] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(session.aiRemediation || null);
+  const [aiError, setAiError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"summary" | "review">("summary");
 
   useEffect(() => {
@@ -71,6 +73,7 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
 
   const handleGenerateAiRemediation = async () => {
     setIsAnalyzingAi(true);
+    setAiError(null);
     try {
       const result = await generateStudentRemediation({
         studentName: session.studentName,
@@ -86,6 +89,7 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
       }
     } catch (e: any) {
       console.error("AI Remediation failed", e);
+      setAiError(e?.message || "Gagal mendapatkan analisis remedial dari AI. Silakan coba beberapa saat lagi.");
     } finally {
       setIsAnalyzingAi(false);
     }
@@ -381,11 +385,28 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
               </button>
             </div>
 
+            {aiError && (
+              <div className="p-3.5 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-300 text-xs flex items-start justify-between gap-3">
+                <div className="flex items-start gap-2 flex-1">
+                  <AlertCircle className="w-4 h-4 mt-0.5 shrink-0 text-rose-400" />
+                  <span className="leading-relaxed">{aiError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleGenerateAiRemediation}
+                  disabled={isAnalyzingAi}
+                  className="px-2.5 py-1 bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-200 rounded-lg text-[11px] font-semibold shrink-0 cursor-pointer disabled:opacity-50"
+                >
+                  Coba Lagi
+                </button>
+              </div>
+            )}
+
             {aiAnalysis ? (
               <div className="p-4 bg-[#161618] rounded-xl border border-slate-800 text-xs text-slate-300 leading-relaxed whitespace-pre-line">
                 {aiAnalysis}
               </div>
-            ) : (
+            ) : !aiError && (
               <p className="text-xs text-slate-400">
                 Klik tombol di atas untuk mendapatkan evaluasi kelemahan konsep dan rekomendasi materi yang perlu dipelajari kembali berdasarkan butir soal yang dijawab salah.
               </p>

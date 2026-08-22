@@ -787,9 +787,22 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
               </div>
 
               {aiError && (
-                <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-xs flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-                  <span>{aiError}</span>
+                <div className="p-3.5 bg-rose-500/10 border border-rose-500/30 rounded-2xl text-rose-300 text-xs space-y-2">
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 mt-0.5 shrink-0 text-rose-400" />
+                    <span className="leading-relaxed flex-1">{aiError}</span>
+                  </div>
+                  <div className="flex items-center justify-end pt-1">
+                    <button
+                      type="button"
+                      onClick={handleGenerateAI}
+                      disabled={isGenerating}
+                      className="px-3 py-1.5 bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-200 rounded-xl font-semibold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isGenerating ? "animate-spin" : ""}`} />
+                      <span>Coba Lagi Sekarang</span>
+                    </button>
+                  </div>
                 </div>
               )}
 

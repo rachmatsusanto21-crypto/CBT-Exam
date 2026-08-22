@@ -3,6 +3,28 @@ import { getCustomGeminiApiKey, getGeminiRequestHeaders } from "./storage";
 import { Question, QuestionType } from "../types";
 
 /**
+ * Format friendly Gemini error message
+ */
+export function formatGeminiClientError(error: any): string {
+  const msg = error?.message || (typeof error === "string" ? error : "");
+  if (
+    msg.includes("503") ||
+    msg.includes("high demand") ||
+    msg.includes("UNAVAILABLE") ||
+    msg.includes("temporarily overloaded")
+  ) {
+    return "Server Google Gemini sedang mengalami lonjakan beban tinggi sementara (503 Service Unavailable). Silakan klik 'Coba Lagi' dalam beberapa saat.";
+  }
+  if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED") || msg.includes("quota")) {
+    return "Batas kuota harian/menit API Gemini telah tercapai (429 Too Many Requests). Silakan tunggu sebentar sebelum mencoba kembali.";
+  }
+  if (msg.includes("API_KEY_INVALID") || msg.includes("API key not valid")) {
+    return "Kunci API Gemini tidak valid atau belum diaktifkan. Silakan periksa kembali Kunci API Anda di menu 'Kunci API Gemini'.";
+  }
+  return msg || "Terjadi kendala saat memproses permintaan dengan Google Gemini AI.";
+}
+
+/**
  * Safely parse response as JSON, handling HTML error pages or non-JSON responses
  */
 async function safeParseResponse(res: Response): Promise<{ isJson: boolean; data: any; rawText: string }> {
@@ -430,7 +452,7 @@ Kembalikan format JSON yang valid persis sesuai skema yang diminta.`;
       questions,
     };
   } catch (clientErr: any) {
-    throw new Error(clientErr?.message || "Gagal membuat butir soal melalui Google Gemini AI.");
+    throw new Error(formatGeminiClientError(clientErr));
   }
 }
 
@@ -459,9 +481,14 @@ export async function generateStudentRemediation(params: {
     const parsed = await safeParseResponse(res);
     if (parsed.isJson && parsed.data?.success && parsed.data?.analysis) {
       return parsed.data.analysis;
+    } else if (parsed.isJson && parsed.data?.error) {
+      throw new Error(formatGeminiClientError(parsed.data.error));
     }
-  } catch (err) {
+  } catch (err: any) {
     console.warn("Server remediation endpoint failed, falling back to client:", err);
+    if (!customKey) {
+      throw new Error(formatGeminiClientError(err));
+    }
   }
 
   // Client-side fallback
@@ -491,7 +518,7 @@ Berikan:
 
       return response.text || "Analisis remedial telah berhasil dibuat.";
     } catch (err: any) {
-      throw new Error(err.message || "Gagal memproses analisis remedial dengan Gemini AI.");
+      throw new Error(formatGeminiClientError(err));
     }
   }
 
