@@ -1,0 +1,166 @@
+export interface SchoolProfile {
+  schoolName: string;
+  npsn: string;
+  agencyName: string; // e.g. "PEMERINTAH PROVINSI JAWA TIMUR / DINAS PENDIDIKAN"
+  address: string;
+  postalCode: string;
+  phone: string;
+  email: string;
+  website: string;
+  principalName: string;
+  principalNIP: string;
+  logoLeftUrl?: string; // e.g. Logo Dinas / Tut Wuri Handayani
+  logoRightUrl?: string; // e.g. Logo Sekolah
+  motto?: string;
+}
+
+export interface TeacherProfile {
+  teacherName: string;
+  teacherNIP: string;
+  subject: string;
+  subjectCode: string;
+  gradeLevel: string;
+  academicYear: string;
+  semester: "Ganjil" | "Genap";
+  passingGrade: number; // KKM (misal 75)
+  durationMinutes: number;
+}
+
+export interface QuestionOption {
+  key: string; // "A" | "B" | "C" | "D" | "E"
+  text: string;
+}
+
+export type QuestionType =
+  | "pilihan_ganda"
+  | "pilihan_ganda_kompleks"
+  | "benar_salah"
+  | "isian_singkat";
+
+export interface Question {
+  id: string;
+  questionNumber: number;
+  stimulus?: string; // Teks bacaan/cerita/tabel pendukung
+  questionText: string;
+  type: QuestionType;
+  options: QuestionOption[];
+  correctAnswer: string; // "A" atau "A,C"
+  score: number; // Bobot skor, misal 10
+  explanation: string; // Pembahasan lengkap
+  cognitiveLevel?: string; // e.g. "C4 - Menganalisis (HOTS)"
+  topicTag?: string;
+}
+
+export interface ExamPackage {
+  id: string;
+  code: string; // Kode Soal e.g. "MAT-XII-2026"
+  title: string;
+  description?: string;
+  schoolProfile: SchoolProfile;
+  teacherProfile: TeacherProfile;
+  questions: Question[];
+  totalScore: number;
+  durationMinutes: number;
+  sessionToken: string; // e.g. "G8T9Q2"
+  tokenCreatedAt: string;
+  isTokenActive: boolean;
+  allowReviewExplanation: boolean; // Tampilkan pembahasan setelah submit
+  shuffleQuestions: boolean;
+  shuffleOptions: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StudentTokenItem {
+  id: string;
+  examCode: string;
+  token: string;
+  studentName: string;
+  nisn: string;
+  className: string;
+  seatNumber?: string;
+  status: "belum_mulai" | "sedang_mengerjakan" | "selesai";
+  generatedAt: string;
+}
+
+export interface StudentAnswerItem {
+  questionId: string;
+  selectedOption: string; // e.g. "A"
+  isFlagged: boolean; // Ragu-ragu
+  isCorrect?: boolean;
+  scoreEarned?: number;
+  timeSpentSeconds?: number;
+}
+
+export interface CheatingViolationLog {
+  id?: string;
+  timestamp: string;
+  type?: "tab_switch" | "window_blur" | "fullscreen_exit";
+  violationType?: "tab_switch" | "window_blur" | "fullscreen_exit";
+  message: string;
+}
+
+export interface StudentExamSession {
+  id: string;
+  examId: string;
+  examCode: string;
+  examTitle: string;
+  subject: string;
+  studentName: string;
+  nisn: string;
+  className: string;
+  token: string;
+  currentSlideIndex: number;
+  answers: Record<string, StudentAnswerItem>; // key is questionId
+  startTime: string;
+  submitTime?: string;
+  timeSpentSeconds: number;
+  totalScoreEarned: number;
+  maxScore: number;
+  percentage: number;
+  passed: boolean;
+  status: "in_progress" | "submitted" | "timed_out";
+  shuffledQuestions?: Question[];
+  aiRemediation?: string;
+  deviceInfo?: string;
+  cheatViolations?: CheatingViolationLog[];
+  violationCount?: number;
+}
+
+export interface ItemAnalysisSummary {
+  questionId: string;
+  questionNumber: number;
+  topicTag: string;
+  cognitiveLevel: string;
+  questionText: string;
+  correctAnswer: string;
+  maxScore: number;
+  totalResponses: number;
+  correctResponses: number;
+  incorrectResponses: number;
+  percentageCorrect: number;
+  difficultyCategory: "Sangat Mudah" | "Mudah" | "Sedang" | "Sukar" | "Sangat Sukar";
+  distractorCounts: Record<string, number>;
+  discriminationIndex: number;
+}
+
+export interface AppBackupData {
+  version: string;
+  appName: string;
+  backupDate: string;
+  schoolProfile: SchoolProfile;
+  exams: ExamPackage[];
+  history: StudentExamSession[];
+  studentTokens: StudentTokenItem[];
+}
+
+export type AppStateBackup = AppBackupData;
+
+export type NavigationTab =
+  | "student_exam"
+  | "monitoring"
+  | "ai_generator"
+  | "item_analysis"
+  | "tokens"
+  | "school_profile"
+  | "backup_restore";

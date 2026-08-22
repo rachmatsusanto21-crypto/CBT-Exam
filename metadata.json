@@ -1,0 +1,6 @@
+{
+  "name": "SlideExam CBT - Ujian Interaktif & Analisis AI",
+  "description": "Aplikasi ujian online berbasis browser berbentuk presentasi slides dengan pembuat soal Gemini AI, sistem token, kop surat sekolah, export Google Sheets & Docs, live monitoring, dan analisis butir soal.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
