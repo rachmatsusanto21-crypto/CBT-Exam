@@ -161,18 +161,29 @@ export default function App() {
   };
 
   const handleDeleteExamPackage = (id: string) => {
-    if (exams.length <= 1) {
-      alert("Tidak dapat menghapus satu-satunya naskah soal yang tersedia.");
-      return;
-    }
     if (confirm("Apakah Anda yakin ingin menghapus naskah soal ini dari database?")) {
-      const updated = exams.filter((e) => e.id !== id);
+      let updated = exams.filter((e) => e.id !== id);
+      if (updated.length === 0) {
+        const fresh = createNewExamPackage("Naskah Ujian Baru");
+        updated = [fresh];
+      }
       setExamsState(updated);
       saveExamPackages(updated);
-      if (activeExamId === id) {
+      if (activeExamId === id || !updated.some((e) => e.id === activeExamId)) {
         setActiveExamIdState(updated[0].id);
         saveActiveExamId(updated[0].id);
       }
+    }
+  };
+
+  const handleClearAllExams = () => {
+    if (confirm("Apakah Anda yakin ingin mengosongkan seluruh riwayat dan bank naskah soal ujian?")) {
+      const fresh = createNewExamPackage("Naskah Ujian Baru");
+      const updated = [fresh];
+      setExamsState(updated);
+      saveExamPackages(updated);
+      setActiveExamIdState(fresh.id);
+      saveActiveExamId(fresh.id);
     }
   };
 
@@ -538,6 +549,7 @@ export default function App() {
             onDeleteExam={(id) => handleDeleteExamPackage(id)}
             onDuplicateExam={(exam) => handleDuplicateExamPackage(exam)}
             onCreateNewExam={handleCreateNewExam}
+            onClearAllExams={handleClearAllExams}
           />
         )}
 

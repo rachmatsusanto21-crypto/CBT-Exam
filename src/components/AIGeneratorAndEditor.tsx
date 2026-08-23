@@ -70,6 +70,7 @@ interface AIGeneratorAndEditorProps {
   onDeleteExam?: (id: string) => void;
   onDuplicateExam?: (exam: ExamPackage) => void;
   onCreateNewExam?: () => void;
+  onClearAllExams?: () => void;
 }
 
 export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
@@ -84,6 +85,7 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
   onDeleteExam,
   onDuplicateExam,
   onCreateNewExam,
+  onClearAllExams,
 }) => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
@@ -1802,6 +1804,9 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
             onDeleteExam(examId);
           }
         }}
+        onUpdateExam={(updated) => {
+          onUpdateExam(updated);
+        }}
         onDuplicateExam={(exam) => {
           if (onDuplicateExam) {
             onDuplicateExam(exam);
@@ -1813,6 +1818,7 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
           }
           setShowHistoryModal(false);
         }}
+        onClearAllExams={onClearAllExams}
         school={schoolData}
       />
     </div>
