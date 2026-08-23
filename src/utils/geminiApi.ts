@@ -56,6 +56,8 @@ export interface GenerateQuestionsParams {
   subject: string;
   gradeLevel: string;
   topic: string;
+  academicYear?: string;
+  semester?: string;
   count: number;
   difficulty: string;
   questionType: QuestionType;
@@ -354,7 +356,9 @@ export async function generateQuestionsWithGemini(
     const prompt = `Anda adalah seorang ahli pembuat soal ujian kurikulum merdeka / nasional Indonesia yang sangat berpengalaman.
 Buatlah ${params.count} butir soal ujian dengan ketentuan:
 - Mata Pelajaran: ${params.subject || "Umum"}
-- Jenjang / Kelas: ${params.gradeLevel || "SMP / SMA"}
+- Jenjang / Tingkat Kelas: ${params.gradeLevel || "SMP / SMA"}
+- Tahun Pelajaran: ${params.academicYear || "2025/2026"}
+- Semester: ${params.semester || "Ganjil"}
 - Topik / Materi: ${params.topic || "Umum"}
 - Tingkat Kesukaran: ${params.difficulty} (mudah, sedang, sukar, atau variatif HOTS)
 - Tipe Soal Utama: ${params.questionType} (pilihan_ganda, menjodohkan, isian_singkat, atau uraian)

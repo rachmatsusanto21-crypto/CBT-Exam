@@ -476,7 +476,8 @@ export const printFormattedExamDocument = (
     <div class="exam-header-grid">
       <div><strong>Mata Pelajaran:</strong> ${teacher.subject} (${teacher.subjectCode || "-"})</div>
       <div><strong>Hari / Tanggal:</strong> ${new Date().toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</div>
-      <div><strong>Kelas / Jenjang:</strong> ${teacher.gradeLevel} (Semester ${teacher.semester})</div>
+      <div><strong>Tahun Pelajaran:</strong> ${teacher.academicYear || "2025/2026"} (Semester ${teacher.semester || "Ganjil"})</div>
+      <div><strong>Kelas / Jenjang:</strong> ${teacher.gradeLevel}</div>
       <div><strong>Waktu / Durasi:</strong> ${exam.durationMinutes} Menit</div>
       <div><strong>Guru Pengampu:</strong> ${teacher.teacherName} (NIP: ${teacher.teacherNIP || "-"})</div>
       <div><strong>Kode Naskah:</strong> ${exam.code}</div>
@@ -815,7 +816,7 @@ export const exportQuestionsToExcel = (
     [school.agencyName || "PEMERINTAH DAERAH / DINAS PENDIDIKAN"],
     [school.schoolName || "SMART CBT ASSESSMENT"],
     [`BANK SOAL UJIAN: ${exam.title} (${exam.code})`],
-    [`Mata Pelajaran: ${exam.teacherProfile.subject} | Kelas: ${exam.teacherProfile.gradeLevel} | Total: ${exam.questions.length} Butir Soal`],
+    [`Mata Pelajaran: ${exam.teacherProfile.subject} | Tahun Pelajaran: ${exam.teacherProfile.academicYear || "2025/2026"} | Semester: ${exam.teacherProfile.semester || "Ganjil"} | Kelas: ${exam.teacherProfile.gradeLevel} | Total: ${exam.questions.length} Butir Soal`],
     [],
     headers,
     ...rows,
@@ -962,8 +963,14 @@ export const exportQuestionsToWordDoc = (
         <tr>
           <td class="meta-label">Mata Pelajaran</td>
           <td class="meta-val">: ${exam.teacherProfile.subject}</td>
-          <td class="meta-label">Kelas / Semester</td>
-          <td class="meta-val">: ${exam.teacherProfile.gradeLevel} / ${exam.teacherProfile.semester}</td>
+          <td class="meta-label">Tahun Pelajaran</td>
+          <td class="meta-val">: ${exam.teacherProfile.academicYear || "2025/2026"}</td>
+        </tr>
+        <tr>
+          <td class="meta-label">Kelas / Jenjang</td>
+          <td class="meta-val">: ${exam.teacherProfile.gradeLevel}</td>
+          <td class="meta-label">Semester</td>
+          <td class="meta-val">: ${exam.teacherProfile.semester || "Ganjil"}</td>
         </tr>
         <tr>
           <td class="meta-label">Kode Naskah Soal</td>

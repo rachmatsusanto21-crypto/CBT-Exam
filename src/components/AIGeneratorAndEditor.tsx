@@ -39,7 +39,11 @@ import {
   Clock,
   Timer,
   History,
-  Play
+  Play,
+  GraduationCap,
+  Calendar,
+  CalendarDays,
+  Bookmark
 } from "lucide-react";
 import { ExamPackage, Question, QuestionOption, QuestionType, MatchingPair, SchoolProfile } from "../types";
 import { generateQuestionsWithGemini, generateImageWithAi } from "../utils/geminiApi";
@@ -94,6 +98,8 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
   // AI Generator Form State
   const [subject, setSubject] = useState(activeExam.teacherProfile.subject || "Informatika");
   const [gradeLevel, setGradeLevel] = useState(activeExam.teacherProfile.gradeLevel || "Kelas X");
+  const [academicYear, setAcademicYear] = useState(activeExam.teacherProfile.academicYear || "2025/2026");
+  const [semester, setSemester] = useState(activeExam.teacherProfile.semester || "Ganjil");
   const [topic, setTopic] = useState("Kecerdasan Buatan & Berpikir Komputasional");
   const [count, setCount] = useState(5);
   const [difficulty, setDifficulty] = useState("sedang");
@@ -117,10 +123,14 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
   const [showShareModal, setShowShareModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
 
-  // Edit Exam Code / Title Modal State
+  // Edit Exam Code / Title & Metadata Modal State
   const [showEditCodeModal, setShowEditCodeModal] = useState(false);
   const [tempExamCode, setTempExamCode] = useState(activeExam.code);
   const [tempExamTitle, setTempExamTitle] = useState(activeExam.title);
+  const [tempSubject, setTempSubject] = useState(activeExam.teacherProfile.subject || "Informatika");
+  const [tempGradeLevel, setTempGradeLevel] = useState(activeExam.teacherProfile.gradeLevel || "Kelas X");
+  const [tempAcademicYear, setTempAcademicYear] = useState(activeExam.teacherProfile.academicYear || "2025/2026");
+  const [tempSemester, setTempSemester] = useState(activeExam.teacherProfile.semester || "Ganjil");
 
   // Timer configuration
   const [examDuration, setExamDuration] = useState(activeExam.durationMinutes || 60);
@@ -319,18 +329,46 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
 
   const handleSaveExamCodeAndTitle = () => {
     if (!tempExamCode.trim()) return;
-    onUpdateExam({
+    const updatedExam: ExamPackage = {
       ...activeExam,
       code: tempExamCode.trim().toUpperCase(),
       title: tempExamTitle.trim() || activeExam.title,
+      teacherProfile: {
+        ...activeExam.teacherProfile,
+        subject: tempSubject.trim() || activeExam.teacherProfile?.subject || "Umum",
+        gradeLevel: tempGradeLevel.trim() || activeExam.teacherProfile?.gradeLevel || "Kelas X",
+        academicYear: tempAcademicYear.trim() || activeExam.teacherProfile?.academicYear || "2025/2026",
+        semester: tempSemester || activeExam.teacherProfile?.semester || "Ganjil",
+      },
       updatedAt: new Date().toISOString(),
-    });
+    };
+    onUpdateExam(updatedExam);
+    setSubject(tempSubject.trim() || activeExam.teacherProfile?.subject || "Informatika");
+    setGradeLevel(tempGradeLevel.trim() || activeExam.teacherProfile?.gradeLevel || "Kelas X");
+    setAcademicYear(tempAcademicYear.trim() || activeExam.teacherProfile?.academicYear || "2025/2026");
+    setSemester(tempSemester || activeExam.teacherProfile?.semester || "Ganjil");
     setShowEditCodeModal(false);
-    setAiSuccessMsg("Kode Naskah Soal & Judul Ujian berhasil diperbarui!");
+    setAiSuccessMsg("Metadata Naskah (Kode, Judul, Mapel, Kelas, TP, & Semester) berhasil diperbarui!");
     setTimeout(() => setAiSuccessMsg(null), 3000);
   };
 
+  const handleOpenEditMetadata = () => {
+    setTempExamCode(activeExam.code);
+    setTempExamTitle(activeExam.title);
+    setTempSubject(activeExam.teacherProfile?.subject || "");
+    setTempGradeLevel(activeExam.teacherProfile?.gradeLevel || "");
+    setTempAcademicYear(activeExam.teacherProfile?.academicYear || "2025/2026");
+    setTempSemester(activeExam.teacherProfile?.semester || "Ganjil");
+    setShowEditCodeModal(true);
+  };
+
   useEffect(() => {
+    if (activeExam) {
+      setSubject(activeExam.teacherProfile?.subject || "Informatika");
+      setGradeLevel(activeExam.teacherProfile?.gradeLevel || "Kelas X");
+      setAcademicYear(activeExam.teacherProfile?.academicYear || "2025/2026");
+      setSemester(activeExam.teacherProfile?.semester || "Ganjil");
+    }
     if (activeExam.questions.length > 0) {
       const found = activeExam.questions.find((q) => q.id === selectedQuestionId) || activeExam.questions[0];
       setSelectedQuestionId(found.id);
@@ -361,6 +399,8 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
         {
           subject,
           gradeLevel,
+          academicYear,
+          semester,
           topic,
           count: Number(count),
           difficulty,
@@ -381,6 +421,13 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
       const updatedExam: ExamPackage = {
         ...activeExam,
         title: result.examTitle ? `${result.examTitle}` : activeExam.title,
+        teacherProfile: {
+          ...activeExam.teacherProfile,
+          subject: subject.trim() || activeExam.teacherProfile.subject,
+          gradeLevel: gradeLevel.trim() || activeExam.teacherProfile.gradeLevel,
+          academicYear: academicYear.trim() || activeExam.teacherProfile.academicYear,
+          semester: semester || activeExam.teacherProfile.semester,
+        },
         questions: newQuestions,
         totalScore,
         updatedAt: new Date().toISOString(),
@@ -705,9 +752,38 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
 
             {/* Subject */}
             <span className="hidden sm:inline text-slate-500">•</span>
-            <span className="hidden sm:inline">
-              Mapel: <strong className="text-slate-200">{activeExam.teacherProfile.subject}</strong>
+            <span className="inline-flex items-center gap-1 bg-[#1a1a1c] px-2.5 py-1 rounded-xl border border-slate-800 text-slate-300">
+              <BookOpen className="w-3 h-3 text-indigo-400" />
+              <span>{activeExam.teacherProfile?.subject || "Umum"}</span>
             </span>
+
+            {/* Grade Level Badge */}
+            <span className="inline-flex items-center gap-1 bg-[#1a1a1c] px-2.5 py-1 rounded-xl border border-slate-800 text-cyan-300 font-semibold">
+              <GraduationCap className="w-3 h-3 text-cyan-400" />
+              <span>{activeExam.teacherProfile?.gradeLevel || "Kelas X"}</span>
+            </span>
+
+            {/* Academic Year Badge */}
+            <span className="inline-flex items-center gap-1 bg-[#1a1a1c] px-2.5 py-1 rounded-xl border border-slate-800 text-emerald-300 font-semibold">
+              <Calendar className="w-3 h-3 text-emerald-400" />
+              <span>TP: {activeExam.teacherProfile?.academicYear || "2025/2026"}</span>
+            </span>
+
+            {/* Semester Badge */}
+            <span className="inline-flex items-center gap-1 bg-[#1a1a1c] px-2.5 py-1 rounded-xl border border-slate-800 text-amber-300 font-semibold">
+              <Bookmark className="w-3 h-3 text-amber-400" />
+              <span>Sem: {activeExam.teacherProfile?.semester || "Ganjil"}</span>
+            </span>
+
+            {/* Quick edit metadata trigger */}
+            <button
+              onClick={handleOpenEditMetadata}
+              className="px-2 py-0.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border border-indigo-500/20 rounded-lg text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition-all"
+              title="Edit Info Kelas, TP & Semester"
+            >
+              <Edit3 className="w-3 h-3" />
+              <span>Edit Info</span>
+            </button>
 
             {/* Anti-Cheating Quick Toggles */}
             <span className="hidden sm:inline text-slate-500">•</span>
@@ -849,6 +925,52 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                   placeholder="Contoh: Asesmen Sumatif Akhir Semester Informatika"
                   className="w-full px-3 py-2 bg-[#1f1f23] border border-slate-700 rounded-xl text-slate-200 font-bold focus:border-indigo-500 focus:outline-none"
                 />
+              </div>
+
+              <div>
+                <label className="block font-medium text-slate-300 mb-1">Mata Pelajaran</label>
+                <input
+                  type="text"
+                  value={tempSubject}
+                  onChange={(e) => setTempSubject(e.target.value)}
+                  placeholder="Contoh: Informatika, Matematika, IPA"
+                  className="w-full px-3 py-2 bg-[#1f1f23] border border-slate-700 rounded-xl text-slate-200 font-medium focus:border-indigo-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-medium text-slate-300 mb-1">Jenjang / Kelas</label>
+                <input
+                  type="text"
+                  value={tempGradeLevel}
+                  onChange={(e) => setTempGradeLevel(e.target.value)}
+                  placeholder="Contoh: Kelas X SMA / Fase E, Kelas VII SMP, Kelas 5 SD"
+                  className="w-full px-3 py-2 bg-[#1f1f23] border border-slate-700 rounded-xl text-slate-200 font-medium focus:border-indigo-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block font-medium text-slate-300 mb-1">Tahun Pelajaran</label>
+                  <input
+                    type="text"
+                    value={tempAcademicYear}
+                    onChange={(e) => setTempAcademicYear(e.target.value)}
+                    placeholder="Contoh: 2025/2026"
+                    className="w-full px-3 py-2 bg-[#1f1f23] border border-slate-700 rounded-xl text-slate-200 font-medium focus:border-indigo-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block font-medium text-slate-300 mb-1">Semester</label>
+                  <select
+                    value={tempSemester}
+                    onChange={(e) => setTempSemester(e.target.value)}
+                    className="w-full px-3 py-2 bg-[#1f1f23] border border-slate-700 rounded-xl text-slate-200 font-medium focus:border-indigo-500 focus:outline-none"
+                  >
+                    <option value="Ganjil" className="bg-[#161618]">Semester Ganjil</option>
+                    <option value="Genap" className="bg-[#161618]">Semester Genap</option>
+                  </select>
+                </div>
               </div>
             </div>
 
@@ -1014,8 +1136,32 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                   value={gradeLevel}
                   onChange={(e) => setGradeLevel(e.target.value)}
                   className="w-full px-3 py-2 bg-[#1a1a1c] border border-slate-800 rounded-xl text-slate-200 focus:border-indigo-500 focus:outline-none text-xs"
-                  placeholder="Misal: Kelas X SMA / Fase E"
+                  placeholder="Misal: Kelas X SMA / Fase E, Kelas VII SMP, Kelas 5 SD"
                 />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block font-medium text-slate-300 mb-1">Tahun Pelajaran</label>
+                  <input
+                    type="text"
+                    value={academicYear}
+                    onChange={(e) => setAcademicYear(e.target.value)}
+                    className="w-full px-3 py-2 bg-[#1a1a1c] border border-slate-800 rounded-xl text-slate-200 focus:border-indigo-500 focus:outline-none text-xs"
+                    placeholder="2025/2026"
+                  />
+                </div>
+                <div>
+                  <label className="block font-medium text-slate-300 mb-1">Semester</label>
+                  <select
+                    value={semester}
+                    onChange={(e) => setSemester(e.target.value)}
+                    className="w-full px-3 py-2 bg-[#1a1a1c] border border-slate-800 rounded-xl text-slate-200 focus:border-indigo-500 focus:outline-none text-xs font-semibold"
+                  >
+                    <option value="Ganjil" className="bg-[#121214]">Ganjil (1)</option>
+                    <option value="Genap" className="bg-[#121214]">Genap (2)</option>
+                  </select>
+                </div>
               </div>
 
               <div>

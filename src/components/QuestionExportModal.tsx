@@ -81,9 +81,15 @@ export const QuestionExportModal: React.FC<QuestionExportModalProps> = ({
               <h2 className="text-lg font-black text-white flex items-center gap-2">
                 <span>Ekspor & Cetak Naskah Soal</span>
               </h2>
-              <p className="text-xs text-slate-400">
-                Unduh naskah soal ({exam.questions.length} butir) ke format Spreadsheet Excel, Dokumen Word / Docs ber-kisi-kisi, atau Cetak PDF.
-              </p>
+              <div className="flex items-center gap-2 text-xs text-slate-400 mt-1 flex-wrap">
+                <span>{exam.teacherProfile?.subject || "Umum"}</span>
+                <span>•</span>
+                <span className="text-cyan-300 font-semibold">{exam.teacherProfile?.gradeLevel || "Kelas X"}</span>
+                <span>•</span>
+                <span className="text-emerald-300 font-semibold">TP: {exam.teacherProfile?.academicYear || "2025/2026"}</span>
+                <span>•</span>
+                <span className="text-amber-300 font-semibold">Sem: {exam.teacherProfile?.semester || "Ganjil"}</span>
+              </div>
             </div>
           </div>
           <button

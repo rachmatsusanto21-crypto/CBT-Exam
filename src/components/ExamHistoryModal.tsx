@@ -353,12 +353,16 @@ export const ExamHistoryModal: React.FC<ExamHistoryModalProps> = ({
                           )}
                         </div>
 
-                        <div className="flex items-center gap-3 text-xs text-slate-400 flex-wrap">
-                          <span className="font-semibold text-slate-300">
+                        <div className="flex items-center gap-2.5 text-xs text-slate-400 flex-wrap">
+                          <span className="font-semibold text-slate-200">
                             {examItem.teacherProfile?.subject || "Mata Pelajaran"}
                           </span>
                           <span>•</span>
-                          <span>{examItem.teacherProfile?.gradeLevel || "Kelas"}</span>
+                          <span className="text-cyan-300 font-semibold">{examItem.teacherProfile?.gradeLevel || "Kelas"}</span>
+                          <span>•</span>
+                          <span className="text-emerald-300 font-semibold">TP: {examItem.teacherProfile?.academicYear || "2025/2026"}</span>
+                          <span>•</span>
+                          <span className="text-amber-300 font-semibold">Sem: {examItem.teacherProfile?.semester || "Ganjil"}</span>
                           <span>•</span>
                           <span>Guru: {examItem.teacherProfile?.teacherName || "Pengampu"}</span>
                           <span>•</span>
