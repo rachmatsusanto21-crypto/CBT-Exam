@@ -79,8 +79,101 @@ export const calculateItemAnalysis = (
   });
 };
 
-// Export Gradebook / Daftar Nilai to Excel / Sheets
-export const exportGradebookToExcel = (
+// Helper to parse cognitive level according to revised Bloom & Anderson taxonomy
+export interface BloomAndersonInfo {
+  code: "C1" | "C2" | "C3" | "C4" | "C5" | "C6";
+  category: "LOTS" | "MOTS" | "HOTS";
+  actionVerb: string;
+  dimensionName: string;
+  knowledgeDimension: "Faktual" | "Konseptual" | "Prosedural" | "Metakognitif";
+}
+
+export const getBloomAndersonInfo = (rawLevel?: string): BloomAndersonInfo => {
+  const normalized = (rawLevel || "").toUpperCase();
+  if (normalized.includes("C6") || normalized.includes("MENCIPTA") || normalized.includes("CREAT")) {
+    return {
+      code: "C6",
+      category: "HOTS",
+      actionVerb: "Mencipta / Mengkreasi (Creating)",
+      dimensionName: "C6 - Mencipta (HOTS)",
+      knowledgeDimension: "Metakognitif",
+    };
+  }
+  if (normalized.includes("C5") || normalized.includes("EVALUASI") || normalized.includes("EVALUAT")) {
+    return {
+      code: "C5",
+      category: "HOTS",
+      actionVerb: "Mengevaluasi (Evaluating)",
+      dimensionName: "C5 - Mengevaluasi (HOTS)",
+      knowledgeDimension: "Konseptual",
+    };
+  }
+  if (normalized.includes("C4") || normalized.includes("ANALIS") || normalized.includes("HOTS")) {
+    return {
+      code: "C4",
+      category: "HOTS",
+      actionVerb: "Menganalisis (Analyzing)",
+      dimensionName: "C4 - Menganalisis (HOTS)",
+      knowledgeDimension: "Konseptual",
+    };
+  }
+  if (normalized.includes("C3") || normalized.includes("TERAP") || normalized.includes("APPLY") || normalized.includes("APLIKASI")) {
+    return {
+      code: "C3",
+      category: "MOTS",
+      actionVerb: "Menerapkan / Aplikasi (Applying)",
+      dimensionName: "C3 - Menerapkan (MOTS)",
+      knowledgeDimension: "Prosedural",
+    };
+  }
+  if (normalized.includes("C1") || normalized.includes("INGAT") || normalized.includes("REMEMBER")) {
+    return {
+      code: "C1",
+      category: "LOTS",
+      actionVerb: "Mengingat (Remembering)",
+      dimensionName: "C1 - Mengingat (LOTS)",
+      knowledgeDimension: "Faktual",
+    };
+  }
+  // Default to C2 - Memahami
+  return {
+    code: "C2",
+    category: "LOTS",
+    actionVerb: "Memahami (Understanding)",
+    dimensionName: "C2 - Memahami (LOTS)",
+    knowledgeDimension: "Konseptual",
+  };
+};
+
+export const calculateBloomAndersonSummary = (questions: Question[]) => {
+  const distribution = {
+    C1: 0,
+    C2: 0,
+    C3: 0,
+    C4: 0,
+    C5: 0,
+    C6: 0,
+    LOTS: 0,
+    MOTS: 0,
+    HOTS: 0,
+  };
+
+  questions.forEach((q) => {
+    const info = getBloomAndersonInfo(q.cognitiveLevel);
+    distribution[info.code] += 1;
+    distribution[info.category] += 1;
+  });
+
+  const total = questions.length || 1;
+  return {
+    distribution,
+    lotsPercent: Math.round((distribution.LOTS / total) * 100),
+    motsPercent: Math.round((distribution.MOTS / total) * 100),
+    hotsPercent: Math.round((distribution.HOTS / total) * 100),
+  };
+};
+
+export const exportExamGradesToExcel = (
   exam: ExamPackage,
   sessions: StudentExamSession[],
   school: SchoolProfile
@@ -252,6 +345,8 @@ export const exportItemAnalysisToExcel = (
   XLSX.writeFile(wb, fileName);
 };
 
+export const exportGradebookToExcel = exportExamGradesToExcel;
+
 // Export Student Tokens to Excel
 export const exportTokensToExcel = (
   exam: ExamPackage,
@@ -289,15 +384,17 @@ export const exportTokensToExcel = (
   XLSX.writeFile(wb, fileName);
 };
 
-// Generate HTML for Printable Exam Paper (Kop Surat Sekolah + Formatted Docs Paper)
+// Generate HTML for Printable Exam Paper (Kop Surat Sekolah + Formatted Docs Paper + Bloom Anderson Matrix)
 export const printFormattedExamDocument = (
   exam: ExamPackage,
   schoolOverride?: SchoolProfile,
-  options?: { includeAnswerKey?: boolean }
+  options?: { includeAnswerKey?: boolean; includeMatrix?: boolean }
 ) => {
   const school = schoolOverride || exam.schoolProfile;
   const teacher = exam.teacherProfile;
-  const showKey = !!options?.includeAnswerKey;
+  const showKey = options?.includeAnswerKey !== false;
+  const showMatrix = options?.includeMatrix !== false;
+  const bloomSummary = calculateBloomAndersonSummary(exam.questions);
 
   const kopSection = school.kopSuratUrl
     ? `<div style="text-align: center; margin-bottom: 12px; border-bottom: 3px double #000; padding-bottom: 8px;">
@@ -346,9 +443,23 @@ export const printFormattedExamDocument = (
     .option-item { margin-bottom: 3px; display: flex; align-items: flex-start; }
     .option-key { font-weight: bold; width: 22px; flex-shrink: 0; }
     .option-text { flex: 1; }
+    .matching-table-print { width: 90%; border-collapse: collapse; margin: 6px 0 6px 26px; font-size: 10pt; }
+    .matching-table-print th, .matching-table-print td { border: 1px solid #333; padding: 4px 8px; text-align: left; }
+    .matching-table-print th { background-color: #f0f0f0; font-weight: bold; }
     .correct-highlight { background-color: #e6ffed; border: 1px solid #38a169; padding: 2px 6px; border-radius: 4px; font-weight: bold; margin-top: 4px; margin-left: 26px; font-size: 10pt; }
     .explanation-box { background-color: #ebf8ff; border: 1px solid #3182ce; padding: 4px 8px; font-size: 9.5pt; margin-top: 4px; margin-left: 26px; }
     
+    /* Kisi-Kisi Bloom Anderson Matrix Table */
+    .page-break { page-break-before: always; }
+    .matrix-title { text-align: center; font-size: 13pt; font-weight: bold; text-transform: uppercase; margin-bottom: 12px; text-decoration: underline; }
+    .matrix-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 9.5pt; }
+    .matrix-table th, .matrix-table td { border: 1px solid #000; padding: 4px 6px; text-align: left; vertical-align: middle; }
+    .matrix-table th { background-color: #f2f2f2; text-align: center; font-weight: bold; }
+    .text-center { text-align: center; }
+    .badge-hots { background-color: #fee2e2; color: #991b1b; padding: 1px 4px; font-weight: bold; border-radius: 3px; font-size: 8.5pt; }
+    .badge-mots { background-color: #fef3c7; color: #92400e; padding: 1px 4px; font-weight: bold; border-radius: 3px; font-size: 8.5pt; }
+    .badge-lots { background-color: #e0e7ff; color: #3730a3; padding: 1px 4px; font-weight: bold; border-radius: 3px; font-size: 8.5pt; }
+
     @media print {
       body { padding: 0; }
       .no-print { display: none; }
@@ -367,17 +478,17 @@ export const printFormattedExamDocument = (
       <div><strong>Hari / Tanggal:</strong> ${new Date().toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</div>
       <div><strong>Kelas / Jenjang:</strong> ${teacher.gradeLevel} (Semester ${teacher.semester})</div>
       <div><strong>Waktu / Durasi:</strong> ${exam.durationMinutes} Menit</div>
-      <div><strong>Guru Pengampu:</strong> ${teacher.teacherName}</div>
+      <div><strong>Guru Pengampu:</strong> ${teacher.teacherName} (NIP: ${teacher.teacherNIP || "-"})</div>
       <div><strong>Kode Naskah:</strong> ${exam.code}</div>
     </div>
   </div>
 
   <div class="instructions-box">
-    <div class="instructions-title">PETUNJUK UMUM:</div>
+    <div class="instructions-title">PETUNJUK UMUM PENGERJAAN SOAL:</div>
     <ol style="margin: 0; padding-left: 18px;">
-      <li>Periksalah kelengkapan naskah soal sebelum mulai mengerjakan.</li>
+      <li>Periksalah kelengkapan butir soal (${exam.questions.length} butir) sebelum mulai mengerjakan.</li>
       <li>Tuliskan identitas Anda dengan jelas dan teliti pada lembar jawaban.</li>
-      <li>Pilihlah salah satu jawaban yang paling tepat dengan menghitamkan/memilih opsi A, B, C, D, atau E.</li>
+      <li>Pilihlah salah satu jawaban yang paling tepat atau kerjakan sesuai instruksi pada setiap butir soal.</li>
       <li>Dahulukan menjawab soal-soal yang Anda anggap mudah.</li>
     </ol>
   </div>
@@ -385,50 +496,161 @@ export const printFormattedExamDocument = (
   <div class="questions-container">
     ${exam.questions
       .map(
-        (q, idx) => `
-      <div class="question-item">
-        <div class="question-title">
-          <span class="question-num">${idx + 1}.</span>
-          <div class="question-body">
-            ${q.stimulus ? `<div class="stimulus-box">${q.stimulus.replace(/\n/g, "<br>")}</div>` : ""}
-            <div>${q.questionText}</div>
-          </div>
-        </div>
-        <div class="option-list">
-          ${q.options
-            .map(
-              (opt) => `
-            <div class="option-item">
-              <span class="option-key">${opt.key}.</span>
-              <span class="option-text">${opt.text}</span>
+        (q, idx) => {
+          const bloom = getBloomAndersonInfo(q.cognitiveLevel);
+          let optionsHtml = "";
+
+          if (q.type === "pilihan_ganda" || q.type === "benar_salah") {
+            optionsHtml = `
+              <div class="option-list">
+                ${q.options
+                  .map(
+                    (opt) => `
+                  <div class="option-item">
+                    <span class="option-key">${opt.key}.</span>
+                    <span class="option-text">${opt.text}</span>
+                  </div>
+                `
+                  )
+                  .join("")}
+              </div>
+            `;
+          } else if (q.type === "menjodohkan" && q.matchingPairs && q.matchingPairs.length > 0) {
+            optionsHtml = `
+              <table class="matching-table-print">
+                <thead>
+                  <tr>
+                    <th style="width:50%;">Pernyataan / Item Kiri</th>
+                    <th style="width:50%;">Pasangan Cocok / Item Kanan</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${q.matchingPairs.map(p => `<tr><td>${p.left}</td><td>${p.right}</td></tr>`).join("")}
+                </tbody>
+              </table>
+            `;
+          } else if (q.type === "isian_singkat") {
+            optionsHtml = `<div style="margin-left:26px; color:#666; font-style:italic;">[ Lembar Jawaban Isian: ........................................................................................ ]</div>`;
+          } else if (q.type === "uraian") {
+            optionsHtml = `<div style="margin-left:26px; color:#666; font-style:italic;">[ Lembar Jawaban Uraian: ................................................................................................................................. ]</div>`;
+          }
+
+          return `
+            <div class="question-item">
+              <div class="question-title">
+                <span class="question-num">${idx + 1}.</span>
+                <div class="question-body">
+                  ${q.stimulus ? `<div class="stimulus-box">${q.stimulus.replace(/\n/g, "<br>")}</div>` : ""}
+                  <div>${q.questionText}</div>
+                </div>
+              </div>
+              ${optionsHtml}
+              ${
+                showKey
+                  ? `
+                <div class="correct-highlight">
+                  Kunci Jawaban: <strong>${q.correctAnswer}</strong> | Bobot: ${q.score} poin | Level: ${bloom.dimensionName} (${bloom.knowledgeDimension})
+                </div>
+                ${q.explanation ? `<div class="explanation-box"><strong>Pembahasan:</strong> ${q.explanation}</div>` : ""}
+                ${q.sampleAnswer ? `<div class="explanation-box"><strong>Rubrik Penilaian:</strong> ${q.sampleAnswer}</div>` : ""}
+              `
+                  : ""
+              }
             </div>
-          `
-            )
-            .join("")}
-        </div>
-        ${
-          showKey
-            ? `
-          <div class="correct-highlight">Kunci Jawaban: ${q.correctAnswer} (Bobot: ${q.score} poin) | ${q.cognitiveLevel || ""}</div>
-          <div class="explanation-box"><strong>Pembahasan:</strong> ${q.explanation}</div>
-        `
-            : ""
+          `;
         }
-      </div>
-    `
       )
       .join("")}
   </div>
 
-  <div style="margin-top: 40px; display: flex; justify-content: flex-end;">
+  <div style="margin-top: 30px; display: flex; justify-content: flex-end;">
     <div style="text-align: center; width: 220px;">
       <div>Mengetahui,</div>
       <div>Kepala Sekolah</div>
-      <div style="height: 60px;"></div>
+      <div style="height: 50px;"></div>
       <div style="font-weight: bold; text-decoration: underline;">${school.principalName || "Kepala Sekolah"}</div>
       <div>NIP. ${school.principalNIP || "-"}</div>
     </div>
   </div>
+
+  ${
+    showMatrix
+      ? `
+    <!-- HALAMAN KISI-KISI MATRIKS TAKSONOMI BLOOM & ANDERSON -->
+    <div class="page-break"></div>
+    ${kopSection}
+
+    <div class="matrix-title">KISI-KISI BUTIR SOAL & MATRIKS LEVEL KOGNITIF (BLOOM & ANDERSON)</div>
+    
+    <div style="font-size: 10pt; margin-bottom: 10px; display: flex; justify-content: space-between; border: 1px solid #ccc; padding: 6px 10px; background: #fafafa;">
+      <div><strong>Mata Pelajaran:</strong> ${teacher.subject} | <strong>Kelas:</strong> ${teacher.gradeLevel}</div>
+      <div><strong>Distribusi:</strong> HOTS (${bloomSummary.hotsPercent}%) | MOTS (${bloomSummary.motsPercent}%) | LOTS (${bloomSummary.lotsPercent}%)</div>
+    </div>
+
+    <table class="matrix-table">
+      <thead>
+        <tr>
+          <th style="width: 5%;">No</th>
+          <th style="width: 25%;">Materi / Indikator Pokok</th>
+          <th style="width: 14%;">Bentuk Soal</th>
+          <th style="width: 20%;">Dimensi Proses Kognitif (Bloom & Anderson)</th>
+          <th style="width: 16%;">Dimensi Pengetahuan</th>
+          <th style="width: 10%;">Kunci</th>
+          <th style="width: 10%;">Skor</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${exam.questions
+          .map((q, idx) => {
+            const bloom = getBloomAndersonInfo(q.cognitiveLevel);
+            let badgeClass = "badge-lots";
+            if (bloom.category === "HOTS") badgeClass = "badge-hots";
+            else if (bloom.category === "MOTS") badgeClass = "badge-mots";
+
+            let formName = "Pilihan Ganda";
+            if (q.type === "isian_singkat") formName = "Isian Singkat";
+            else if (q.type === "uraian") formName = "Uraian / Essay";
+            else if (q.type === "menjodohkan") formName = "Menjodohkan";
+            else if (q.type === "benar_salah") formName = "Benar / Salah";
+
+            return `
+              <tr>
+                <td class="text-center font-bold">${idx + 1}</td>
+                <td>${q.topicTag || "Materi Umum"}</td>
+                <td>${formName}</td>
+                <td>
+                  <span class="${badgeClass}">${bloom.code}</span>
+                  <strong>${bloom.actionVerb}</strong>
+                </td>
+                <td>${bloom.knowledgeDimension}</td>
+                <td class="text-center font-bold">${q.correctAnswer}</td>
+                <td class="text-center font-bold">${q.score}</td>
+              </tr>
+            `;
+          })
+          .join("")}
+      </tbody>
+    </table>
+
+    <div style="margin-top: 30px; display: flex; justify-content: space-between; font-size: 10pt;">
+      <div style="text-align: center; width: 220px;">
+        <div>Mengetahui,</div>
+        <div>Kepala Sekolah</div>
+        <div style="height: 50px;"></div>
+        <div style="font-weight: bold; text-decoration: underline;">${school.principalName || "Kepala Sekolah"}</div>
+        <div>NIP. ${school.principalNIP || "-"}</div>
+      </div>
+      <div style="text-align: center; width: 220px;">
+        <div>Dibuat oleh,</div>
+        <div>Guru Mata Pelajaran</div>
+        <div style="height: 50px;"></div>
+        <div style="font-weight: bold; text-decoration: underline;">${teacher.teacherName || "Guru Pengampu"}</div>
+        <div>NIP. ${teacher.teacherNIP || "-"}</div>
+      </div>
+    </div>
+  `
+      : ""
+  }
 </body>
 </html>
 `;
@@ -676,10 +898,12 @@ export const exportQuestionsToExcel = (
 export const exportQuestionsToWordDoc = (
   exam: ExamPackage,
   school: SchoolProfile,
-  showAnswerKey: boolean = true
+  showAnswerKey: boolean = true,
+  includeMatrix: boolean = true
 ) => {
   const cleanSubject = exam.teacherProfile.subject.replace(/[^a-zA-Z0-9]/g, "_");
   const fileName = `Naskah_Soal_${cleanSubject}_${exam.code}.doc`;
+  const bloomSummary = calculateBloomAndersonSummary(exam.questions);
 
   const kopHtml = school.kopSuratUrl
     ? `<div style="text-align:center; margin-bottom:15px;"><img src="${school.kopSuratUrl}" style="max-width:100%; height:auto; max-height:120px;" alt="Kop Surat" /></div>`
@@ -721,8 +945,12 @@ export const exportQuestionsToWordDoc = (
         .matching-table th { background-color: #eee; }
         .key-box { background-color: #eef2ff; border: 1px solid #818cf8; padding: 6px 10px; margin-top: 6px; font-size: 10.5pt; color: #1e1b4b; border-radius: 4px; }
         .explanation-box { background-color: #f8fafc; border: 1px dashed #94a3b8; padding: 6px 10px; margin-top: 4px; font-size: 10pt; color: #334155; }
+        .matrix-table-doc { width: 100%; border-collapse: collapse; margin-top: 10px; margin-bottom: 20px; font-size: 10pt; }
+        .matrix-table-doc th, .matrix-table-doc td { border: 1px solid #333; padding: 5px 8px; }
+        .matrix-table-doc th { background-color: #f0f0f0; text-align: center; font-weight: bold; }
         .sign-table { width: 100%; margin-top: 40px; border-collapse: collapse; }
         .sign-table td { text-align: center; vertical-align: top; width: 50%; font-size: 11pt; }
+        .badge-tag { font-weight: bold; padding: 1px 4px; }
       </style>
     </head>
     <body>
@@ -760,6 +988,7 @@ export const exportQuestionsToWordDoc = (
       <!-- QUESTIONS LIST -->
       ${exam.questions
         .map((q, idx) => {
+          const bloom = getBloomAndersonInfo(q.cognitiveLevel);
           let optionsContent = "";
 
           if (q.type === "pilihan_ganda" || q.type === "benar_salah") {
@@ -810,7 +1039,7 @@ export const exportQuestionsToWordDoc = (
             <div class="question-item">
               <div class="question-header">
                 ${idx + 1}. ${q.questionText}
-                <span style="font-weight: normal; font-size: 10pt; color: #444;">(Bobot: ${q.score} Poin | ${q.cognitiveLevel || "C3"})</span>
+                <span style="font-weight: normal; font-size: 10pt; color: #444;">(Bobot: ${q.score} Poin | Level: ${bloom.dimensionName})</span>
               </div>
 
               ${q.stimulus ? `<div class="stimulus-box">${q.stimulus.replace(/\n/g, "<br>")}</div>` : ""}
@@ -823,6 +1052,7 @@ export const exportQuestionsToWordDoc = (
                 <div class="key-box">
                   <strong>Kunci Jawaban:</strong> ${q.correctAnswer} 
                   ${q.topicTag ? ` | <em>Materi: ${q.topicTag}</em>` : ""}
+                  | <em>Dimensi: ${bloom.knowledgeDimension}</em>
                 </div>
                 ${q.explanation ? `<div class="explanation-box"><strong>Pembahasan:</strong> ${q.explanation}</div>` : ""}
                 ${q.sampleAnswer ? `<div class="explanation-box"><strong>Rubrik Jawaban:</strong> ${q.sampleAnswer}</div>` : ""}
@@ -850,6 +1080,87 @@ export const exportQuestionsToWordDoc = (
           </td>
         </tr>
       </table>
+
+      ${
+        includeMatrix
+          ? `
+        <!-- HALAMAN KISI-KISI BLOOM & ANDERSON -->
+        <br style="page-break-before:always;" />
+        ${kopHtml}
+
+        <div class="section-title">KISI-KISI NASKAH SOAL & MATRIKS LEVEL KOGNITIF REVISI BLOOM & ANDERSON</div>
+
+        <table class="meta-table">
+          <tr>
+            <td class="meta-label">Mata Pelajaran</td>
+            <td class="meta-val">: ${exam.teacherProfile.subject}</td>
+            <td class="meta-label">Distribusi Kognitif</td>
+            <td class="meta-val">: HOTS ${bloomSummary.hotsPercent}% | MOTS ${bloomSummary.motsPercent}% | LOTS ${bloomSummary.lotsPercent}%</td>
+          </tr>
+          <tr>
+            <td class="meta-label">Total Butir Soal</td>
+            <td class="meta-val">: ${exam.questions.length} Butir</td>
+            <td class="meta-label">Total Skor Maksimum</td>
+            <td class="meta-val">: ${exam.totalScore} Poin</td>
+          </tr>
+        </table>
+
+        <table class="matrix-table-doc">
+          <thead>
+            <tr>
+              <th style="width: 5%;">No</th>
+              <th style="width: 25%;">Materi Pokok / Indikator</th>
+              <th style="width: 15%;">Bentuk Soal</th>
+              <th style="width: 25%;">Level Kognitif (Bloom-Anderson)</th>
+              <th style="width: 15%;">Dimensi Pengetahuan</th>
+              <th style="width: 8%;">Kunci</th>
+              <th style="width: 7%;">Skor</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${exam.questions
+              .map((q, idx) => {
+                const bloom = getBloomAndersonInfo(q.cognitiveLevel);
+                let formName = "Pilihan Ganda";
+                if (q.type === "isian_singkat") formName = "Isian Singkat";
+                else if (q.type === "uraian") formName = "Uraian";
+                else if (q.type === "menjodohkan") formName = "Menjodohkan";
+                else if (q.type === "benar_salah") formName = "Benar/Salah";
+
+                return `
+                  <tr>
+                    <td style="text-align:center; font-weight:bold;">${idx + 1}</td>
+                    <td>${q.topicTag || "Materi Pokok"}</td>
+                    <td>${formName}</td>
+                    <td><strong>${bloom.code}</strong> - ${bloom.actionVerb} (${bloom.category})</td>
+                    <td>${bloom.knowledgeDimension}</td>
+                    <td style="text-align:center; font-weight:bold;">${q.correctAnswer}</td>
+                    <td style="text-align:center;">${q.score}</td>
+                  </tr>
+                `;
+              })
+              .join("")}
+          </tbody>
+        </table>
+
+        <table class="sign-table">
+          <tr>
+            <td>
+              Mengetahui,<br>
+              Kepala Sekolah<br><br><br><br>
+              <strong>${school.principalName || "Kepala Sekolah"}</strong><br>
+              NIP. ${school.principalNIP || "-"}
+            </td>
+            <td>
+              Guru Mata Pelajaran,<br><br><br><br>
+              <strong>${exam.teacherProfile.teacherName || "Guru Pengampu"}</strong><br>
+              NIP. ${exam.teacherProfile.teacherNIP || "-"}
+            </td>
+          </tr>
+        </table>
+      `
+          : ""
+      }
     </body>
     </html>
   `;

@@ -34,13 +34,19 @@ import {
   Check,
   Info,
   ChevronDown,
-  CheckSquare
+  CheckSquare,
+  Save,
+  Clock,
+  Timer,
+  History,
+  Play
 } from "lucide-react";
 import { ExamPackage, Question, QuestionOption, QuestionType, MatchingPair, SchoolProfile } from "../types";
 import { generateQuestionsWithGemini, generateImageWithAi } from "../utils/geminiApi";
 import { DirectStudentShareModal } from "./DirectStudentShareModal";
 import { QuestionImportModal } from "./QuestionImportModal";
 import { QuestionExportModal } from "./QuestionExportModal";
+import { ExamHistoryModal } from "./ExamHistoryModal";
 import {
   exportQuestionsToExcel,
   exportQuestionsToWordDoc,
@@ -59,6 +65,11 @@ interface AIGeneratorAndEditorProps {
   onOpenGeminiModal?: () => void;
   activeToken?: string;
   school?: SchoolProfile;
+  exams?: ExamPackage[];
+  onSelectExamId?: (id: string) => void;
+  onDeleteExam?: (id: string) => void;
+  onDuplicateExam?: (exam: ExamPackage) => void;
+  onCreateNewExam?: () => void;
 }
 
 export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
@@ -68,6 +79,11 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
   onOpenGeminiModal,
   activeToken,
   school,
+  exams = [],
+  onSelectExamId,
+  onDeleteExam,
+  onDuplicateExam,
+  onCreateNewExam,
 }) => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
@@ -95,13 +111,17 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
   const [imageUrlInput, setImageUrlInput] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Share Modal State
+  // Share & History Modals State
   const [showShareModal, setShowShareModal] = useState(false);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
 
   // Edit Exam Code / Title Modal State
   const [showEditCodeModal, setShowEditCodeModal] = useState(false);
   const [tempExamCode, setTempExamCode] = useState(activeExam.code);
   const [tempExamTitle, setTempExamTitle] = useState(activeExam.title);
+
+  // Timer configuration
+  const [examDuration, setExamDuration] = useState(activeExam.durationMinutes || 60);
 
   // Import & Export State
   const [showExportModal, setShowExportModal] = useState(false);
@@ -125,6 +145,55 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
   const docsFileInputRef = useRef<HTMLInputElement>(null);
 
   const schoolData = school || getSchoolProfile();
+
+  // Keep duration in sync when activeExam changes
+  useEffect(() => {
+    setExamDuration(activeExam.durationMinutes || 60);
+  }, [activeExam.id, activeExam.durationMinutes]);
+
+  // Handler to update exam timer duration
+  const handleUpdateDuration = (newDuration: number) => {
+    const validDuration = Math.max(1, newDuration || 1);
+    setExamDuration(validDuration);
+    onUpdateExam({
+      ...activeExam,
+      durationMinutes: validDuration,
+      updatedAt: new Date().toISOString(),
+    });
+    setAiSuccessMsg(`Durasi timer ujian berhasil diatur menjadi ${validDuration} menit.`);
+    setTimeout(() => setAiSuccessMsg(null), 3000);
+  };
+
+  // Explicit Save Exam Package handler
+  const handleSaveWholeExam = () => {
+    const totalScore = activeExam.questions.reduce((sum, q) => sum + (q.score || 0), 0);
+    const updated: ExamPackage = {
+      ...activeExam,
+      totalScore,
+      durationMinutes: examDuration,
+      updatedAt: new Date().toISOString(),
+    };
+    onUpdateExam(updated);
+    setAiSuccessMsg(`Naskah Ujian "${activeExam.title}" (${activeExam.questions.length} butir soal) berhasil disimpan!`);
+    setTimeout(() => setAiSuccessMsg(null), 3500);
+  };
+
+  // Clear all questions handler
+  const handleClearAllExamQuestions = () => {
+    if (activeExam.questions.length === 0) return;
+    if (confirm(`Hapus seluruh ${activeExam.questions.length} butir soal dari naskah "${activeExam.title}"?`)) {
+      onUpdateExam({
+        ...activeExam,
+        questions: [],
+        totalScore: 0,
+        updatedAt: new Date().toISOString(),
+      });
+      setSelectedQuestionId("");
+      setEditingQuestion(null);
+      setAiSuccessMsg("Seluruh butir soal dalam naskah berhasil dikosongkan.");
+      setTimeout(() => setAiSuccessMsg(null), 3000);
+    }
+  };
 
   // Import from Excel Handlers
   const handleExcelFileSelect = async (file: File) => {
@@ -580,9 +649,9 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Top Action Bar with Direct Student Link & Edit Exam Code */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#121214] p-5 rounded-2xl border border-slate-800 shadow-sm">
-        <div className="space-y-1">
+      {/* Top Action Bar with Direct Student Link, Exam Code, Timer & History */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-[#121214] p-5 rounded-2xl border border-slate-800 shadow-sm">
+        <div className="space-y-2">
           <div className="flex items-center gap-2 flex-wrap">
             <h2 className="text-lg font-black text-white flex items-center gap-2">
               <span>{activeExam.title}</span>
@@ -592,27 +661,54 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
             </span>
           </div>
 
-          <p className="text-xs text-slate-400 mt-1 flex items-center gap-2 flex-wrap">
-            <span>Kode Naskah:</span>
-            <span className="font-mono font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
-              {activeExam.code}
+          <div className="flex items-center gap-2.5 flex-wrap text-xs text-slate-400">
+            {/* Exam Code */}
+            <div className="flex items-center gap-1.5 bg-[#1a1a1c] px-2.5 py-1 rounded-xl border border-slate-800">
+              <span className="text-slate-400">Kode:</span>
+              <span className="font-mono font-bold text-emerald-400">
+                {activeExam.code}
+              </span>
+              <button
+                id="edit-exam-code-btn"
+                onClick={() => {
+                  setTempExamCode(activeExam.code);
+                  setTempExamTitle(activeExam.title);
+                  setShowEditCodeModal(true);
+                }}
+                className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-800 transition-colors cursor-pointer"
+                title="Ubah Kode Naskah & Judul"
+              >
+                <Edit3 className="w-3 h-3 text-indigo-400" />
+              </button>
+            </div>
+
+            {/* Timer Setting Control */}
+            <div className="flex items-center gap-1.5 bg-[#1a1a1c] px-2.5 py-1 rounded-xl border border-slate-800">
+              <Timer className="w-3.5 h-3.5 text-amber-400" />
+              <span className="text-slate-400">Timer:</span>
+              <select
+                value={examDuration}
+                onChange={(e) => handleUpdateDuration(Number(e.target.value))}
+                className="bg-transparent text-amber-300 font-bold font-mono text-xs focus:outline-none cursor-pointer"
+              >
+                <option value={15} className="bg-[#1e1e24] text-white">15 Menit</option>
+                <option value={30} className="bg-[#1e1e24] text-white">30 Menit</option>
+                <option value={45} className="bg-[#1e1e24] text-white">45 Menit</option>
+                <option value={60} className="bg-[#1e1e24] text-white">60 Menit (1 Jam)</option>
+                <option value={90} className="bg-[#1e1e24] text-white">90 Menit (1.5 Jam)</option>
+                <option value={120} className="bg-[#1e1e24] text-white">120 Menit (2 Jam)</option>
+                <option value={150} className="bg-[#1e1e24] text-white">150 Menit (2.5 Jam)</option>
+              </select>
+            </div>
+
+            {/* Subject */}
+            <span className="hidden sm:inline text-slate-500">•</span>
+            <span className="hidden sm:inline">
+              Mapel: <strong className="text-slate-200">{activeExam.teacherProfile.subject}</strong>
             </span>
-            <button
-              id="edit-exam-code-btn"
-              onClick={() => {
-                setTempExamCode(activeExam.code);
-                setTempExamTitle(activeExam.title);
-                setShowEditCodeModal(true);
-              }}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700 transition-colors cursor-pointer"
-              title="Ubah Kode Naskah Soal & Judul"
-            >
-              <Edit3 className="w-3 h-3" />
-              <span>Edit Kode</span>
-            </button>
-            <span>•</span>
-            <span>Mata Pelajaran: <strong className="text-slate-200">{activeExam.teacherProfile.subject}</strong></span>
-            <span>•</span>
+
+            {/* Anti-Cheating Quick Toggles */}
+            <span className="hidden sm:inline text-slate-500">•</span>
             <span
               onClick={handleToggleShuffleQuestions}
               className={`inline-flex items-center gap-1 px-2 py-0.5 rounded font-semibold text-[11px] cursor-pointer transition-all ${
@@ -635,49 +731,75 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
               <ShieldCheck className="w-3 h-3" />
               Acak Opsi: {activeExam.shuffleOptions ? "ON" : "OFF"}
             </span>
-          </p>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2.5 flex-wrap">
+        {/* Action Buttons */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* History Button */}
+          <button
+            id="exam-history-top-btn"
+            onClick={() => setShowHistoryModal(true)}
+            className="flex items-center gap-1.5 px-3 py-2.5 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30 rounded-xl font-bold text-xs transition-all cursor-pointer shadow-sm hover:border-amber-400/60"
+            title="Buka Riwayat Pembuatan Soal & Bank Naskah Ujian"
+          >
+            <History className="w-4 h-4 text-amber-400" />
+            <span>Riwayat Soal</span>
+          </button>
+
           {/* Import Questions Button */}
           <button
             id="import-questions-top-btn"
             onClick={() => setShowImportModal(true)}
-            className="flex items-center gap-2 px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700 rounded-xl font-bold text-xs transition-all cursor-pointer shadow-sm hover:border-indigo-500/50"
+            className="flex items-center gap-1.5 px-3 py-2.5 bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700 rounded-xl font-bold text-xs transition-all cursor-pointer shadow-sm hover:border-indigo-500/50"
             title="Impor Soal dari File Excel (.xlsx) atau Dokumen Word / Docs"
           >
             <FileUp className="w-4 h-4 text-indigo-400" />
-            <span>Impor Soal</span>
+            <span>Impor</span>
           </button>
 
           {/* Export Questions Button */}
           <button
             id="export-questions-top-btn"
             onClick={() => setShowExportModal(true)}
-            className="flex items-center gap-2 px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-700 rounded-xl font-bold text-xs transition-all cursor-pointer shadow-sm hover:border-emerald-500/50"
+            className="flex items-center gap-1.5 px-3 py-2.5 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-700 rounded-xl font-bold text-xs transition-all cursor-pointer shadow-sm hover:border-emerald-500/50"
             title="Ekspor Naskah Soal ke Excel (.xlsx), Word (.doc), atau Cetak PDF"
           >
             <FileDown className="w-4 h-4 text-emerald-400" />
-            <span>Ekspor Naskah</span>
+            <span>Ekspor</span>
           </button>
 
           {/* Direct Student Share Link Button */}
           <button
             id="share-student-link-btn"
             onClick={() => setShowShareModal(true)}
-            className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-xs transition-all shadow-lg shadow-emerald-950 cursor-pointer"
+            className="flex items-center gap-1.5 px-3.5 py-2.5 bg-teal-600 hover:bg-teal-500 text-white rounded-xl font-bold text-xs transition-all shadow-md shadow-teal-950 cursor-pointer"
+            title="Bagikan Tautan Ujian Langsung untuk Siswa"
           >
             <Share2 className="w-4 h-4" />
-            <span>Bagikan Link Siswa</span>
+            <span>Link Siswa</span>
           </button>
 
+          {/* Save Whole Exam Package */}
+          <button
+            id="save-whole-exam-top-btn"
+            onClick={handleSaveWholeExam}
+            className="flex items-center gap-1.5 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-xs transition-all shadow-lg shadow-emerald-950 cursor-pointer"
+            title="Simpan Seluruh Soal & Pengaturan Naskah Ujian"
+          >
+            <Save className="w-4 h-4" />
+            <span>Simpan Soal</span>
+          </button>
+
+          {/* Apply & Preview Slides CBT */}
           <button
             id="preview-slides-btn"
             onClick={onPreviewSlides}
-            className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold text-xs transition-all shadow-lg shadow-indigo-950 cursor-pointer"
+            className="flex items-center gap-1.5 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold text-xs transition-all shadow-lg shadow-indigo-950 cursor-pointer"
+            title="Terapkan Naskah Soal ke Slide CBT & Uji Mode Siswa"
           >
             <Layers className="w-4 h-4" />
-            <span>Tinjau Slides CBT</span>
+            <span>Terapkan ke CBT</span>
           </button>
         </div>
       </div>
@@ -1046,6 +1168,16 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                   <FileDown className="w-3 h-3 text-emerald-400" />
                   <span>Ekspor</span>
                 </button>
+                {activeExam.questions.length > 0 && (
+                  <button
+                    onClick={handleClearAllExamQuestions}
+                    className="flex items-center gap-1 text-[11px] text-rose-400 hover:text-rose-300 font-medium px-2 py-1 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 rounded-lg cursor-pointer transition-colors"
+                    title="Kosongkan / Hapus Semua Butir Soal"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    <span>Hapus Semua</span>
+                  </button>
+                )}
                 <button
                   onClick={handleAddNewQuestionManual}
                   className="flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 font-medium px-2 py-1 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/20 rounded-lg cursor-pointer"
@@ -1647,6 +1779,40 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
         isOpen={showExportModal}
         onClose={() => setShowExportModal(false)}
         exam={activeExam}
+        school={schoolData}
+      />
+
+      {/* Exam History & Archive Modal */}
+      <ExamHistoryModal
+        isOpen={showHistoryModal}
+        onClose={() => setShowHistoryModal(false)}
+        exams={exams.length > 0 ? exams : [activeExam]}
+        activeExamId={activeExam.id}
+        onSelectAndApplyExam={(examId, targetTab) => {
+          if (onSelectExamId) {
+            onSelectExamId(examId);
+          }
+          setShowHistoryModal(false);
+          if (targetTab === "student_exam") {
+            onPreviewSlides();
+          }
+        }}
+        onDeleteExam={(examId) => {
+          if (onDeleteExam) {
+            onDeleteExam(examId);
+          }
+        }}
+        onDuplicateExam={(exam) => {
+          if (onDuplicateExam) {
+            onDuplicateExam(exam);
+          }
+        }}
+        onCreateNewExam={() => {
+          if (onCreateNewExam) {
+            onCreateNewExam();
+          }
+          setShowHistoryModal(false);
+        }}
         school={schoolData}
       />
     </div>

@@ -43,6 +43,7 @@ export const SchoolProfileAndPrintView: React.FC<SchoolProfileAndPrintViewProps>
 
   // Print options
   const [includeAnswerKey, setIncludeAnswerKey] = useState(false);
+  const [includeMatrix, setIncludeMatrix] = useState(true);
 
   const handleSaveAll = () => {
     onUpdateSchool(profile);
@@ -55,7 +56,7 @@ export const SchoolProfileAndPrintView: React.FC<SchoolProfileAndPrintViewProps>
       updatedAt: new Date().toISOString(),
     });
     setIsSaved(true);
-    setTimeout(() => setIsSaved(false), 2500);
+    setTimeout(() => setIsSaved(false), 3000);
   };
 
   const handleKopFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -104,7 +105,7 @@ export const SchoolProfileAndPrintView: React.FC<SchoolProfileAndPrintViewProps>
       schoolProfile: profile,
       teacherProfile: teacher,
     };
-    printExamToDocsFormat(updatedExam, profile, { includeAnswerKey });
+    printExamToDocsFormat(updatedExam, profile, { includeAnswerKey, includeMatrix });
   };
 
   return (
@@ -545,22 +546,63 @@ export const SchoolProfileAndPrintView: React.FC<SchoolProfileAndPrintViewProps>
           </div>
 
           {/* Docs Print Setting */}
-          <div className="bg-[#121214] rounded-2xl p-6 border border-slate-800 shadow-sm space-y-3">
-            <div className="flex items-center gap-2 font-bold text-white text-sm">
-              <Printer className="w-4 h-4 text-indigo-400" />
-              <span>Opsi Pencetakan Naskah Soal Docs</span>
+          <div className="bg-[#121214] rounded-2xl p-6 border border-slate-800 shadow-sm space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 font-bold text-white text-sm">
+                <Printer className="w-4 h-4 text-indigo-400" />
+                <span>Opsi Pencetakan Naskah Soal Docs</span>
+              </div>
+              <button
+                onClick={handlePrintExam}
+                className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-md shadow-indigo-950"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>Cetak Sekarang</span>
+              </button>
             </div>
 
-            <div className="space-y-2">
-              <label className="flex items-center gap-2 text-xs font-medium text-slate-300 cursor-pointer">
+            <div className="space-y-3 bg-[#1a1a1c] p-4 rounded-xl border border-slate-800">
+              <label className="flex items-start gap-2.5 text-xs font-medium text-slate-200 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={includeMatrix}
+                  onChange={(e) => setIncludeMatrix(e.target.checked)}
+                  className="w-4 h-4 mt-0.5 rounded text-indigo-600 focus:ring-indigo-500 bg-[#26262a] border-slate-700"
+                />
+                <div>
+                  <span className="font-semibold text-emerald-400">Sertakan Matriks Kisi-Kisi Taksonomi Bloom & Anderson</span>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Mencetak tabel kisi-kisi butir soal lengkap dengan Dimensi Proses Kognitif (C1-C6 HOTS/MOTS/LOTS) dan Dimensi Pengetahuan (Faktual/Konseptual/Prosedural/Metakognitif).
+                  </p>
+                </div>
+              </label>
+
+              <label className="flex items-start gap-2.5 text-xs font-medium text-slate-200 cursor-pointer pt-2 border-t border-slate-800/80">
                 <input
                   type="checkbox"
                   checked={includeAnswerKey}
                   onChange={(e) => setIncludeAnswerKey(e.target.checked)}
-                  className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 bg-[#1a1a1c] border-slate-700"
+                  className="w-4 h-4 mt-0.5 rounded text-indigo-600 focus:ring-indigo-500 bg-[#26262a] border-slate-700"
                 />
-                <span>Sertakan Lembar Kunci Jawaban & Pembahasan Guru di Akhir Dokumen</span>
+                <div>
+                  <span className="font-semibold text-slate-200">Sertakan Lembar Kunci Jawaban & Pembahasan Guru</span>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Menampilkan kunci jawaban benar, bobot skor, dan pedoman penskoran/rubrik di bawah butir soal.
+                  </p>
+                </div>
               </label>
+            </div>
+
+            {/* Quick Save Profile & Exam Code Button */}
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={handleSaveAll}
+                className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 shadow-lg shadow-emerald-950/40"
+              >
+                <Save className="w-4 h-4" />
+                <span>{isSaved ? "✓ Profil & Kode Berhasil Disimpan!" : "Simpan Semua Pengaturan Profil & Naskah"}</span>
+              </button>
             </div>
           </div>
         </div>

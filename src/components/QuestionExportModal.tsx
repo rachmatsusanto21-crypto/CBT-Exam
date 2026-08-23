@@ -12,7 +12,8 @@ import {
   Square,
   Layers,
   Sparkles,
-  BookOpen
+  BookOpen,
+  BrainCircuit
 } from "lucide-react";
 import { ExamPackage, SchoolProfile } from "../types";
 import {
@@ -20,7 +21,8 @@ import {
   exportQuestionsToWordDoc,
   printFormattedExamDocument,
   downloadExcelQuestionTemplate,
-  downloadDocQuestionTemplate
+  downloadDocQuestionTemplate,
+  calculateBloomAndersonSummary
 } from "../utils/sheetExport";
 
 interface QuestionExportModalProps {
@@ -37,9 +39,12 @@ export const QuestionExportModal: React.FC<QuestionExportModalProps> = ({
   school,
 }) => {
   const [includeKeyInWord, setIncludeKeyInWord] = useState(true);
+  const [includeMatrixInWord, setIncludeMatrixInWord] = useState(true);
   const [downloadSuccess, setDownloadSuccess] = useState<string | null>(null);
 
   if (!isOpen) return null;
+
+  const bloomSummary = calculateBloomAndersonSummary(exam.questions);
 
   const triggerFeedback = (msg: string) => {
     setDownloadSuccess(msg);
@@ -52,12 +57,15 @@ export const QuestionExportModal: React.FC<QuestionExportModalProps> = ({
   };
 
   const handleExportWord = () => {
-    exportQuestionsToWordDoc(exam, school, includeKeyInWord);
-    triggerFeedback("Dokumen Word (.doc) berhasil diunduh!");
+    exportQuestionsToWordDoc(exam, school, includeKeyInWord, includeMatrixInWord);
+    triggerFeedback("Dokumen Word (.doc) ber-kisi-kisi Bloom-Anderson berhasil diunduh!");
   };
 
   const handlePrint = () => {
-    printFormattedExamDocument(exam, school);
+    printFormattedExamDocument(exam, school, {
+      includeAnswerKey: includeKeyInWord,
+      includeMatrix: includeMatrixInWord,
+    });
   };
 
   return (
@@ -74,7 +82,7 @@ export const QuestionExportModal: React.FC<QuestionExportModalProps> = ({
                 <span>Ekspor & Cetak Naskah Soal</span>
               </h2>
               <p className="text-xs text-slate-400">
-                Unduh naskah soal ({exam.questions.length} butir) ke format Spreadsheet Excel, Dokumen Word / Docs, atau Cetak PDF.
+                Unduh naskah soal ({exam.questions.length} butir) ke format Spreadsheet Excel, Dokumen Word / Docs ber-kisi-kisi, atau Cetak PDF.
               </p>
             </div>
           </div>
@@ -94,6 +102,37 @@ export const QuestionExportModal: React.FC<QuestionExportModalProps> = ({
               <span>{downloadSuccess}</span>
             </div>
           )}
+
+          {/* Bloom & Anderson Taxonomical Breakdown Summary */}
+          <div className="p-4 bg-indigo-950/30 border border-indigo-500/20 rounded-2xl space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-xs font-bold text-indigo-300">
+                <BrainCircuit className="w-4 h-4 text-indigo-400" />
+                <span>Distribusi Taksonomi Kognitif Bloom & Anderson</span>
+              </div>
+              <span className="text-[11px] px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-bold border border-indigo-500/30">
+                {exam.questions.length} Butir Soal
+              </span>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2 pt-1 text-center text-xs">
+              <div className="p-2.5 bg-[#121214] border border-red-500/20 rounded-xl">
+                <div className="font-black text-red-400 text-sm">{bloomSummary.hotsPercent}%</div>
+                <div className="text-[10px] text-slate-400 font-semibold">HOTS (C4-C6)</div>
+                <div className="text-[10px] text-slate-500">{bloomSummary.distribution.HOTS} Butir</div>
+              </div>
+              <div className="p-2.5 bg-[#121214] border border-amber-500/20 rounded-xl">
+                <div className="font-black text-amber-400 text-sm">{bloomSummary.motsPercent}%</div>
+                <div className="text-[10px] text-slate-400 font-semibold">MOTS (C3)</div>
+                <div className="text-[10px] text-slate-500">{bloomSummary.distribution.MOTS} Butir</div>
+              </div>
+              <div className="p-2.5 bg-[#121214] border border-blue-500/20 rounded-xl">
+                <div className="font-black text-blue-400 text-sm">{bloomSummary.lotsPercent}%</div>
+                <div className="text-[10px] text-slate-400 font-semibold">LOTS (C1-C2)</div>
+                <div className="text-[10px] text-slate-500">{bloomSummary.distribution.LOTS} Butir</div>
+              </div>
+            </div>
+          </div>
 
           {/* Option 1: Microsoft Excel / Google Sheets (.xlsx) */}
           <div className="p-5 bg-[#161618] border border-slate-800 rounded-2xl hover:border-emerald-500/40 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4 group">
@@ -128,7 +167,7 @@ export const QuestionExportModal: React.FC<QuestionExportModalProps> = ({
                   </h3>
                 </div>
                 <p className="text-xs text-slate-400">
-                  Naskah resmi berstandar kurikulum dengan Kop Sekolah, tabel identitas ujian, stimulus soal, opsi A-E, dan tabel mencocokkan.
+                  Naskah resmi berstandar kurikulum dengan Kop Sekolah, tabel identitas ujian, stimulus soal, opsi A-E, serta matriks kisi-kisi Bloom & Anderson.
                 </p>
               </div>
               <button
@@ -140,19 +179,32 @@ export const QuestionExportModal: React.FC<QuestionExportModalProps> = ({
               </button>
             </div>
 
-            {/* Checkbox option for answer key */}
-            <div className="pt-2 border-t border-slate-800/80 flex items-center gap-2 text-xs">
+            {/* Checkbox options */}
+            <div className="pt-2 border-t border-slate-800/80 flex flex-col sm:flex-row gap-3 text-xs">
+              <button
+                type="button"
+                onClick={() => setIncludeMatrixInWord(!includeMatrixInWord)}
+                className="flex items-center gap-2 text-slate-300 hover:text-white cursor-pointer select-none"
+              >
+                {includeMatrixInWord ? (
+                  <CheckSquare className="w-4 h-4 text-indigo-400 shrink-0" />
+                ) : (
+                  <Square className="w-4 h-4 text-slate-500 shrink-0" />
+                )}
+                <span>Sertakan Matriks Kisi-Kisi Lengkap (Bloom & Anderson)</span>
+              </button>
+
               <button
                 type="button"
                 onClick={() => setIncludeKeyInWord(!includeKeyInWord)}
                 className="flex items-center gap-2 text-slate-300 hover:text-white cursor-pointer select-none"
               >
                 {includeKeyInWord ? (
-                  <CheckSquare className="w-4 h-4 text-indigo-400" />
+                  <CheckSquare className="w-4 h-4 text-indigo-400 shrink-0" />
                 ) : (
-                  <Square className="w-4 h-4 text-slate-500" />
+                  <Square className="w-4 h-4 text-slate-500 shrink-0" />
                 )}
-                <span>Sertakan Lembar Kunci Jawaban & Pembahasan Lengkap di Halaman Akhir</span>
+                <span>Sertakan Kunci & Pembahasan</span>
               </button>
             </div>
           </div>
@@ -163,11 +215,11 @@ export const QuestionExportModal: React.FC<QuestionExportModalProps> = ({
               <div className="flex items-center gap-2">
                 <Printer className="w-5 h-5 text-amber-400" />
                 <h3 className="text-sm font-bold text-white group-hover:text-amber-300 transition-colors">
-                  Cetak Langsung / Simpan PDF
+                  Cetak Naskah + Kisi-Kisi / Simpan PDF
                 </h3>
               </div>
               <p className="text-xs text-slate-400">
-                Membuka jendela cetak browser yang telah diformat khusus untuk kertas A4 / F4 dengan margin resmi sekolah.
+                Membuka jendela cetak browser yang telah diformat khusus untuk kertas A4 / F4 lengkap dengan Kop Sekolah dan Lampiran Kisi-Kisi Bloom-Anderson.
               </p>
             </div>
             <button

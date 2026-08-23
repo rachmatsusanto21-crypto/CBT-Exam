@@ -160,6 +160,38 @@ export default function App() {
     setActiveTab("ai_generator");
   };
 
+  const handleDeleteExamPackage = (id: string) => {
+    if (exams.length <= 1) {
+      alert("Tidak dapat menghapus satu-satunya naskah soal yang tersedia.");
+      return;
+    }
+    if (confirm("Apakah Anda yakin ingin menghapus naskah soal ini dari database?")) {
+      const updated = exams.filter((e) => e.id !== id);
+      setExamsState(updated);
+      saveExamPackages(updated);
+      if (activeExamId === id) {
+        setActiveExamIdState(updated[0].id);
+        saveActiveExamId(updated[0].id);
+      }
+    }
+  };
+
+  const handleDuplicateExamPackage = (examToDup: ExamPackage) => {
+    const newPkg: ExamPackage = {
+      ...examToDup,
+      id: `exam-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      code: `${examToDup.code}-SALIN`,
+      title: `${examToDup.title} (Salinan)`,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const updated = [newPkg, ...exams];
+    setExamsState(updated);
+    saveExamPackages(updated);
+    setActiveExamIdState(newPkg.id);
+    saveActiveExamId(newPkg.id);
+  };
+
   const handleSelectExamId = (id: string) => {
     setActiveExamIdState(id);
     saveActiveExamId(id);
@@ -501,6 +533,11 @@ export default function App() {
             onOpenGeminiModal={() => setIsGeminiModalOpen(true)}
             activeToken={activeExam.sessionToken}
             school={schoolProfile}
+            exams={exams}
+            onSelectExamId={(id) => handleSelectExamId(id)}
+            onDeleteExam={(id) => handleDeleteExamPackage(id)}
+            onDuplicateExam={(exam) => handleDuplicateExamPackage(exam)}
+            onCreateNewExam={handleCreateNewExam}
           />
         )}
 
