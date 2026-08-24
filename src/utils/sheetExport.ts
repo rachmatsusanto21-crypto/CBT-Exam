@@ -10,6 +10,7 @@ import {
   QuestionType,
   MatchingPair,
 } from "../types";
+import { formatImageUrl } from "./imageUrl";
 
 export const calculateItemAnalysis = (
   exam: ExamPackage,
@@ -398,17 +399,17 @@ export const printFormattedExamDocument = (
 
   const kopSection = school.kopSuratUrl
     ? `<div style="text-align: center; margin-bottom: 12px; border-bottom: 3px double #000; padding-bottom: 8px;">
-        <img src="${school.kopSuratUrl}" style="max-width: 100%; max-height: 125px; object-fit: contain;" alt="Kop Surat Resmi Sekolah" />
+        <img src="${formatImageUrl(school.kopSuratUrl)}" style="max-width: 100%; max-height: 125px; object-fit: contain;" alt="Kop Surat Resmi Sekolah" referrerpolicy="no-referrer" crossorigin="anonymous" />
       </div>`
     : `<div class="kop-wrapper">
-        ${school.logoLeftUrl ? `<img src="${school.logoLeftUrl}" class="kop-logo" alt="Logo Kiri" />` : '<div style="width:75px"></div>'}
+        ${school.logoLeftUrl ? `<img src="${formatImageUrl(school.logoLeftUrl)}" class="kop-logo" alt="Logo Kiri" referrerpolicy="no-referrer" crossorigin="anonymous" />` : '<div style="width:75px"></div>'}
         <div class="kop-text">
           <div class="kop-agency">${school.agencyName || "PEMERINTAH DAERAH"}</div>
           <div class="kop-school">${school.schoolName || "SEKOLAH"}</div>
           <div class="kop-address">${school.address || ""} ${school.postalCode ? `Kodepos ${school.postalCode}` : ""}</div>
           <div class="kop-contact">Telp: ${school.phone || "-"} | Email: ${school.email || "-"} | Web: ${school.website || "-"}</div>
         </div>
-        ${school.logoRightUrl ? `<img src="${school.logoRightUrl}" class="kop-logo" alt="Logo Kanan" />` : '<div style="width:75px"></div>'}
+        ${school.logoRightUrl ? `<img src="${formatImageUrl(school.logoRightUrl)}" class="kop-logo" alt="Logo Kanan" referrerpolicy="no-referrer" crossorigin="anonymous" />` : '<div style="width:75px"></div>'}
       </div>`;
 
   const htmlContent = `
@@ -907,17 +908,17 @@ export const exportQuestionsToWordDoc = (
   const bloomSummary = calculateBloomAndersonSummary(exam.questions);
 
   const kopHtml = school.kopSuratUrl
-    ? `<div style="text-align:center; margin-bottom:15px;"><img src="${school.kopSuratUrl}" style="max-width:100%; height:auto; max-height:120px;" alt="Kop Surat" /></div>`
+    ? `<div style="text-align:center; margin-bottom:15px;"><img src="${formatImageUrl(school.kopSuratUrl)}" style="max-width:100%; height:auto; max-height:120px;" alt="Kop Surat" /></div>`
     : `
       <table style="width:100%; border-bottom:3px double #000; padding-bottom:10px; margin-bottom:15px; font-family:'Times New Roman', serif;">
         <tr>
-          ${school.logoLeftUrl ? `<td style="width:75px; text-align:center; vertical-align:middle;"><img src="${school.logoLeftUrl}" style="width:65px; height:65px; object-fit:contain;" alt="Logo" /></td>` : ""}
+          ${school.logoLeftUrl ? `<td style="width:75px; text-align:center; vertical-align:middle;"><img src="${formatImageUrl(school.logoLeftUrl)}" style="width:65px; height:65px; object-fit:contain;" alt="Logo" /></td>` : ""}
           <td style="text-align:center; vertical-align:middle;">
             <div style="font-size:12pt; font-weight:bold; text-transform:uppercase;">${school.agencyName || "PEMERINTAH DAERAH"}</div>
             <div style="font-size:14pt; font-weight:bold; text-transform:uppercase;">${school.schoolName || "SMART CBT ASSESSMENT"}</div>
             <div style="font-size:9pt; color:#333;">${school.address || "Alamat Sekolah"} | Telp: ${school.phone || "-"} | Email: ${school.email || "-"}</div>
           </td>
-          ${school.logoRightUrl ? `<td style="width:75px; text-align:center; vertical-align:middle;"><img src="${school.logoRightUrl}" style="width:65px; height:65px; object-fit:contain;" alt="Logo" /></td>` : ""}
+          ${school.logoRightUrl ? `<td style="width:75px; text-align:center; vertical-align:middle;"><img src="${formatImageUrl(school.logoRightUrl)}" style="width:65px; height:65px; object-fit:contain;" alt="Logo" /></td>` : ""}
         </tr>
       </table>
     `;

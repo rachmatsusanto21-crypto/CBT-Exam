@@ -31,7 +31,9 @@ import {
   ArrowRightLeft,
   FileEdit,
   AlignLeft,
-  Search
+  Search,
+  FlaskConical,
+  RotateCcw
 } from "lucide-react";
 import {
   ExamPackage,
@@ -59,6 +61,7 @@ interface StudentSlideExamProps {
   onExit: () => void;
   initialToken?: string;
   isDirectLink?: boolean;
+  isTeacherTrial?: boolean;
 }
 
 export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
@@ -70,6 +73,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
   onExit,
   initialToken,
   isDirectLink = false,
+  isTeacherTrial = false,
 }) => {
   // Login Gate State (if no session active)
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(!!currentSession);
@@ -151,6 +155,39 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
       setLoginToken(initialToken);
     }
   }, [initialToken]);
+
+  // Auto-init trial session for Teacher Sandbox mode
+  useEffect(() => {
+    if (isTeacherTrial && !session) {
+      const trialSession: StudentExamSession = {
+        id: `trial-${Date.now()}`,
+        examId: exam.id,
+        examCode: exam.code,
+        examTitle: exam.title,
+        subject: exam.teacherProfile.subject,
+        studentName: "Guru Penguji (Simulasi Uji Coba)",
+        nisn: "0000000000",
+        className: "Simulasi Guru",
+        token: "UJI-COBA",
+        currentSlideIndex: 0,
+        answers: {},
+        startTime: new Date().toISOString(),
+        timeSpentSeconds: 0,
+        totalScoreEarned: 0,
+        maxScore: exam.totalScore,
+        percentage: 0,
+        passed: false,
+        status: "in_progress",
+        shuffledQuestions: exam.questions,
+        cheatViolations: [],
+        violationCount: 0,
+      };
+      setSession(trialSession);
+      setIsLoggedIn(true);
+      setCurrentSlideIndex(0);
+      setSecondsRemaining(totalDurationSeconds);
+    }
+  }, [isTeacherTrial, exam]);
 
   // Fullscreen toggle helper
   const handleToggleFullscreen = () => {
@@ -654,7 +691,45 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
     setSession(finalizedSession);
     setIsSubmitted(true);
     setShowSummaryModal(false);
-    onSubmitExam(finalizedSession);
+    if (!isTeacherTrial) {
+      onSubmitExam(finalizedSession);
+    }
+  };
+
+  // Handler to restart/retry trial for Teacher without limit
+  const handleRetryTeacherTrial = () => {
+    const freshTrialSession: StudentExamSession = {
+      id: `trial-${Date.now()}`,
+      examId: exam.id,
+      examCode: exam.code,
+      examTitle: exam.title,
+      subject: exam.teacherProfile.subject,
+      studentName: "Guru Penguji (Simulasi Uji Coba)",
+      nisn: "0000000000",
+      className: "Simulasi Guru",
+      token: "UJI-COBA",
+      currentSlideIndex: 0,
+      answers: {},
+      startTime: new Date().toISOString(),
+      timeSpentSeconds: 0,
+      totalScoreEarned: 0,
+      maxScore: exam.totalScore,
+      percentage: 0,
+      passed: false,
+      status: "in_progress",
+      shuffledQuestions: exam.questions,
+      cheatViolations: [],
+      violationCount: 0,
+    };
+    setSession(freshTrialSession);
+    setIsLoggedIn(true);
+    setIsSubmitted(false);
+    setShowSummaryModal(false);
+    setCurrentSlideIndex(0);
+    setSecondsRemaining(totalDurationSeconds);
+    hasAlerted5Min.current = false;
+    hasAlerted1Min.current = false;
+    violationCountRef.current = 0;
   };
 
   // Format Timer
@@ -668,7 +743,15 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
 
   // If exam completed and submitted, show Result View
   if (isSubmitted && session) {
-    return <StudentResultView session={session} exam={exam} onExit={onExit} />;
+    return (
+      <StudentResultView
+        session={session}
+        exam={exam}
+        onExit={onExit}
+        isTeacherTrial={isTeacherTrial}
+        onRetryTrial={handleRetryTeacherTrial}
+      />
+    );
   }
 
   // LOGIN GATE / TOKEN AUTH VIEW
@@ -807,6 +890,44 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
 
   return (
     <div className="space-y-4 max-w-5xl mx-auto">
+      {/* TEACHER TRIAL SANDBOX BANNER */}
+      {isTeacherTrial && (
+        <div className="bg-amber-500/15 border border-amber-500/40 rounded-2xl p-4 text-amber-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg animate-in fade-in">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+              <FlaskConical className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="text-xs font-bold text-amber-300 uppercase tracking-wider flex items-center gap-2">
+                <span>Mode Uji Coba / Simulasi Naskah Soal Guru</span>
+                <span className="bg-amber-500/30 text-amber-100 text-[10px] px-2 py-0.5 rounded-full font-bold">
+                  Percobaan Bebas & Tidak Terbatas
+                </span>
+              </div>
+              <div className="text-[11px] text-amber-200/80">
+                Uji coba mandiri tampilan slide, audio timer, dan kunci jawaban CBT. Anda dapat mengulang pengerjaan tanpa batas. Hasil simulasi ini <strong>TIDAK dimasukkan</strong> ke rekap penilaian/analisis butir siswa.
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+            <button
+              onClick={handleRetryTeacherTrial}
+              className="px-3.5 py-2 bg-amber-700/80 hover:bg-amber-600 text-white rounded-xl text-xs font-bold transition-all shadow-sm cursor-pointer flex items-center gap-1.5"
+              title="Reset dan mulai ulang simulasi dari slide pertama"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Ulangi dari Awal</span>
+            </button>
+            <button
+              onClick={onExit}
+              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 rounded-xl text-xs font-bold transition-all shadow-sm cursor-pointer"
+            >
+              Selesai & Keluar
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* TOP CONTROL BAR: TIMER, PROGRESS, ANTI-CHEAT STATUS */}
       <div className="bg-[#121214] rounded-2xl p-4 border border-slate-800 shadow-lg flex flex-wrap items-center justify-between gap-4">
         {/* Left: Exam Info & Slide Counter */}

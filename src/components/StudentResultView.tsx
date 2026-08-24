@@ -21,6 +21,8 @@ import {
   TrendingDown,
   Minus,
   Users,
+  RotateCcw,
+  FlaskConical,
   AlertCircle
 } from "lucide-react";
 import { ExamPackage, StudentExamSession } from "../types";
@@ -31,12 +33,16 @@ interface StudentResultViewProps {
   session: StudentExamSession;
   exam: ExamPackage;
   onExit: () => void;
+  isTeacherTrial?: boolean;
+  onRetryTrial?: () => void;
 }
 
 export const StudentResultView: React.FC<StudentResultViewProps> = ({
   session,
   exam,
   onExit,
+  isTeacherTrial = false,
+  onRetryTrial,
 }) => {
   const [isAnalyzingAi, setIsAnalyzingAi] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(session.aiRemediation || null);
@@ -122,6 +128,38 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
 
   return (
     <div id="student-result-view" className="max-w-4xl mx-auto space-y-6 py-6">
+      {/* Teacher Trial Mode Info Banner */}
+      {isTeacherTrial && (
+        <div className="bg-amber-500/15 border border-amber-500/40 rounded-3xl p-5 text-amber-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-lg animate-in fade-in">
+          <div className="flex items-center gap-3.5">
+            <div className="w-11 h-11 rounded-2xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+              <FlaskConical className="w-6 h-6" />
+            </div>
+            <div>
+              <div className="text-sm font-bold text-amber-300 flex items-center gap-2">
+                <span>Hasil Simulasi Uji Coba Guru</span>
+                <span className="bg-amber-500/30 text-amber-100 text-[10px] px-2.5 py-0.5 rounded-full font-bold uppercase">
+                  Uji Coba Tanpa Batas
+                </span>
+              </div>
+              <p className="text-xs text-amber-200/80 mt-0.5">
+                Nilai dan jawaban ini merupakan uji coba mandiri guru dan <strong>tidak dimasukkan</strong> ke rekap penilaian siswa. Anda dapat mengulang pengerjaan soal kapan pun tanpa batas.
+              </p>
+            </div>
+          </div>
+
+          {onRetryTrial && (
+            <button
+              onClick={onRetryTrial}
+              className="px-5 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-amber-950 flex items-center gap-2 cursor-pointer shrink-0 self-end sm:self-center"
+            >
+              <RotateCcw className="w-4 h-4" />
+              <span>Ulangi Pengerjaan Soal</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Result Card Hero */}
       <div className="bg-[#121214] rounded-3xl p-8 border border-slate-800 shadow-xl relative overflow-hidden text-center space-y-6">
         <div className="absolute -top-12 -right-12 w-48 h-48 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none" />
@@ -193,6 +231,18 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
 
         {/* Action Buttons */}
         <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+          {isTeacherTrial && onRetryTrial && (
+            <button
+              id="retry-teacher-trial-btn"
+              onClick={onRetryTrial}
+              className="flex items-center gap-2 px-5 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold cursor-pointer transition-all shadow-md shadow-amber-950"
+              title="Mulai ulang pengerjaan simulasi soal ini dari awal"
+            >
+              <RotateCcw className="w-4 h-4" />
+              <span>Ulangi Pengerjaan Soal (Uji Coba)</span>
+            </button>
+          )}
+
           <button
             onClick={handlePrintResult}
             className="flex items-center gap-2 px-5 py-2.5 bg-[#1a1a1c] hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold cursor-pointer transition-colors"
@@ -205,7 +255,7 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
             onClick={onExit}
             className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold cursor-pointer transition-all shadow-md shadow-indigo-950"
           >
-            <span>Selesai & Keluar</span>
+            <span>{isTeacherTrial ? "Selesai & Kembali ke Editor" : "Selesai & Keluar"}</span>
             <ChevronRight className="w-4 h-4" />
           </button>
         </div>

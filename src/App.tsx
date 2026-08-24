@@ -70,6 +70,7 @@ export default function App() {
 
   // Navigation & View State
   const [activeTab, setActiveTab] = useState<NavigationTab>("student_exam");
+  const [isTeacherTrial, setIsTeacherTrial] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isGeminiModalOpen, setIsGeminiModalOpen] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
@@ -519,7 +520,15 @@ export default function App() {
             currentSession={activeSession}
             onSaveSession={handleSaveStudentSession}
             onSubmitExam={handleSubmitStudentExam}
-            onExit={() => setActiveTab("monitoring")}
+            isTeacherTrial={isTeacherTrial}
+            onExit={() => {
+              if (isTeacherTrial) {
+                setIsTeacherTrial(false);
+                setActiveTab("ai_generator");
+              } else {
+                setActiveTab("monitoring");
+              }
+            }}
           />
         )}
 
@@ -540,7 +549,14 @@ export default function App() {
           <AIGeneratorAndEditor
             activeExam={activeExam}
             onUpdateExam={handleUpdateActiveExam}
-            onPreviewSlides={() => setActiveTab("student_exam")}
+            onPreviewSlides={() => {
+              setIsTeacherTrial(false);
+              setActiveTab("student_exam");
+            }}
+            onStartTeacherTrial={() => {
+              setIsTeacherTrial(true);
+              setActiveTab("student_exam");
+            }}
             onOpenGeminiModal={() => setIsGeminiModalOpen(true)}
             activeToken={activeExam.sessionToken}
             school={schoolProfile}
@@ -559,6 +575,10 @@ export default function App() {
             exam={activeExam}
             school={schoolProfile}
             history={history}
+            onUpdateHistory={(updated) => {
+              setHistoryState(updated);
+              saveExamHistory(updated);
+            }}
           />
         )}
 

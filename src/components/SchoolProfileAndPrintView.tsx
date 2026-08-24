@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { ExamPackage, SchoolProfile } from "../types";
 import { printExamToDocsFormat } from "../utils/sheetExport";
+import { formatImageUrl } from "../utils/imageUrl";
 
 interface SchoolProfileAndPrintViewProps {
   school: SchoolProfile;
@@ -162,18 +163,22 @@ export const SchoolProfileAndPrintView: React.FC<SchoolProfileAndPrintViewProps>
         {profile.kopSuratUrl ? (
           <div className="p-4 bg-white rounded-xl border border-slate-700 max-w-3xl mx-auto flex flex-col items-center justify-center">
             <img
-              src={profile.kopSuratUrl}
+              src={formatImageUrl(profile.kopSuratUrl)}
               alt="Kop Surat Resmi Sekolah"
               className="w-full max-h-32 object-contain"
+              referrerPolicy="no-referrer"
+              crossOrigin="anonymous"
             />
           </div>
         ) : (
           <div className="p-6 bg-slate-900/80 rounded-xl border border-slate-800 max-w-3xl mx-auto flex items-center justify-between gap-4 text-center">
             {profile.logoLeftUrl && (
               <img
-                src={profile.logoLeftUrl}
+                src={formatImageUrl(profile.logoLeftUrl)}
                 alt="Logo Kiri"
                 className="w-16 h-16 object-contain shrink-0"
+                referrerPolicy="no-referrer"
+                crossOrigin="anonymous"
               />
             )}
 
@@ -194,9 +199,11 @@ export const SchoolProfileAndPrintView: React.FC<SchoolProfileAndPrintViewProps>
 
             {profile.logoRightUrl && (
               <img
-                src={profile.logoRightUrl}
+                src={formatImageUrl(profile.logoRightUrl)}
                 alt="Logo Kanan"
                 className="w-16 h-16 object-contain shrink-0 rounded-full"
+                referrerPolicy="no-referrer"
+                crossOrigin="anonymous"
               />
             )}
           </div>

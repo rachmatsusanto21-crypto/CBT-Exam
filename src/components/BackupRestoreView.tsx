@@ -1,4 +1,4 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   HardDrive,
   Download,
@@ -11,27 +11,180 @@ import {
   Database,
   Cloud,
   FileJson,
-  RotateCcw
+  RotateCcw,
+  Key,
+  FolderOpen,
+  CloudUpload,
+  CloudDownload,
+  FileText,
+  ShieldCheck,
+  Check
 } from "lucide-react";
 import { AppStateBackup } from "../types";
 import { createFullAppBackup, restoreFullAppBackup, resetToDefaultData } from "../utils/storage";
+import {
+  GOOGLE_DRIVE_BACKUP_FOLDER_NAME,
+  GoogleDriveFileItem,
+  getOrCreateSlideExamFolder,
+  uploadBackupToGoogleDrive,
+  listBackupsFromGoogleDrive,
+  downloadBackupFromGoogleDrive,
+} from "../utils/googleDrive";
 
 interface BackupRestoreViewProps {
   onDataRestored: () => void;
 }
 
+declare global {
+  interface Window {
+    google?: any;
+  }
+}
+
 export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRestored }) => {
+  // Google Drive State
+  const [driveToken, setDriveToken] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("slideexam_gdrive_token") || "";
+    }
+    return "";
+  });
+  const [isConnectingDrive, setIsConnectingDrive] = useState(false);
+  const [isSyncingDrive, setIsSyncingDrive] = useState(false);
+  const [isLoadingFileList, setIsLoadingFileList] = useState(false);
+  const [driveFiles, setDriveFiles] = useState<GoogleDriveFileItem[]>([]);
+  const [driveFolderId, setDriveFolderId] = useState<string | null>(null);
+  const [driveError, setDriveError] = useState<string | null>(null);
+  const [driveSuccessMsg, setDriveSuccessMsg] = useState<string | null>(null);
+
+  // Local JSON Backup State
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [backupSuccessMsg, setBackupSuccessMsg] = useState<string | null>(null);
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const [restoreSuccessMsg, setRestoreSuccessMsg] = useState<string | null>(null);
-  const [googleDriveSyncActive, setGoogleDriveSyncActive] = useState(true);
-  const [lastSyncTime, setLastSyncTime] = useState<string>(new Date().toLocaleTimeString("id-ID"));
+  const [lastSyncTime, setLastSyncTime] = useState<string>(() => new Date().toLocaleTimeString("id-ID"));
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const folderName = "[SlideExam-CBT-Backup]";
+  // Refresh Google Drive file list if token available
+  const fetchDriveBackups = async (token: string) => {
+    if (!token) return;
+    setIsLoadingFileList(true);
+    setDriveError(null);
+    try {
+      const folderId = await getOrCreateSlideExamFolder(token);
+      setDriveFolderId(folderId);
+      const files = await listBackupsFromGoogleDrive(token);
+      setDriveFiles(files);
+    } catch (err: any) {
+      setDriveError(err?.message || "Gagal menyinkronkan dengan Google Drive. Token mungkin telah kadaluarsa.");
+    } finally {
+      setIsLoadingFileList(false);
+    }
+  };
 
+  useEffect(() => {
+    if (driveToken) {
+      fetchDriveBackups(driveToken);
+    }
+  }, [driveToken]);
+
+  // Handle Google Drive OAuth Connect via Google Identity Services
+  const handleConnectGoogleDrive = () => {
+    setIsConnectingDrive(true);
+    setDriveError(null);
+
+    try {
+      if (typeof window !== "undefined" && window.google?.accounts?.oauth2) {
+        const client = window.google.accounts.oauth2.initTokenClient({
+          client_id: "143661645217-p2l3n7g3fklg4o4j1j6f9h7m9.apps.googleusercontent.com", // client id or request scope
+          scope: "https://www.googleapis.com/auth/drive.file",
+          callback: (response: any) => {
+            setIsConnectingDrive(false);
+            if (response.error) {
+              setDriveError(`Otorisasi Google Drive ditolak: ${response.error}`);
+              return;
+            }
+            if (response.access_token) {
+              const token = response.access_token;
+              setDriveToken(token);
+              localStorage.setItem("slideexam_gdrive_token", token);
+              setDriveSuccessMsg("Berhasil terhubung ke akun Google Drive Anda!");
+              fetchDriveBackups(token);
+            }
+          },
+        });
+        client.requestAccessToken();
+      } else {
+        // Fallback prompt for token
+        const inputToken = prompt(
+          "Google Identity Client sedang dimuat. Anda dapat menempelkan Google OAuth Access Token di sini jika ingin menghubungkan manual:"
+        );
+        if (inputToken && inputToken.trim()) {
+          const t = inputToken.trim();
+          setDriveToken(t);
+          localStorage.setItem("slideexam_gdrive_token", t);
+          setDriveSuccessMsg("Token Google Drive disimpan!");
+          fetchDriveBackups(t);
+        }
+        setIsConnectingDrive(false);
+      }
+    } catch (err: any) {
+      setIsConnectingDrive(false);
+      setDriveError(err?.message || "Gagal menginisialisasi Google Drive OAuth.");
+    }
+  };
+
+  // Upload Snapshot directly to Google Drive Folder 'SlideExam_CBT'
+  const handleUploadToGoogleDrive = async () => {
+    if (!driveToken) {
+      handleConnectGoogleDrive();
+      return;
+    }
+
+    setIsSyncingDrive(true);
+    setDriveError(null);
+    setDriveSuccessMsg(null);
+
+    try {
+      const backupData = createFullAppBackup();
+      const uploaded = await uploadBackupToGoogleDrive(driveToken, backupData);
+      setDriveSuccessMsg(`File backup "${uploaded.name}" berhasil diunggah ke folder ${GOOGLE_DRIVE_BACKUP_FOLDER_NAME} di Google Drive!`);
+      setLastSyncTime(new Date().toLocaleTimeString("id-ID"));
+      await fetchDriveBackups(driveToken);
+    } catch (err: any) {
+      setDriveError(err?.message || "Gagal mengunggah backup ke Google Drive. Silakan hubungkan ulang akun Anda.");
+    } finally {
+      setIsSyncingDrive(false);
+    }
+  };
+
+  // Restore snapshot from Google Drive file
+  const handleRestoreFromDriveFile = async (file: GoogleDriveFileItem) => {
+    if (!driveToken) return;
+    if (confirm(`Apakah Anda yakin ingin memulihkan seluruh data aplikasi dari file backup "${file.name}"? Data saat ini akan digantikan.`)) {
+      setIsSyncingDrive(true);
+      setDriveError(null);
+      setDriveSuccessMsg(null);
+
+      try {
+        const backupData = await downloadBackupFromGoogleDrive(driveToken, file.id);
+        const success = restoreFullAppBackup(backupData);
+        if (success) {
+          setDriveSuccessMsg(`Seluruh data berhasil dipulihkan dari "${file.name}"!`);
+          onDataRestored();
+        } else {
+          setDriveError("Format isi file backup Google Drive tidak sesuai standar SlideExam.");
+        }
+      } catch (err: any) {
+        setDriveError(err?.message || "Gagal memulihkan file dari Google Drive.");
+      } finally {
+        setIsSyncingDrive(false);
+      }
+    }
+  };
+
+  // Local file download handler
   const handleDownloadBackupFile = () => {
     setIsBackingUp(true);
     try {
@@ -47,7 +200,7 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
       downloadAnchor.click();
       downloadAnchor.remove();
 
-      setBackupSuccessMsg("File backup JSON berhasil diunduh dan disinkronkan ke folder Google Drive lokal!");
+      setBackupSuccessMsg("File backup JSON berhasil diunduh ke komputer Anda!");
       setLastSyncTime(new Date().toLocaleTimeString("id-ID"));
     } catch (e: any) {
       alert("Gagal membuat backup: " + e.message);
@@ -56,6 +209,7 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
     }
   };
 
+  // Local file upload / restore handler
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -90,6 +244,14 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
     }
   };
 
+  const handleDisconnectDrive = () => {
+    setDriveToken("");
+    localStorage.removeItem("slideexam_gdrive_token");
+    setDriveFiles([]);
+    setDriveFolderId(null);
+    setDriveSuccessMsg("Koneksi Google Drive berhasil diputuskan.");
+  };
+
   return (
     <div id="backup-restore-view" className="space-y-6">
       {/* Top Banner */}
@@ -101,23 +263,53 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
           </div>
           <h2 className="text-xl sm:text-2xl font-bold text-white mt-1">Backup & Restore Google Drive</h2>
           <p className="text-xs text-slate-400 mt-1">
-            Amankan seluruh bank soal, nilai siswa, analisis butir soal, dan token dalam 1 folder khusus.
+            Simpan otomatis seluruh bank naskah soal, rekap penilaian siswa, dan token ke folder khusus Google Drive.
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={handleUploadToGoogleDrive}
+            disabled={isSyncingDrive}
+            className="flex items-center gap-1.5 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold transition-all shadow-lg shadow-emerald-950 cursor-pointer disabled:opacity-50"
+          >
+            <CloudUpload className="w-4 h-4" />
+            <span>{isSyncingDrive ? "Menyimpan ke Drive..." : "Backup ke Google Drive"}</span>
+          </button>
+
           <button
             onClick={handleDownloadBackupFile}
-            className="flex items-center gap-1.5 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition-all shadow-lg shadow-indigo-950 cursor-pointer"
+            className="flex items-center gap-1.5 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition-all shadow-lg shadow-indigo-950 cursor-pointer"
           >
             <Download className="w-4 h-4" />
-            <span>Unduh Backup Sekarang</span>
+            <span>Unduh File JSON</span>
           </button>
         </div>
       </div>
 
+      {/* Notifications */}
+      {driveSuccessMsg && (
+        <div className="p-3.5 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl text-emerald-400 text-xs flex items-center justify-between gap-2 animate-in fade-in">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <span>{driveSuccessMsg}</span>
+          </div>
+          <button onClick={() => setDriveSuccessMsg(null)} className="text-emerald-400 hover:text-white text-xs font-bold">✕</button>
+        </div>
+      )}
+
+      {driveError && (
+        <div className="p-3.5 bg-rose-500/10 border border-rose-500/30 rounded-2xl text-rose-400 text-xs flex items-center justify-between gap-2 animate-in fade-in">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span>{driveError}</span>
+          </div>
+          <button onClick={() => setDriveError(null)} className="text-rose-400 hover:text-white text-xs font-bold">✕</button>
+        </div>
+      )}
+
       {/* Google Drive Dedicated Folder Indicator */}
-      <div className="bg-[#121214] border border-slate-800 rounded-3xl p-6 sm:p-8 text-white shadow-lg space-y-4">
+      <div className="bg-[#121214] border border-slate-800 rounded-3xl p-6 sm:p-8 text-white shadow-lg space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3.5">
             <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
@@ -125,37 +317,119 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
             </div>
             <div>
               <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                Folder Khusus Sinkronisasi
+                Folder Utama Sinkronisasi Google Drive
               </div>
-              <h3 className="text-xl sm:text-2xl font-bold font-mono tracking-wide text-white">{folderName}</h3>
+              <h3 className="text-xl sm:text-2xl font-bold font-mono tracking-wide text-white">
+                {GOOGLE_DRIVE_BACKUP_FOLDER_NAME}
+              </h3>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-full text-xs font-medium flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span>Auto-Backup Aktif</span>
-            </span>
+            {driveToken ? (
+              <div className="flex items-center gap-2">
+                <span className="px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-full text-xs font-medium flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <span>Google Drive Terhubung</span>
+                </span>
+                <button
+                  onClick={handleDisconnectDrive}
+                  className="px-2.5 py-1 text-slate-400 hover:text-rose-400 text-xs font-semibold cursor-pointer"
+                  title="Putuskan Hubungan Google Drive"
+                >
+                  Putuskan
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={handleConnectGoogleDrive}
+                disabled={isConnectingDrive}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer"
+              >
+                <Cloud className="w-4 h-4" />
+                <span>{isConnectingDrive ? "Menghubungkan..." : "Hubungkan Google Drive"}</span>
+              </button>
+            )}
           </div>
         </div>
 
         <p className="text-xs text-slate-300 leading-relaxed max-w-2xl">
-          Seluruh data soal, skor penilaian otomatis, dan analisis jawaban tersimpan rapi dan dapat disalin ke folder <strong className="text-indigo-300">{folderName}</strong> di Google Drive Anda untuk kemudahan arsip kurikulum dan akreditasi sekolah.
+          Aplikasi hanya menyimpan data cadangan ke folder khusus bernama <strong className="text-indigo-300 font-mono">{GOOGLE_DRIVE_BACKUP_FOLDER_NAME}</strong> di Google Drive Anda. Aplikasi tidak akan membuat folder lain untuk menjaga kerapian penyimpanan Drive Anda.
         </p>
 
-        <div className="text-[11px] text-slate-400 font-mono">
-          Sinkronisasi Terakhir: {lastSyncTime} WIB
+        {/* Cloud Backups File List */}
+        <div className="pt-2 border-t border-slate-800 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+              <FolderOpen className="w-4 h-4 text-indigo-400" />
+              <span>Daftar File Backup di Folder Google Drive ({driveFiles.length} File)</span>
+            </div>
+
+            {driveToken && (
+              <button
+                onClick={() => fetchDriveBackups(driveToken)}
+                disabled={isLoadingFileList}
+                className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold flex items-center gap-1 cursor-pointer"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isLoadingFileList ? "animate-spin" : ""}`} />
+                <span>Segarkan</span>
+              </button>
+            )}
+          </div>
+
+          {isLoadingFileList ? (
+            <div className="py-8 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
+              <RefreshCw className="w-4 h-4 animate-spin text-indigo-400" />
+              <span>Memuat file backup dari folder Google Drive...</span>
+            </div>
+          ) : driveFiles.length === 0 ? (
+            <div className="p-5 rounded-2xl bg-[#161618] border border-slate-800 text-center text-xs text-slate-400">
+              {driveToken
+                ? "Belum ada file backup di folder SlideExam_CBT. Klik 'Backup ke Google Drive' untuk mengunggah cadangan pertama."
+                : "Hubungkan akun Google Drive untuk melihat dan memulihkan arsip data dari cloud."}
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-60 overflow-y-auto">
+              {driveFiles.map((f) => (
+                <div
+                  key={f.id}
+                  className="p-3.5 bg-[#161618] border border-slate-800 rounded-xl flex items-center justify-between gap-3 text-xs hover:border-slate-700 transition-colors"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="p-2 bg-indigo-500/10 text-indigo-400 rounded-lg">
+                      <FileJson className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="font-semibold text-white font-mono text-xs">{f.name}</div>
+                      <div className="text-[11px] text-slate-400">
+                        Dibuat: {f.createdTime ? new Date(f.createdTime).toLocaleString("id-ID") : "-"}
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => handleRestoreFromDriveFile(f)}
+                    disabled={isSyncingDrive}
+                    className="px-3 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 border border-emerald-500/30 rounded-lg text-[11px] font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <CloudDownload className="w-3.5 h-3.5" />
+                    <span>Pulihkan dari File Ini</span>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Action Grid: Backup vs Restore */}
+      {/* Action Grid: Local Backup vs Restore */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Backup Card */}
         <div className="bg-[#121214] rounded-2xl p-6 border border-slate-800 shadow-sm space-y-4 flex flex-col justify-between">
           <div className="space-y-3">
             <div className="flex items-center gap-2 text-white font-bold text-sm">
               <Database className="w-4 h-4 text-indigo-400" />
-              <span>1. Ekspor Cadangan Data (Backup)</span>
+              <span>1. Ekspor Snapshot JSON Offline</span>
             </div>
             <p className="text-xs text-slate-400 leading-relaxed">
               Membuat snapshot lengkap berisi seluruh paket soal ujian, profil sekolah, logo, kunci jawaban, dan histori nilai seluruh siswa dalam file JSON terenkripsi standar.
@@ -175,7 +449,7 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
             className="w-full py-3 bg-[#1a1a1c] hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-xl font-semibold text-xs shadow-sm transition-all cursor-pointer flex items-center justify-center gap-2"
           >
             <Download className="w-4 h-4 text-indigo-400" />
-            <span>{isBackingUp ? "Mengekspor Data..." : "Unduh Snapshot Data (.json)"}</span>
+            <span>{isBackingUp ? "Mengekspor Data..." : "Unduh File Backup (.json)"}</span>
           </button>
         </div>
 
@@ -184,7 +458,7 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
           <div className="space-y-3">
             <div className="flex items-center gap-2 text-white font-bold text-sm">
               <Upload className="w-4 h-4 text-emerald-400" />
-              <span>2. Pulihkan Cadangan Data (Restore)</span>
+              <span>2. Pulihkan dari File JSON Lokal</span>
             </div>
             <p className="text-xs text-slate-400 leading-relaxed">
               Unggah file cadangan <code className="bg-[#1a1a1c] px-1.5 py-0.5 rounded text-indigo-300 font-mono">.json</code> yang telah diunduh sebelumnya untuk mengembalikan seluruh naskah soal dan hasil pengerjaan siswa.

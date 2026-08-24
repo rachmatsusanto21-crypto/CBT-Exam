@@ -43,7 +43,8 @@ import {
   GraduationCap,
   Calendar,
   CalendarDays,
-  Bookmark
+  Bookmark,
+  FlaskConical
 } from "lucide-react";
 import { ExamPackage, Question, QuestionOption, QuestionType, MatchingPair, SchoolProfile } from "../types";
 import { generateQuestionsWithGemini, generateImageWithAi } from "../utils/geminiApi";
@@ -66,6 +67,7 @@ interface AIGeneratorAndEditorProps {
   activeExam: ExamPackage;
   onUpdateExam: (updated: ExamPackage) => void;
   onPreviewSlides: () => void;
+  onStartTeacherTrial?: () => void;
   onOpenGeminiModal?: () => void;
   activeToken?: string;
   school?: SchoolProfile;
@@ -81,6 +83,7 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
   activeExam,
   onUpdateExam,
   onPreviewSlides,
+  onStartTeacherTrial,
   onOpenGeminiModal,
   activeToken,
   school,
@@ -868,6 +871,19 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
             <Save className="w-4 h-4" />
             <span>Simpan Soal</span>
           </button>
+
+          {/* Teacher Sandbox Trial Button */}
+          {onStartTeacherTrial && (
+            <button
+              id="teacher-trial-cbt-btn"
+              onClick={onStartTeacherTrial}
+              className="flex items-center gap-1.5 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl font-bold text-xs transition-all shadow-lg shadow-amber-950 cursor-pointer"
+              title="Uji Coba Pengerjaan CBT bagi Guru (Hasil & analisis butir tidak dimasukkan ke sistem pengolahan nilai siswa)"
+            >
+              <FlaskConical className="w-4 h-4" />
+              <span>Uji Coba CBT Guru</span>
+            </button>
+          )}
 
           {/* Apply & Preview Slides CBT */}
           <button
