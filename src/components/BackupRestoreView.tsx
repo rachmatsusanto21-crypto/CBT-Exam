@@ -18,7 +18,9 @@ import {
   CloudDownload,
   FileText,
   ShieldCheck,
-  Check
+  Check,
+  LogOut,
+  User as UserIcon
 } from "lucide-react";
 import { AppStateBackup } from "../types";
 import { createFullAppBackup, restoreFullAppBackup, resetToDefaultData } from "../utils/storage";
@@ -30,25 +32,22 @@ import {
   listBackupsFromGoogleDrive,
   downloadBackupFromGoogleDrive,
 } from "../utils/googleDrive";
+import {
+  googleSignIn,
+  googleSignOut,
+  initAuth,
+  getCachedAccessToken,
+} from "../utils/googleAuth";
+import { User } from "firebase/auth";
 
 interface BackupRestoreViewProps {
   onDataRestored: () => void;
 }
 
-declare global {
-  interface Window {
-    google?: any;
-  }
-}
-
 export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRestored }) => {
-  // Google Drive State
-  const [driveToken, setDriveToken] = useState<string>(() => {
-    if (typeof window !== "undefined") {
-      return localStorage.getItem("slideexam_gdrive_token") || "";
-    }
-    return "";
-  });
+  // Google Drive & Auth State
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [driveToken, setDriveToken] = useState<string>(() => getCachedAccessToken() || "");
   const [isConnectingDrive, setIsConnectingDrive] = useState(false);
   const [isSyncingDrive, setIsSyncingDrive] = useState(false);
   const [isLoadingFileList, setIsLoadingFileList] = useState(false);
@@ -66,6 +65,21 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Initialize Auth listener on mount
+  useEffect(() => {
+    const unsubscribe = initAuth(
+      (user, token) => {
+        setCurrentUser(user);
+        setDriveToken(token);
+      },
+      () => {
+        setCurrentUser(null);
+        setDriveToken("");
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
   // Refresh Google Drive file list if token available
   const fetchDriveBackups = async (token: string) => {
     if (!token) return;
@@ -77,7 +91,7 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
       const files = await listBackupsFromGoogleDrive(token);
       setDriveFiles(files);
     } catch (err: any) {
-      setDriveError(err?.message || "Gagal menyinkronkan dengan Google Drive. Token mungkin telah kadaluarsa.");
+      setDriveError(err?.message || "Gagal menyinkronkan dengan Google Drive. Sesi mungkin telah berakhir.");
     } finally {
       setIsLoadingFileList(false);
     }
@@ -89,56 +103,30 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
     }
   }, [driveToken]);
 
-  // Handle Google Drive OAuth Connect via Google Identity Services
-  const handleConnectGoogleDrive = () => {
+  // Handle Google Sign In popup with Firebase OAuth
+  const handleConnectGoogleDrive = async () => {
     setIsConnectingDrive(true);
     setDriveError(null);
-
     try {
-      if (typeof window !== "undefined" && window.google?.accounts?.oauth2) {
-        const client = window.google.accounts.oauth2.initTokenClient({
-          client_id: "143661645217-p2l3n7g3fklg4o4j1j6f9h7m9.apps.googleusercontent.com", // client id or request scope
-          scope: "https://www.googleapis.com/auth/drive.file",
-          callback: (response: any) => {
-            setIsConnectingDrive(false);
-            if (response.error) {
-              setDriveError(`Otorisasi Google Drive ditolak: ${response.error}`);
-              return;
-            }
-            if (response.access_token) {
-              const token = response.access_token;
-              setDriveToken(token);
-              localStorage.setItem("slideexam_gdrive_token", token);
-              setDriveSuccessMsg("Berhasil terhubung ke akun Google Drive Anda!");
-              fetchDriveBackups(token);
-            }
-          },
-        });
-        client.requestAccessToken();
-      } else {
-        // Fallback prompt for token
-        const inputToken = prompt(
-          "Google Identity Client sedang dimuat. Anda dapat menempelkan Google OAuth Access Token di sini jika ingin menghubungkan manual:"
-        );
-        if (inputToken && inputToken.trim()) {
-          const t = inputToken.trim();
-          setDriveToken(t);
-          localStorage.setItem("slideexam_gdrive_token", t);
-          setDriveSuccessMsg("Token Google Drive disimpan!");
-          fetchDriveBackups(t);
-        }
-        setIsConnectingDrive(false);
+      const result = await googleSignIn();
+      if (result) {
+        setCurrentUser(result.user);
+        setDriveToken(result.accessToken);
+        setDriveSuccessMsg(`Berhasil terhubung sebagai ${result.user.displayName || result.user.email || "Pengguna"}!`);
+        await fetchDriveBackups(result.accessToken);
       }
     } catch (err: any) {
+      console.error("Google Auth error:", err);
+      setDriveError(err?.message || "Gagal login dengan Google. Pastikan pop-up diizinkan.");
+    } finally {
       setIsConnectingDrive(false);
-      setDriveError(err?.message || "Gagal menginisialisasi Google Drive OAuth.");
     }
   };
 
   // Upload Snapshot directly to Google Drive Folder 'SlideExam_CBT'
   const handleUploadToGoogleDrive = async () => {
     if (!driveToken) {
-      handleConnectGoogleDrive();
+      await handleConnectGoogleDrive();
       return;
     }
 
@@ -244,9 +232,10 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
     }
   };
 
-  const handleDisconnectDrive = () => {
+  const handleDisconnectDrive = async () => {
+    await googleSignOut();
+    setCurrentUser(null);
     setDriveToken("");
-    localStorage.removeItem("slideexam_gdrive_token");
     setDriveFiles([]);
     setDriveFolderId(null);
     setDriveSuccessMsg("Koneksi Google Drive berhasil diputuskan.");
@@ -326,28 +315,43 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
           </div>
 
           <div className="flex items-center gap-2">
-            {driveToken ? (
-              <div className="flex items-center gap-2">
-                <span className="px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-full text-xs font-medium flex items-center gap-1.5">
+            {currentUser && driveToken ? (
+              <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-xl">
+                  {currentUser.photoURL ? (
+                    <img src={currentUser.photoURL} alt="Avatar" className="w-5 h-5 rounded-full" referrerPolicy="no-referrer" />
+                  ) : (
+                    <UserIcon className="w-4 h-4 text-slate-400" />
+                  )}
+                  <span className="text-xs text-slate-200 font-medium truncate max-w-[140px]">
+                    {currentUser.displayName || currentUser.email}
+                  </span>
+                </div>
+                <span className="px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-xl text-xs font-medium flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                   <span>Google Drive Terhubung</span>
                 </span>
                 <button
                   onClick={handleDisconnectDrive}
-                  className="px-2.5 py-1 text-slate-400 hover:text-rose-400 text-xs font-semibold cursor-pointer"
-                  title="Putuskan Hubungan Google Drive"
+                  className="p-2 text-slate-400 hover:text-rose-400 bg-slate-900 hover:bg-slate-800 rounded-xl border border-slate-800 text-xs font-semibold cursor-pointer transition-colors"
+                  title="Putuskan Hubungan Akun Google"
                 >
-                  Putuskan
+                  <LogOut className="w-4 h-4" />
                 </button>
               </div>
             ) : (
               <button
                 onClick={handleConnectGoogleDrive}
                 disabled={isConnectingDrive}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-2 cursor-pointer"
+                className="flex items-center gap-2.5 px-4 py-2.5 bg-white hover:bg-slate-100 text-slate-900 rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer border border-slate-200 disabled:opacity-50"
               >
-                <Cloud className="w-4 h-4" />
-                <span>{isConnectingDrive ? "Menghubungkan..." : "Hubungkan Google Drive"}</span>
+                <svg className="w-4 h-4" viewBox="0 0 48 48">
+                  <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"></path>
+                  <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"></path>
+                  <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"></path>
+                  <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"></path>
+                </svg>
+                <span>{isConnectingDrive ? "Menghubungkan Akun..." : "Sign in with Google"}</span>
               </button>
             )}
           </div>
@@ -448,8 +452,8 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
             disabled={isBackingUp}
             className="w-full py-3 bg-[#1a1a1c] hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-xl font-semibold text-xs shadow-sm transition-all cursor-pointer flex items-center justify-center gap-2"
           >
-            <Download className="w-4 h-4 text-indigo-400" />
-            <span>{isBackingUp ? "Mengekspor Data..." : "Unduh File Backup (.json)"}</span>
+            <Download className="w-4 h-4" />
+            <span>{isBackingUp ? "Menyiapkan File..." : "Unduh Snapshot JSON (.json)"}</span>
           </button>
         </div>
 
@@ -457,24 +461,24 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
         <div className="bg-[#121214] rounded-2xl p-6 border border-slate-800 shadow-sm space-y-4 flex flex-col justify-between">
           <div className="space-y-3">
             <div className="flex items-center gap-2 text-white font-bold text-sm">
-              <Upload className="w-4 h-4 text-emerald-400" />
-              <span>2. Pulihkan dari File JSON Lokal</span>
+              <Upload className="w-4 h-4 text-amber-400" />
+              <span>2. Pulihkan (Restore) dari File JSON</span>
             </div>
             <p className="text-xs text-slate-400 leading-relaxed">
-              Unggah file cadangan <code className="bg-[#1a1a1c] px-1.5 py-0.5 rounded text-indigo-300 font-mono">.json</code> yang telah diunduh sebelumnya untuk mengembalikan seluruh naskah soal dan hasil pengerjaan siswa.
+              Unggah file cadangan JSON yang pernah diunduh sebelumnya untuk mengembalikan seluruh naskah soal dan data nilai siswa ke perangkat ini.
             </p>
-
-            {restoreError && (
-              <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-xs flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                <span>{restoreError}</span>
-              </div>
-            )}
 
             {restoreSuccessMsg && (
               <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-emerald-400 text-xs flex items-start gap-2">
                 <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
                 <span>{restoreSuccessMsg}</span>
+              </div>
+            )}
+
+            {restoreError && (
+              <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-xs flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>{restoreError}</span>
               </div>
             )}
           </div>
@@ -483,38 +487,39 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
             <input
               type="file"
               ref={fileInputRef}
-              accept=".json"
               onChange={handleFileChange}
+              accept=".json"
               className="hidden"
             />
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-semibold text-xs shadow-lg shadow-emerald-950 transition-all cursor-pointer flex items-center justify-center gap-2"
+              className="w-full py-3 bg-amber-600 hover:bg-amber-500 text-white rounded-xl font-bold text-xs shadow-lg shadow-amber-950/40 transition-all cursor-pointer flex items-center justify-center gap-2"
             >
               <Upload className="w-4 h-4" />
-              <span>Pilih File Backup JSON untuk Dipulihkan</span>
+              <span>Pilih File Backup JSON</span>
             </button>
           </div>
         </div>
       </div>
 
-      {/* Danger Zone: Reset Data */}
-      <div className="bg-rose-500/5 rounded-2xl p-5 border border-rose-500/20 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+      {/* Danger Zone: Reset to Default */}
+      <div className="p-5 bg-rose-950/20 border border-rose-500/20 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
-          <h4 className="text-xs font-bold text-rose-300 flex items-center gap-1.5">
-            <RotateCcw className="w-4 h-4 text-rose-400" />
-            <span>Reset Konfigurasi Aplikasi</span>
-          </h4>
-          <p className="text-[11px] text-slate-400 mt-0.5">
-            Kembalikan naskah soal, profil sekolah, dan token ke data percontohan bawaan sistem.
+          <div className="text-xs font-bold text-rose-400 uppercase tracking-wider flex items-center gap-1.5">
+            <AlertTriangle className="w-4 h-4" />
+            <span>Zona Pengaturan Ulang Sistem</span>
+          </div>
+          <p className="text-xs text-slate-400 mt-1">
+            Menghapus cache lokal dan mengembalikan aplikasi ke naskah soal & contoh bawaan.
           </p>
         </div>
 
         <button
           onClick={handleResetDefaults}
-          className="px-4 py-2 bg-rose-600/80 hover:bg-rose-600 text-white rounded-xl text-xs font-semibold transition-all cursor-pointer shadow-xs"
+          className="px-4 py-2.5 bg-rose-600/20 hover:bg-rose-600/40 text-rose-300 border border-rose-500/30 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0"
         >
-          Reset ke Data Bawaan
+          <RotateCcw className="w-3.5 h-3.5" />
+          <span>Reset ke Data Awal</span>
         </button>
       </div>
     </div>

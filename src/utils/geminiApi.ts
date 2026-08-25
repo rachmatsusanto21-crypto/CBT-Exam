@@ -159,7 +159,7 @@ export async function testGeminiConnection(keyToTest?: string): Promise<GeminiTe
     try {
       const ai = new GoogleGenAI({ apiKey: key });
       const response = await ai.models.generateContent({
-        model: "gemini-3.7-flash",
+        model: "gemini-2.5-flash",
         contents: "Balas dengan tepat satu kata: Siap.",
         config: {
           systemInstruction: "Anda adalah asisten AI penguji koneksi.",
@@ -246,7 +246,7 @@ Ketentuan SVG:
 - Lengkapi dengan label teks penjelas yang jelas dan panah jika perlu.`;
 
       const response = await ai.models.generateContent({
-        model: "gemini-3.7-flash",
+        model: "gemini-2.5-flash",
         contents: svgPrompt,
         config: {
           systemInstruction:
@@ -368,7 +368,7 @@ Buatlah ${params.count} butir soal ujian dengan ketentuan:
 Kembalikan format JSON yang valid persis sesuai skema yang diminta.`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.7-flash",
+      model: "gemini-2.5-flash",
       contents: prompt,
       config: {
         systemInstruction:
@@ -512,7 +512,7 @@ Berikan:
 3. Kalimat motivasi apresiatif dan membangkitkan semangat belajar siswa.`;
 
       const response = await ai.models.generateContent({
-        model: "gemini-3.7-flash",
+        model: "gemini-2.5-flash",
         contents: prompt,
         config: {
           systemInstruction:

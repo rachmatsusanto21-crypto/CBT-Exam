@@ -46,8 +46,12 @@ async function callGeminiWithResilience(
   }
 ) {
   const models = [
-    params.preferredModel || "gemini-3.7-flash",
-    ...(params.fallbackModels || ["gemini-flash-latest", "gemini-3.1-flash-lite"]),
+    params.preferredModel || "gemini-2.5-flash",
+    ...(params.fallbackModels || [
+      "gemini-2.5-flash-lite",
+      "gemini-3.7-flash",
+      "gemini-3.1-flash-lite",
+    ]),
   ];
   const maxRetries = params.maxRetries ?? 2;
   let lastError: any = null;
@@ -152,8 +156,8 @@ app.post("/api/gemini/test-connection", async (req, res) => {
     const ai = getGeminiClient(customKey);
 
     const { response, modelUsed } = await callGeminiWithResilience(ai, {
-      preferredModel: "gemini-3.7-flash",
-      fallbackModels: ["gemini-flash-latest", "gemini-3.1-flash-lite"],
+      preferredModel: "gemini-2.5-flash",
+      fallbackModels: ["gemini-2.5-flash-lite", "gemini-3.7-flash", "gemini-3.1-flash-lite"],
       contents: "Balas dengan tepat satu kata: Siap.",
       config: {
         systemInstruction: "Anda adalah asisten AI pemeriksa status koneksi.",
@@ -219,8 +223,8 @@ Buatlah ${count} butir soal ujian dengan ketentuan:
 Kembalikan format JSON yang valid persis sesuai skema yang diminta.`;
 
     const { response, modelUsed } = await callGeminiWithResilience(ai, {
-      preferredModel: "gemini-3.7-flash",
-      fallbackModels: ["gemini-flash-latest", "gemini-3.1-flash-lite"],
+      preferredModel: "gemini-2.5-flash",
+      fallbackModels: ["gemini-2.5-flash-lite", "gemini-3.7-flash", "gemini-3.1-flash-lite"],
       contents: prompt,
       config: {
         systemInstruction:
@@ -408,8 +412,8 @@ Berikan:
 3. Kalimat motivasi apresiatif dan membangkitkan semangat belajar siswa.`;
 
     const { response, modelUsed } = await callGeminiWithResilience(ai, {
-      preferredModel: "gemini-3.7-flash",
-      fallbackModels: ["gemini-flash-latest", "gemini-3.1-flash-lite"],
+      preferredModel: "gemini-2.5-flash",
+      fallbackModels: ["gemini-2.5-flash-lite", "gemini-3.7-flash", "gemini-3.1-flash-lite"],
       contents: prompt,
       config: {
         systemInstruction: "Anda adalah guru konselor dan evaluator pedagogik yang hangat, memotivasi, dan memberikan saran praktis bagi kemajuan belajar siswa.",
