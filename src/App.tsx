@@ -141,12 +141,24 @@ export default function App() {
   const handleUpdateSchool = (updated: SchoolProfile) => {
     setSchoolProfileState(updated);
     saveSchoolProfile(updated);
+    // Automatically propagate updated school profile (including principalName and principalNIP) to all exam packages
+    const updatedExams = exams.map((e) => ({
+      ...e,
+      schoolProfile: updated,
+    }));
+    setExamsState(updatedExams);
+    saveExamPackages(updatedExams);
   };
 
   const handleUpdateActiveExam = (updated: ExamPackage) => {
     const updatedExams = exams.map((e) => (e.id === updated.id ? updated : e));
     setExamsState(updatedExams);
     saveExamPackages(updatedExams);
+    // If the exam package contains an updated schoolProfile, sync it globally as well
+    if (updated.schoolProfile) {
+      setSchoolProfileState(updated.schoolProfile);
+      saveSchoolProfile(updated.schoolProfile);
+    }
   };
 
   const handleCreateNewExam = () => {
@@ -541,6 +553,11 @@ export default function App() {
             tokens={tokens}
             onForceSubmitStudent={handleForceSubmitStudent}
             onResetStudentSession={handleResetStudentSession}
+            onUpdateHistory={(updatedHistory) => {
+              setHistoryState(updatedHistory);
+              saveExamHistory(updatedHistory);
+            }}
+            onUpdateTokens={handleUpdateTokens}
           />
         )}
 

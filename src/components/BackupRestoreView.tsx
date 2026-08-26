@@ -20,7 +20,12 @@ import {
   ShieldCheck,
   Check,
   LogOut,
-  User as UserIcon
+  User as UserIcon,
+  Copy,
+  ExternalLink,
+  ShieldAlert,
+  Sparkles,
+  Info
 } from "lucide-react";
 import { AppStateBackup } from "../types";
 import { createFullAppBackup, restoreFullAppBackup, resetToDefaultData } from "../utils/storage";
@@ -37,6 +42,8 @@ import {
   googleSignOut,
   initAuth,
   getCachedAccessToken,
+  getFirebaseConfigData,
+  requestGoogleTokenViaGIS,
 } from "../utils/googleAuth";
 import { User } from "firebase/auth";
 
@@ -46,7 +53,7 @@ interface BackupRestoreViewProps {
 
 export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRestored }) => {
   // Google Drive & Auth State
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [currentUser, setCurrentUser] = useState<User | any | null>(null);
   const [driveToken, setDriveToken] = useState<string>(() => getCachedAccessToken() || "");
   const [isConnectingDrive, setIsConnectingDrive] = useState(false);
   const [isSyncingDrive, setIsSyncingDrive] = useState(false);
@@ -55,6 +62,13 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
   const [driveFolderId, setDriveFolderId] = useState<string | null>(null);
   const [driveError, setDriveError] = useState<string | null>(null);
   const [driveSuccessMsg, setDriveSuccessMsg] = useState<string | null>(null);
+
+  // Unauthorized Domain Guidance State
+  const [unauthDomainInfo, setUnauthDomainInfo] = useState<{
+    hostname: string;
+    projectId: string;
+  } | null>(null);
+  const [copiedHostname, setCopiedHostname] = useState(false);
 
   // Local JSON Backup State
   const [isBackingUp, setIsBackingUp] = useState(false);
@@ -107,6 +121,7 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
   const handleConnectGoogleDrive = async () => {
     setIsConnectingDrive(true);
     setDriveError(null);
+    setUnauthDomainInfo(null);
     try {
       const result = await googleSignIn();
       if (result) {
@@ -117,7 +132,54 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
       }
     } catch (err: any) {
       console.error("Google Auth error:", err);
-      setDriveError(err?.message || "Gagal login dengan Google. Pastikan pop-up diizinkan.");
+      const isUnauth =
+        err?.code === "auth/unauthorized-domain" ||
+        err?.message?.includes("auth/unauthorized-domain") ||
+        err?.message?.includes("unauthorized-domain");
+
+      if (isUnauth) {
+        const config = getFirebaseConfigData();
+        const currentHost = typeof window !== "undefined" ? window.location.hostname : "localhost";
+        setUnauthDomainInfo({
+          hostname: currentHost,
+          projectId: config.projectId || "gen-lang-client-0464440670",
+        });
+        setDriveError(`Domain aplikasi (${currentHost}) belum terdaftar di Firebase Authorized Domains.`);
+      } else {
+        setDriveError(err?.message || "Gagal login dengan Google. Pastikan pop-up diizinkan.");
+      }
+    } finally {
+      setIsConnectingDrive(false);
+    }
+  };
+
+  const handleCopyHostname = () => {
+    if (!unauthDomainInfo) return;
+    navigator.clipboard.writeText(unauthDomainInfo.hostname);
+    setCopiedHostname(true);
+    setTimeout(() => setCopiedHostname(false), 3000);
+  };
+
+  // Alternative GIS connection attempt
+  const handleTryGisDirect = async () => {
+    const config = getFirebaseConfigData();
+    if (!config.oAuthClientId) {
+      alert("OAuth Client ID belum terkonfigurasi di aplikasi.");
+      return;
+    }
+    setIsConnectingDrive(true);
+    setDriveError(null);
+    try {
+      const res = await requestGoogleTokenViaGIS(config.oAuthClientId);
+      if (res && res.accessToken) {
+        setCurrentUser(res.user);
+        setDriveToken(res.accessToken);
+        setUnauthDomainInfo(null);
+        setDriveSuccessMsg(`Berhasil terhubung via Google Identity Services sebagai ${res.user.displayName || "Pengguna"}!`);
+        await fetchDriveBackups(res.accessToken);
+      }
+    } catch (e: any) {
+      setDriveError(e.message || "Gagal melakukan otentikasi Google GIS.");
     } finally {
       setIsConnectingDrive(false);
     }
@@ -294,6 +356,82 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
             <span>{driveError}</span>
           </div>
           <button onClick={() => setDriveError(null)} className="text-rose-400 hover:text-white text-xs font-bold">✕</button>
+        </div>
+      )}
+
+      {/* Firebase Unauthorized Domain Assistance Card */}
+      {unauthDomainInfo && (
+        <div className="bg-amber-950/20 border border-amber-500/30 rounded-2xl p-5 text-amber-200 text-xs space-y-3.5 animate-in fade-in">
+          <div className="flex items-start gap-3">
+            <ShieldAlert className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <h4 className="font-bold text-amber-300 text-sm">
+                Panduan Mengatasi Error (auth/unauthorized-domain)
+              </h4>
+              <p className="text-amber-200/80 leading-relaxed">
+                Firebase Authentication memblokir domain baru secara bawaan demi keamanan. Untuk mengizinkan login Google di domain aplikasi Anda:
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-[#121214] border border-amber-500/20 rounded-xl p-3.5 space-y-2">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <span className="text-slate-400 text-[11px]">Domain / Hostname Saat Ini:</span>
+              <div className="flex items-center gap-2">
+                <code className="px-2.5 py-1 bg-amber-500/10 text-amber-300 font-mono font-bold rounded-lg border border-amber-500/30 text-xs">
+                  {unauthDomainInfo.hostname}
+                </code>
+                <button
+                  type="button"
+                  onClick={handleCopyHostname}
+                  className="flex items-center gap-1 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-[11px] font-semibold transition-colors cursor-pointer"
+                >
+                  {copiedHostname ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedHostname ? "Tersalin!" : "Salin Domain"}</span>
+                </button>
+              </div>
+            </div>
+
+            <ol className="list-decimal list-inside space-y-1.5 text-slate-300 pt-1 border-t border-slate-800 text-[11px]">
+              <li>
+                Buka <strong className="text-amber-300">Firebase Console</strong> &gt; <strong className="text-amber-300">Authentication</strong> &gt; <strong className="text-amber-300">Settings</strong> &gt; tab <strong className="text-amber-300">Authorized domains</strong>.
+              </li>
+              <li>
+                Klik tombol <strong className="text-white">"Add domain"</strong>.
+              </li>
+              <li>
+                Tempelkan domain <code className="text-amber-300 font-mono font-semibold">{unauthDomainInfo.hostname}</code> lalu klik <strong className="text-white">Save</strong>.
+              </li>
+            </ol>
+          </div>
+
+          <div className="flex items-center gap-3 flex-wrap pt-1">
+            <a
+              href={`https://console.firebase.google.com/project/${unauthDomainInfo.projectId}/authentication/settings`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-xl font-semibold text-xs transition-colors"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              <span>Buka Firebase Console Authorized Domains</span>
+            </a>
+
+            <button
+              type="button"
+              onClick={handleTryGisDirect}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl font-semibold text-xs transition-colors cursor-pointer"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Coba Login Google Identity Services (Direct)</span>
+            </button>
+          </div>
+
+          <div className="p-2.5 bg-indigo-950/30 border border-indigo-500/20 rounded-xl text-indigo-200 text-[11px] flex items-center gap-2">
+            <Info className="w-4 h-4 text-indigo-400 shrink-0" />
+            <span>
+              <strong>Alternatif 100% Offline:</strong> Anda dapat langsung menggunakan tombol <strong>"Unduh File JSON"</strong> di bawah untuk menyimpan seluruh backup data lengkap ke laptop Anda tanpa membutuhkan konfigurasi Firebase!
+            </span>
+          </div>
         </div>
       )}
 

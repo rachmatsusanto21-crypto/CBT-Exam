@@ -104,22 +104,25 @@ export const createNewExamPackage = (title: string = "Ujian Baru"): ExamPackage 
   const newId = `exam-${Date.now()}`;
   const code = "EXAM-" + Math.floor(100 + Math.random() * 900);
   const sessionToken = "TOKEN" + Math.floor(10 + Math.random() * 90);
+  const existingExams = getExamPackages();
+  const school = getSchoolProfile();
+  const lastTeacher = existingExams[0]?.teacherProfile || sampleInitialExam.teacherProfile;
 
   return {
     id: newId,
     code,
     title,
-    schoolProfile: getSchoolProfile(),
+    schoolProfile: school,
     teacherProfile: {
-      teacherName: "Guru Pengampu",
-      teacherNIP: "198501012010011002",
-      subject: "Mata Pelajaran",
-      subjectCode: "MAPEL-01",
-      gradeLevel: "Kelas X",
-      academicYear: "2025/2026",
-      semester: "Genap",
-      passingGrade: 75,
-      durationMinutes: 45,
+      teacherName: lastTeacher.teacherName || "Guru Pengampu",
+      teacherNIP: lastTeacher.teacherNIP || "-",
+      subject: lastTeacher.subject || "Mata Pelajaran",
+      subjectCode: lastTeacher.subjectCode || code,
+      gradeLevel: lastTeacher.gradeLevel || "Kelas X",
+      academicYear: lastTeacher.academicYear || "2025/2026",
+      semester: lastTeacher.semester || "Ganjil",
+      passingGrade: lastTeacher.passingGrade || 75,
+      durationMinutes: lastTeacher.durationMinutes || 45,
     },
     questions: [
       {

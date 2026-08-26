@@ -20,15 +20,22 @@ import {
   BellRing,
   X,
   UserPlus,
-  Send
+  Send,
+  Edit3,
+  Trash2,
+  CheckSquare,
+  Square,
+  Check,
+  RotateCcw
 } from "lucide-react";
 import { ExamPackage, SchoolProfile, StudentExamSession, StudentTokenItem } from "../types";
 import { exportGradebookToExcel, exportItemAnalysisToExcel } from "../utils/sheetExport";
 import { generateStudentExamPdfReport } from "../utils/studentPdfReport";
+import { LiveStudentEditModal, StudentRowItem } from "./LiveStudentEditModal";
 
 interface ToastNotification {
   id: string;
-  type: "start" | "submit" | "violation" | "info";
+  type: "start" | "submit" | "violation" | "info" | "action";
   title: string;
   message: string;
   studentName?: string;
@@ -43,6 +50,8 @@ interface LiveMonitoringDashboardProps {
   tokens: StudentTokenItem[];
   onForceSubmitStudent: (sessionId: string) => void;
   onResetStudentSession: (sessionId: string) => void;
+  onUpdateHistory?: (updatedHistory: StudentExamSession[]) => void;
+  onUpdateTokens?: (updatedTokens: StudentTokenItem[]) => void;
 }
 
 export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = ({
@@ -52,6 +61,8 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
   tokens,
   onForceSubmitStudent,
   onResetStudentSession,
+  onUpdateHistory,
+  onUpdateTokens,
 }) => {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterClass, setFilterClass] = useState("all");
@@ -59,6 +70,12 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
   const [showToastHistory, setShowToastHistory] = useState(false);
   const previousHistoryRef = useRef<StudentExamSession[]>(history);
+
+  // Selection & Supervisor Editing States
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [editingStudentRow, setEditingStudentRow] = useState<StudentRowItem | null>(null);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
 
   const addToast = (toast: Omit<ToastNotification, "id" | "time">) => {
     const newToast: ToastNotification = {
@@ -73,6 +90,16 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
     setTimeout(() => {
       setToasts((current) => current.filter((t) => t.id !== newToast.id));
     }, 6000);
+  };
+
+  const showActionFeedback = (msg: string) => {
+    setActionNotice(msg);
+    addToast({
+      type: "action",
+      title: "Aksi Pengawas Berhasil",
+      message: msg,
+    });
+    setTimeout(() => setActionNotice(null), 4000);
   };
 
   const removeToast = (id: string) => {
@@ -122,11 +149,11 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
     previousHistoryRef.current = history;
   }, [history, exam.id, exam.code]);
 
-  const examSessions = history.filter((s) => s.examId === exam.id);
+  const examSessions = history.filter((s) => s.examId === exam.id || s.examCode === exam.code);
 
   // Group tokens and active sessions
-  const studentRows = tokens
-    .filter((t) => t.examCode === exam.code)
+  const studentRows: StudentRowItem[] = tokens
+    .filter((t) => !t.examCode || t.examCode === exam.code)
     .map((tokenItem) => {
       const activeSession = examSessions.find((s) => s.token === tokenItem.token || s.nisn === tokenItem.nisn);
       return {
@@ -141,7 +168,7 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
       studentRows.push({
         tokenItem: {
           id: `dyn-${s.id}`,
-          examCode: s.examCode,
+          examCode: s.examCode || exam.code,
           token: s.token,
           studentName: s.studentName,
           nisn: s.nisn,
@@ -154,7 +181,7 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
     }
   });
 
-  const filteredRows = studentRows.filter(({ tokenItem, session }) => {
+  const filteredRows = studentRows.filter(({ tokenItem }) => {
     const nameMatch = tokenItem.studentName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       tokenItem.nisn.includes(searchQuery);
     const classMatch = filterClass === "all" || tokenItem.className === filterClass;
@@ -175,6 +202,177 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
 
   const uniqueClasses = Array.from(new Set(studentRows.map((r) => r.tokenItem.className)));
 
+  // --- SELECTION LOGIC ---
+  const isAllSelected = filteredRows.length > 0 && filteredRows.every((r) => selectedIds.has(r.tokenItem.id));
+  const isSomeSelected = selectedIds.size > 0;
+
+  const handleToggleSelectAll = () => {
+    if (isAllSelected) {
+      setSelectedIds(new Set());
+    } else {
+      const next = new Set<string>();
+      filteredRows.forEach((r) => next.add(r.tokenItem.id));
+      setSelectedIds(next);
+    }
+  };
+
+  const handleToggleSelectRow = (rowId: string) => {
+    const next = new Set(selectedIds);
+    if (next.has(rowId)) {
+      next.delete(rowId);
+    } else {
+      next.add(rowId);
+    }
+    setSelectedIds(next);
+  };
+
+  const handleClearSelection = () => {
+    setSelectedIds(new Set());
+  };
+
+  // --- SUPERVISOR ACTIONS: EDIT ---
+  const handleOpenEditModal = (row: StudentRowItem) => {
+    setEditingStudentRow(row);
+    setIsEditModalOpen(true);
+  };
+
+  const handleSaveStudentEdit = (updatedToken: StudentTokenItem, updatedSession: StudentExamSession | null) => {
+    // 1. Update token list if present
+    if (tokens.some((t) => t.id === updatedToken.id)) {
+      const updatedTokens = tokens.map((t) => (t.id === updatedToken.id ? updatedToken : t));
+      onUpdateTokens?.(updatedTokens);
+    } else if (!updatedToken.id.startsWith("dyn-")) {
+      // Add if new
+      onUpdateTokens?.([...tokens, updatedToken]);
+    }
+
+    // 2. Update exam history
+    if (updatedSession) {
+      const existingIdx = history.findIndex((h) => h.id === updatedSession.id);
+      let updatedHistory: StudentExamSession[];
+      if (existingIdx >= 0) {
+        updatedHistory = [...history];
+        updatedHistory[existingIdx] = updatedSession;
+      } else {
+        updatedHistory = [updatedSession, ...history];
+      }
+      onUpdateHistory?.(updatedHistory);
+    } else {
+      // If session was cleared (set to not started)
+      if (editingStudentRow?.session) {
+        const updatedHistory = history.filter((h) => h.id !== editingStudentRow.session?.id);
+        onUpdateHistory?.(updatedHistory);
+      }
+    }
+
+    showActionFeedback(`Data dan status pengerjaan siswa "${updatedToken.studentName}" berhasil diperbarui.`);
+  };
+
+  // --- SUPERVISOR ACTIONS: DELETE ---
+  const handleDeleteSingleStudent = (row: StudentRowItem) => {
+    const studentName = row.session?.studentName || row.tokenItem.studentName;
+    if (confirm(`Apakah Anda yakin ingin menghapus data siswa "${studentName}"? Riwayat sesi dan token terkait akan dihapus.`)) {
+      // Remove from history if session exists
+      if (row.session) {
+        const updatedHistory = history.filter((h) => h.id !== row.session?.id);
+        onUpdateHistory?.(updatedHistory);
+      }
+      // Remove from tokens if exists
+      if (tokens.some((t) => t.id === row.tokenItem.id)) {
+        const updatedTokens = tokens.filter((t) => t.id !== row.tokenItem.id);
+        onUpdateTokens?.(updatedTokens);
+      }
+
+      if (selectedIds.has(row.tokenItem.id)) {
+        const next = new Set(selectedIds);
+        next.delete(row.tokenItem.id);
+        setSelectedIds(next);
+      }
+
+      showActionFeedback(`Data siswa "${studentName}" berhasil dihapus dari sistem pengawas.`);
+    }
+  };
+
+  // --- BATCH ACTIONS ---
+  const handleBatchDelete = () => {
+    if (selectedIds.size === 0) return;
+    const selectedRows = studentRows.filter((r) => selectedIds.has(r.tokenItem.id));
+    if (confirm(`Hapus ${selectedRows.length} data siswa terpilih? Seluruh riwayat pengerjaan dan token ujian terkait akan dibersihkan.`)) {
+      const sessionIdsToDelete = new Set(selectedRows.map((r) => r.session?.id).filter(Boolean));
+      const tokenIdsToDelete = new Set(selectedRows.map((r) => r.tokenItem.id));
+
+      if (sessionIdsToDelete.size > 0) {
+        const updatedHistory = history.filter((h) => !sessionIdsToDelete.has(h.id));
+        onUpdateHistory?.(updatedHistory);
+      }
+
+      const updatedTokens = tokens.filter((t) => !tokenIdsToDelete.has(t.id));
+      onUpdateTokens?.(updatedTokens);
+
+      setSelectedIds(new Set());
+      showActionFeedback(`Berhasil menghapus ${selectedRows.length} data siswa terpilih.`);
+    }
+  };
+
+  const handleBatchForceSubmit = () => {
+    const inProgressRows = studentRows.filter(
+      (r) => selectedIds.has(r.tokenItem.id) && r.session?.status === "in_progress"
+    );
+
+    if (inProgressRows.length === 0) {
+      alert("Tidak ada siswa dengan status 'Sedang Mengerjakan' di antara pilihan yang dicentang.");
+      return;
+    }
+
+    if (confirm(`Kumpulkan paksa lembar jawaban untuk ${inProgressRows.length} siswa terpilih sekarang?`)) {
+      inProgressRows.forEach((r) => {
+        if (r.session) {
+          onForceSubmitStudent(r.session.id);
+        }
+      });
+      showActionFeedback(`Berhasil mengumpulkan jawaban untuk ${inProgressRows.length} siswa.`);
+    }
+  };
+
+  const handleBatchResetSessions = () => {
+    const sessionRows = studentRows.filter(
+      (r) => selectedIds.has(r.tokenItem.id) && r.session !== null
+    );
+
+    if (sessionRows.length === 0) {
+      alert("Tidak ada siswa dengan sesi aktif di antara pilihan yang dicentang.");
+      return;
+    }
+
+    if (confirm(`Reset sesi pengerjaan untuk ${sessionRows.length} siswa terpilih? Jawaban tersimpan akan dikosongkan agar siswa dapat memulai tes dari awal.`)) {
+      sessionRows.forEach((r) => {
+        if (r.session) {
+          onResetStudentSession(r.session.id);
+        }
+      });
+      showActionFeedback(`Sesi pengerjaan ${sessionRows.length} siswa berhasil di-reset.`);
+    }
+  };
+
+  const handleBatchPrintPdf = () => {
+    const completedSelected = studentRows
+      .filter((r) => selectedIds.has(r.tokenItem.id) && r.session?.status === "submitted")
+      .map((r) => r.session as StudentExamSession);
+
+    if (completedSelected.length === 0) {
+      alert("Tidak ada siswa yang berstatus 'Selesai' di antara pilihan untuk dicetak PDF.");
+      return;
+    }
+
+    completedSelected.forEach((sess, idx) => {
+      setTimeout(() => {
+        generateStudentExamPdfReport(sess, exam, school);
+      }, idx * 400);
+    });
+
+    showActionFeedback(`Menyiapkan ${completedSelected.length} berkas rapor PDF untuk diunduh.`);
+  };
+
   return (
     <div id="live-monitoring-dashboard" className="space-y-6">
       {/* Header Info */}
@@ -190,7 +388,7 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
             <span>•</span>
             <span>Token Sesi: <span className="font-mono font-semibold bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 px-2 py-0.5 rounded">{exam.sessionToken}</span></span>
             <span>•</span>
-            <span>KKM: <span className="font-semibold text-slate-300">{exam.teacherProfile.passingGrade}</span></span>
+            <span>KKM: <span className="font-semibold text-slate-300">{exam.teacherProfile?.passingGrade || 75}</span></span>
           </p>
         </div>
 
@@ -285,10 +483,90 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
           <div className="text-xl font-bold text-indigo-300 font-mono">{exam.sessionToken}</div>
           <div className="text-[11px] text-emerald-400 font-medium flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            Token Aktif ({exam.durationMinutes} Menit)
+            Permanen (Aktif Tanpa Batas Waktu)
           </div>
         </div>
       </div>
+
+      {/* Action Notification Banner */}
+      {actionNotice && (
+        <div className="p-3.5 bg-indigo-950/60 border border-indigo-500/40 rounded-2xl flex items-center justify-between text-xs text-indigo-200 animate-in fade-in">
+          <div className="flex items-center gap-2 font-medium">
+            <Check className="w-4 h-4 text-emerald-400" />
+            <span>{actionNotice}</span>
+          </div>
+          <button
+            onClick={() => setActionNotice(null)}
+            className="text-slate-400 hover:text-white cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Bulk Action Bar (When 1 or more items are selected) */}
+      {isSomeSelected && (
+        <div className="bg-indigo-950/80 border-2 border-indigo-500/60 rounded-2xl p-4 shadow-xl flex flex-col sm:flex-row items-center justify-between gap-3 animate-in slide-in-from-top-2">
+          <div className="flex items-center gap-3">
+            <span className="w-8 h-8 rounded-xl bg-indigo-600 text-white font-bold text-xs flex items-center justify-center shadow-sm">
+              {selectedIds.size}
+            </span>
+            <div>
+              <div className="text-xs font-bold text-white">
+                {selectedIds.size} Siswa Terpilih
+              </div>
+              <div className="text-[11px] text-indigo-300">
+                Pilih aksi pengawas serentak untuk seluruh peserta yang ditandai:
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={handleBatchForceSubmit}
+              className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer"
+              title="Paksa kumpulkan seluruh siswa terpilih yang sedang mengerjakan"
+            >
+              <Send className="w-3.5 h-3.5" />
+              <span>Submit Terpilih</span>
+            </button>
+
+            <button
+              onClick={handleBatchResetSessions}
+              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="Reset sesi pengerjaan siswa yang dipilih agar bisa mulai tes ulang"
+            >
+              <RefreshCw className="w-3.5 h-3.5 text-amber-400" />
+              <span>Reset Sesi</span>
+            </button>
+
+            <button
+              onClick={handleBatchPrintPdf}
+              className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer"
+              title="Unduh rapor PDF untuk siswa yang sudah selesai"
+            >
+              <FileDown className="w-3.5 h-3.5" />
+              <span>Unduh Rapor PDF</span>
+            </button>
+
+            <button
+              onClick={handleBatchDelete}
+              className="px-3 py-1.5 bg-rose-600/30 hover:bg-rose-600 text-rose-200 hover:text-white border border-rose-500/40 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="Hapus seluruh data siswa dan sesi yang dipilih"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Hapus Terpilih</span>
+            </button>
+
+            <button
+              onClick={handleClearSelection}
+              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+            >
+              Batal Pilih
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Filter & Student Table */}
       <div className="bg-[#121214] rounded-2xl border border-slate-800 shadow-sm overflow-hidden space-y-4 p-5">
@@ -304,7 +582,15 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
             />
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleToggleSelectAll}
+              className="px-3 py-2 bg-[#1a1a1c] hover:bg-slate-800 border border-slate-800 rounded-xl text-xs font-semibold text-slate-300 flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              {isAllSelected ? <CheckSquare className="w-4 h-4 text-indigo-400" /> : <Square className="w-4 h-4 text-slate-500" />}
+              <span>{isAllSelected ? "Lepas Semua" : "Pilih Semua"}</span>
+            </button>
+
             <select
               value={filterClass}
               onChange={(e) => setFilterClass(e.target.value)}
@@ -325,24 +611,35 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-slate-800 bg-[#1a1a1c] text-slate-400 font-semibold uppercase tracking-wider">
-                <th className="py-3 px-4">No</th>
+                <th className="py-3 px-3 w-10 text-center">
+                  <button
+                    type="button"
+                    onClick={handleToggleSelectAll}
+                    className="p-1 rounded hover:bg-slate-800 cursor-pointer inline-flex items-center justify-center text-slate-400 hover:text-white"
+                    title={isAllSelected ? "Batalkan pilihan semua" : "Pilih semua baris"}
+                  >
+                    {isAllSelected ? <CheckSquare className="w-4 h-4 text-indigo-400" /> : <Square className="w-4 h-4 text-slate-500" />}
+                  </button>
+                </th>
+                <th className="py-3 px-3">No</th>
                 <th className="py-3 px-4">Nama Siswa</th>
                 <th className="py-3 px-4">NISN & Kelas</th>
                 <th className="py-3 px-4">Status</th>
                 <th className="py-3 px-4">Progres Soal</th>
                 <th className="py-3 px-4">Nilai Akhir</th>
-                <th className="py-3 px-4 text-right">Aksi Pengawas</th>
+                <th className="py-3 px-4 text-right min-w-[200px]">Aksi Pengawas (Pilih, Edit, Hapus)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60 font-normal text-slate-300">
               {filteredRows.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-8 text-center text-slate-500 text-xs">
+                  <td colSpan={8} className="py-8 text-center text-slate-500 text-xs">
                     Tidak ada data peserta ujian yang sesuai filter.
                   </td>
                 </tr>
               ) : (
                 filteredRows.map(({ tokenItem, session }, idx) => {
+                  const isSelected = selectedIds.has(tokenItem.id);
                   const isFinished = session?.status === "submitted";
                   const isInProgress = session?.status === "in_progress";
                   const answeredCount = session ? Object.keys(session.answers).length : 0;
@@ -350,8 +647,28 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
                   const progressPct = totalQ > 0 ? Math.round((answeredCount / totalQ) * 100) : 0;
 
                   return (
-                    <tr key={tokenItem.id} className="hover:bg-[#1a1a1c]/80 transition-colors">
-                      <td className="py-3.5 px-4 font-mono text-slate-500">{idx + 1}</td>
+                    <tr
+                      key={tokenItem.id}
+                      className={`transition-colors ${
+                        isSelected ? "bg-indigo-950/30 hover:bg-indigo-950/40" : "hover:bg-[#1a1a1c]/80"
+                      }`}
+                    >
+                      {/* Checkbox */}
+                      <td className="py-3.5 px-3 text-center">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleSelectRow(tokenItem.id)}
+                          className="p-1 rounded hover:bg-slate-800 cursor-pointer inline-flex items-center justify-center"
+                        >
+                          {isSelected ? (
+                            <CheckSquare className="w-4 h-4 text-indigo-400" />
+                          ) : (
+                            <Square className="w-4 h-4 text-slate-600 hover:text-slate-400" />
+                          )}
+                        </button>
+                      </td>
+
+                      <td className="py-3.5 px-3 font-mono text-slate-500">{idx + 1}</td>
                       <td className="py-3.5 px-4 font-medium text-white">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span>{tokenItem.studentName}</span>
@@ -427,10 +744,36 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
                           <span className="text-slate-500 italic">Menunggu submit</span>
                         )}
                       </td>
+
+                      {/* Supervisor Action Toolbar */}
                       <td className="py-3.5 px-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
+                          {/* 1. EDIT BUTTON: Available for all rows */}
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditModal({ tokenItem, session })}
+                            className="p-1.5 bg-[#1e1e24] hover:bg-indigo-600 hover:text-white text-indigo-400 border border-indigo-500/30 rounded-lg transition-all cursor-pointer"
+                            title="Edit Data Siswa, Token, Nilai, Status, dan Pelanggaran"
+                          >
+                            <Edit3 className="w-4 h-4" />
+                          </button>
+
+                          {/* 2. VIEW DETAIL BUTTON: If session exists */}
                           {session && (
                             <button
+                              type="button"
+                              onClick={() => setSelectedStudentSession(session)}
+                              className="p-1.5 text-slate-300 hover:text-white hover:bg-[#1a1a1c] border border-slate-700/60 rounded-lg transition-colors cursor-pointer"
+                              title="Lihat Detail Jawaban & Log Integritas"
+                            >
+                              <Eye className="w-4 h-4" />
+                            </button>
+                          )}
+
+                          {/* 3. DOWNLOAD PDF BUTTON: If submitted */}
+                          {session && isFinished && (
+                            <button
+                              type="button"
                               onClick={() => generateStudentExamPdfReport(session, exam, school)}
                               className="p-1.5 text-emerald-400 hover:text-white hover:bg-emerald-600/20 border border-emerald-500/30 rounded-lg transition-colors cursor-pointer"
                               title="Unduh Rapor Hasil Ujian (PDF)"
@@ -438,37 +781,46 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
                               <FileDown className="w-4 h-4" />
                             </button>
                           )}
-                          {session && (
+
+                          {/* 4. FORCE SUBMIT: If in progress */}
+                          {isInProgress && session && (
                             <button
-                              onClick={() => setSelectedStudentSession(session)}
-                              className="p-1.5 text-indigo-400 hover:text-white hover:bg-[#1a1a1c] border border-transparent hover:border-slate-700 rounded-lg transition-colors cursor-pointer"
-                              title="Lihat Detail Jawaban & Log"
-                            >
-                              <Eye className="w-4 h-4" />
-                            </button>
-                          )}
-                          {isInProgress && (
-                            <button
+                              type="button"
                               onClick={() => onForceSubmitStudent(session.id)}
-                              className="px-2 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-[11px] font-semibold cursor-pointer shadow-xs"
-                              title="Paksa Kumpulkan"
+                              className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-[11px] font-semibold cursor-pointer shadow-xs transition-colors flex items-center gap-1"
+                              title="Paksa Kumpulkan Lembar Jawaban Siswa Ini"
                             >
-                              Submit
+                              <Send className="w-3 h-3" />
+                              <span>Submit</span>
                             </button>
                           )}
+
+                          {/* 5. RESET SESSION: If session exists */}
                           {session && (
                             <button
+                              type="button"
                               onClick={() => {
-                                if (confirm(`Reset sesi pengerjaan siswa ${tokenItem.studentName}?`)) {
+                                if (confirm(`Reset sesi pengerjaan siswa "${tokenItem.studentName}"? Siswa dapat mengulang ujian dari awal.`)) {
                                   onResetStudentSession(session.id);
+                                  showActionFeedback(`Sesi ujian "${tokenItem.studentName}" berhasil di-reset.`);
                                 }
                               }}
-                              className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer"
-                              title="Reset Sesi Siswa"
+                              className="p-1.5 text-slate-400 hover:text-amber-400 hover:bg-amber-500/10 border border-slate-800 hover:border-amber-500/30 rounded-lg transition-colors cursor-pointer"
+                              title="Reset Sesi Siswa (Mulai Ulang)"
                             >
                               <RefreshCw className="w-3.5 h-3.5" />
                             </button>
                           )}
+
+                          {/* 6. DELETE BUTTON: Available for all rows */}
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteSingleStudent({ tokenItem, session })}
+                            className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-500/15 border border-transparent hover:border-rose-500/30 rounded-lg transition-colors cursor-pointer"
+                            title="Hapus Data Siswa & Sesi Ujian"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -479,6 +831,18 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
           </table>
         </div>
       </div>
+
+      {/* Edit Student Modal (Live Student Edit) */}
+      <LiveStudentEditModal
+        isOpen={isEditModalOpen}
+        onClose={() => {
+          setIsEditModalOpen(false);
+          setEditingStudentRow(null);
+        }}
+        exam={exam}
+        studentRow={editingStudentRow}
+        onSave={handleSaveStudentEdit}
+      />
 
       {/* Student Detail Modal */}
       {selectedStudentSession && (
@@ -601,13 +965,28 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
             </div>
 
             <div className="pt-3 border-t border-slate-800 flex items-center justify-between">
-              <button
-                onClick={() => generateStudentExamPdfReport(selectedStudentSession, exam, school)}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-md shadow-emerald-950 cursor-pointer"
-              >
-                <FileDown className="w-4 h-4" />
-                <span>Unduh Laporan Rapor PDF</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => generateStudentExamPdfReport(selectedStudentSession, exam, school)}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-md shadow-emerald-950 cursor-pointer"
+                >
+                  <FileDown className="w-4 h-4" />
+                  <span>Unduh Rapor PDF</span>
+                </button>
+                <button
+                  onClick={() => {
+                    const row = studentRows.find((r) => r.session?.id === selectedStudentSession.id);
+                    if (row) {
+                      setSelectedStudentSession(null);
+                      handleOpenEditModal(row);
+                    }
+                  }}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-md shadow-indigo-950 cursor-pointer"
+                >
+                  <Edit3 className="w-4 h-4" />
+                  <span>Edit Nilai & Data</span>
+                </button>
+              </div>
 
               <button
                 onClick={() => setSelectedStudentSession(null)}
@@ -620,7 +999,7 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
         </div>
       )}
 
-      {/* FLOATING TOAST NOTIFICATIONS STACK (Bottom-Right / Top-Right Live Event Popups) */}
+      {/* FLOATING TOAST NOTIFICATIONS STACK */}
       <div
         id="monitoring-toast-container"
         className="fixed bottom-6 right-6 z-50 flex flex-col gap-2.5 max-w-sm w-full pointer-events-none"
@@ -642,6 +1021,10 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
             badgeStyle = "bg-rose-500/20 text-rose-300 border-rose-500/30";
             icon = <ShieldAlert className="w-4 h-4 text-rose-400" />;
             borderStyle = "border-rose-500/50";
+          } else if (t.type === "action") {
+            badgeStyle = "bg-emerald-500/20 text-emerald-300 border-emerald-500/30";
+            icon = <Check className="w-4 h-4 text-emerald-400" />;
+            borderStyle = "border-emerald-500/40";
           }
 
           return (

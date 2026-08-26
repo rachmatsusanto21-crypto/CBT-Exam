@@ -134,6 +134,9 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
   const [tempGradeLevel, setTempGradeLevel] = useState(activeExam.teacherProfile.gradeLevel || "Kelas X");
   const [tempAcademicYear, setTempAcademicYear] = useState(activeExam.teacherProfile.academicYear || "2025/2026");
   const [tempSemester, setTempSemester] = useState(activeExam.teacherProfile.semester || "Ganjil");
+  const [tempTeacherName, setTempTeacherName] = useState(activeExam.teacherProfile.teacherName || "");
+  const [tempTeacherNIP, setTempTeacherNIP] = useState(activeExam.teacherProfile.teacherNIP || "");
+  const [tempPassingGrade, setTempPassingGrade] = useState(activeExam.teacherProfile.passingGrade || 75);
 
   // Timer configuration
   const [examDuration, setExamDuration] = useState(activeExam.durationMinutes || 60);
@@ -338,6 +341,9 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
       title: tempExamTitle.trim() || activeExam.title,
       teacherProfile: {
         ...activeExam.teacherProfile,
+        teacherName: tempTeacherName.trim() || activeExam.teacherProfile?.teacherName || "Guru Pengampu",
+        teacherNIP: tempTeacherNIP.trim() || activeExam.teacherProfile?.teacherNIP || "-",
+        passingGrade: Number(tempPassingGrade) || 75,
         subject: tempSubject.trim() || activeExam.teacherProfile?.subject || "Umum",
         gradeLevel: tempGradeLevel.trim() || activeExam.teacherProfile?.gradeLevel || "Kelas X",
         academicYear: tempAcademicYear.trim() || activeExam.teacherProfile?.academicYear || "2025/2026",
@@ -351,7 +357,7 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
     setAcademicYear(tempAcademicYear.trim() || activeExam.teacherProfile?.academicYear || "2025/2026");
     setSemester(tempSemester || activeExam.teacherProfile?.semester || "Ganjil");
     setShowEditCodeModal(false);
-    setAiSuccessMsg("Metadata Naskah (Kode, Judul, Mapel, Kelas, TP, & Semester) berhasil diperbarui!");
+    setAiSuccessMsg("Metadata Naskah (Kode, Judul, Guru, Mapel, KKM, Kelas, TP) berhasil diperbarui!");
     setTimeout(() => setAiSuccessMsg(null), 3000);
   };
 
@@ -362,6 +368,9 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
     setTempGradeLevel(activeExam.teacherProfile?.gradeLevel || "");
     setTempAcademicYear(activeExam.teacherProfile?.academicYear || "2025/2026");
     setTempSemester(activeExam.teacherProfile?.semester || "Ganjil");
+    setTempTeacherName(activeExam.teacherProfile?.teacherName || "");
+    setTempTeacherNIP(activeExam.teacherProfile?.teacherNIP || "");
+    setTempPassingGrade(activeExam.teacherProfile?.passingGrade || 75);
     setShowEditCodeModal(true);
   };
 
@@ -954,15 +963,50 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                 />
               </div>
 
-              <div>
-                <label className="block font-medium text-slate-300 mb-1">Jenjang / Kelas</label>
-                <input
-                  type="text"
-                  value={tempGradeLevel}
-                  onChange={(e) => setTempGradeLevel(e.target.value)}
-                  placeholder="Contoh: Kelas X SMA / Fase E, Kelas VII SMP, Kelas 5 SD"
-                  className="w-full px-3 py-2 bg-[#1f1f23] border border-slate-700 rounded-xl text-slate-200 font-medium focus:border-indigo-500 focus:outline-none"
-                />
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block font-medium text-slate-300 mb-1">Guru Pengampu</label>
+                  <input
+                    type="text"
+                    value={tempTeacherName}
+                    onChange={(e) => setTempTeacherName(e.target.value)}
+                    placeholder="Nama Guru Pengampu"
+                    className="w-full px-3 py-2 bg-[#1f1f23] border border-slate-700 rounded-xl text-slate-200 font-medium focus:border-indigo-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block font-medium text-slate-300 mb-1">NIP Guru</label>
+                  <input
+                    type="text"
+                    value={tempTeacherNIP}
+                    onChange={(e) => setTempTeacherNIP(e.target.value)}
+                    placeholder="NIP Guru Pengampu"
+                    className="w-full px-3 py-2 bg-[#1f1f23] border border-slate-700 rounded-xl text-slate-200 font-mono text-xs focus:border-indigo-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label className="block font-medium text-slate-300 mb-1">Jenjang / Kelas</label>
+                  <input
+                    type="text"
+                    value={tempGradeLevel}
+                    onChange={(e) => setTempGradeLevel(e.target.value)}
+                    placeholder="Contoh: Kelas X SMA / Fase E"
+                    className="w-full px-3 py-2 bg-[#1f1f23] border border-slate-700 rounded-xl text-slate-200 font-medium focus:border-indigo-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block font-medium text-slate-300 mb-1">KKM Kelulusan</label>
+                  <input
+                    type="number"
+                    value={tempPassingGrade}
+                    onChange={(e) => setTempPassingGrade(Number(e.target.value))}
+                    placeholder="75"
+                    className="w-full px-3 py-2 bg-[#1f1f23] border border-slate-700 rounded-xl text-emerald-400 font-bold focus:border-indigo-500 focus:outline-none"
+                  />
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-2.5">

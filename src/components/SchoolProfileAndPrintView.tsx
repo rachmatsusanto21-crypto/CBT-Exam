@@ -1,4 +1,4 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Building2,
   Printer,
@@ -13,7 +13,8 @@ import {
   Trash2,
   Link as LinkIcon,
   Code,
-  Edit3
+  Edit3,
+  Check
 } from "lucide-react";
 import { ExamPackage, SchoolProfile } from "../types";
 import { printExamToDocsFormat } from "../utils/sheetExport";
@@ -37,10 +38,48 @@ export const SchoolProfileAndPrintView: React.FC<SchoolProfileAndPrintViewProps>
   const [examCode, setExamCode] = useState(activeExam.code);
   const [examTitle, setExamTitle] = useState(activeExam.title);
   const [isSaved, setIsSaved] = useState(false);
+  const [isAutoSaved, setIsAutoSaved] = useState(false);
   const [kopTab, setKopTab] = useState<"upload" | "url">("upload");
   const [kopUrlInput, setKopUrlInput] = useState(profile.kopSuratUrl || "");
   const [kopError, setKopError] = useState<string | null>(null);
   const kopFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Sync state when props change
+  useEffect(() => {
+    setProfile({ ...school });
+    setKopUrlInput(school.kopSuratUrl || "");
+  }, [school]);
+
+  useEffect(() => {
+    setTeacher({ ...activeExam.teacherProfile });
+    setExamCode(activeExam.code);
+    setExamTitle(activeExam.title);
+  }, [activeExam.id, activeExam.code, activeExam.title, activeExam.teacherProfile]);
+
+  // Debounced auto-save so user never loses typed data on navigation
+  const isInitialMount = useRef(true);
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+    const timer = setTimeout(() => {
+      onUpdateSchool(profile);
+      onUpdateExam({
+        ...activeExam,
+        code: examCode.trim().toUpperCase() || activeExam.code,
+        title: examTitle.trim() || activeExam.title,
+        schoolProfile: profile,
+        teacherProfile: teacher,
+        updatedAt: new Date().toISOString(),
+      });
+      setIsAutoSaved(true);
+      const resetTimer = setTimeout(() => setIsAutoSaved(false), 2500);
+      return () => clearTimeout(resetTimer);
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [profile, teacher, examCode, examTitle]);
 
   // Print options
   const [includeAnswerKey, setIncludeAnswerKey] = useState(false);
@@ -124,7 +163,13 @@ export const SchoolProfileAndPrintView: React.FC<SchoolProfileAndPrintViewProps>
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          {isAutoSaved && (
+            <span className="flex items-center gap-1 px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 rounded-xl text-xs font-semibold animate-in fade-in">
+              <Check className="w-3.5 h-3.5" />
+              <span>Otomatis Tersimpan</span>
+            </span>
+          )}
           <button
             id="print-exam-docs-btn"
             onClick={handlePrintExam}
@@ -134,11 +179,16 @@ export const SchoolProfileAndPrintView: React.FC<SchoolProfileAndPrintViewProps>
             <span>Cetak Naskah Soal (Docs)</span>
           </button>
           <button
+            id="save-school-profile-btn"
             onClick={handleSaveAll}
-            className="flex items-center gap-1.5 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition-all cursor-pointer shadow-lg shadow-indigo-950"
+            className={`flex items-center gap-1.5 px-5 py-2.5 ${
+              isSaved
+                ? "bg-emerald-600 hover:bg-emerald-500 text-white"
+                : "bg-indigo-600 hover:bg-indigo-500 text-white"
+            } rounded-xl text-xs font-semibold transition-all cursor-pointer shadow-lg shadow-indigo-950`}
           >
-            <Save className="w-4 h-4" />
-            <span>{isSaved ? "Tersimpan!" : "Simpan Profil & Kode"}</span>
+            {isSaved ? <Check className="w-4 h-4" /> : <Save className="w-4 h-4" />}
+            <span>{isSaved ? "Tersimpan Permanen!" : "Simpan Profil & Kode"}</span>
           </button>
         </div>
       </div>
