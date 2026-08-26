@@ -374,16 +374,16 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
         return;
       }
 
-      // Check token match
+      // Check token match - permanently valid until changed manually by teacher
       const enteredToken = loginToken.trim().toUpperCase();
       const examSessionToken = exam.sessionToken.trim().toUpperCase();
 
       const matchedToken = tokens.find(
-        (t) => t.token.toUpperCase() === enteredToken && t.status === "active"
+        (t) => t.token.toUpperCase() === enteredToken && (!t.examCode || t.examCode === exam.code)
       );
 
       if (!matchedToken && enteredToken !== examSessionToken && enteredToken !== "GURU2026") {
-        setLoginError("Token ujian tidak valid atau sudah kadaluarsa. Minta token aktif kepada Guru Pengawas.");
+        setLoginError("Token ujian tidak sesuai. Masukkan token aktif yang diberikan oleh Pengawas atau Guru.");
         return;
       }
     }

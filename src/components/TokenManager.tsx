@@ -19,7 +19,9 @@ import {
   Save,
   Filter,
   Bookmark,
-  RotateCcw
+  RotateCcw,
+  Infinity as InfinityIcon,
+  Clock
 } from "lucide-react";
 import { ExamPackage, SchoolProfile, StudentTokenItem } from "../types";
 import { exportTokensToExcel, printTokenCards } from "../utils/sheetExport";
@@ -48,6 +50,8 @@ export const TokenManager: React.FC<TokenManagerProps> = ({
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [isEditingExamCode, setIsEditingExamCode] = useState(false);
   const [inputExamCode, setInputExamCode] = useState(exam.code);
+  const [isEditingMasterToken, setIsEditingMasterToken] = useState(false);
+  const [inputMasterToken, setInputMasterToken] = useState(exam.sessionToken);
   const [filterClass, setFilterClass] = useState<string>("all");
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
 
@@ -153,7 +157,16 @@ export const TokenManager: React.FC<TokenManagerProps> = ({
   const handleGenerateNewMasterToken = () => {
     const newToken = generateRandomTokenString(6);
     onUpdateExamToken(newToken);
-    triggerFeedback(`Token Sesi Baru (${newToken}) berhasil dirilis!`);
+    setInputMasterToken(newToken);
+    triggerFeedback(`Token Sesi Acak Baru (${newToken}) berhasil dirilis & aktif permanen!`);
+  };
+
+  const handleSaveMasterToken = () => {
+    if (!inputMasterToken.trim()) return;
+    const newToken = inputMasterToken.trim().toUpperCase();
+    onUpdateExamToken(newToken);
+    setIsEditingMasterToken(false);
+    triggerFeedback(`Token Sesi berhasil diubah secara manual menjadi: ${newToken}`);
   };
 
   const handleCopyMasterToken = () => {
@@ -337,35 +350,90 @@ export const TokenManager: React.FC<TokenManagerProps> = ({
           </div>
 
           {/* Master Session Token Card */}
-          <div className="bg-[#1a1a1c] rounded-2xl p-5 border border-slate-800 space-y-2">
+          <div className="bg-[#1a1a1c] rounded-2xl p-5 border border-slate-800 space-y-3">
             <div className="flex items-center justify-between">
-              <div className="text-xs text-slate-400 uppercase font-semibold tracking-wider flex items-center gap-1">
+              <div className="text-xs text-slate-400 uppercase font-semibold tracking-wider flex items-center gap-1.5">
                 <Key className="w-3.5 h-3.5 text-amber-400" />
                 <span>2. Token Sesi Ujian (Master Token)</span>
               </div>
-              <button
-                onClick={handleGenerateNewMasterToken}
-                className="text-[11px] text-indigo-400 hover:text-indigo-300 flex items-center gap-1 cursor-pointer font-medium"
-              >
-                <RefreshCw className="w-3 h-3" />
-                <span>Rilis Token Baru</span>
-              </button>
-            </div>
-            <div className="flex items-center gap-3">
-              <div className="text-3xl font-black font-mono tracking-widest text-amber-400">
-                {exam.sessionToken}
+              <div className="flex items-center gap-2">
+                {!isEditingMasterToken ? (
+                  <button
+                    onClick={() => {
+                      setInputMasterToken(exam.sessionToken);
+                      setIsEditingMasterToken(true);
+                    }}
+                    className="text-[11px] text-indigo-400 hover:text-indigo-300 flex items-center gap-1 cursor-pointer font-medium"
+                    title="Ubah token secara manual"
+                  >
+                    <Edit3 className="w-3 h-3" />
+                    <span>Ubah Manual</span>
+                  </button>
+                ) : null}
+                <button
+                  onClick={handleGenerateNewMasterToken}
+                  className="text-[11px] text-amber-400 hover:text-amber-300 flex items-center gap-1 cursor-pointer font-medium"
+                  title="Generate kode token acak baru"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  <span>Acak Baru</span>
+                </button>
               </div>
-              <button
-                onClick={handleCopyMasterToken}
-                className="p-2 bg-[#26262a] hover:bg-slate-700 border border-slate-700 rounded-xl text-white transition-colors cursor-pointer"
-                title="Salin Token"
-              >
-                {copiedToken ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4 text-slate-300" />}
-              </button>
             </div>
-            <p className="text-[11px] text-slate-400">
-              Rilis token ini kepada siswa saat waktu pengerjaan dimulai.
-            </p>
+
+            {isEditingMasterToken ? (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={inputMasterToken}
+                    onChange={(e) => setInputMasterToken(e.target.value.toUpperCase())}
+                    className="w-full px-3 py-1.5 bg-[#26262a] border border-amber-500 rounded-xl text-amber-400 font-mono font-bold text-lg tracking-widest focus:outline-none"
+                    placeholder="TOKEN-ANDA"
+                    autoFocus
+                  />
+                  <button
+                    onClick={handleSaveMasterToken}
+                    className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer shrink-0"
+                  >
+                    Simpan
+                  </button>
+                  <button
+                    onClick={() => setIsEditingMasterToken(false)}
+                    className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-xl cursor-pointer shrink-0"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-400">
+                  Ketik token manual pilihan Anda (misal: PAS2026, MATEMATIKA, dll).
+                </p>
+              </div>
+            ) : (
+              <div className="flex items-center gap-3">
+                <div className="text-3xl font-black font-mono tracking-widest text-amber-400">
+                  {exam.sessionToken}
+                </div>
+                <button
+                  onClick={handleCopyMasterToken}
+                  className="p-2 bg-[#26262a] hover:bg-slate-700 border border-slate-700 rounded-xl text-white transition-colors cursor-pointer"
+                  title="Salin Token"
+                >
+                  {copiedToken ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4 text-slate-300" />}
+                </button>
+              </div>
+            )}
+
+            {/* Permanent Validity Indicator */}
+            <div className="pt-2 border-t border-slate-800 flex items-center justify-between gap-2">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-emerald-400 text-[11px] font-semibold">
+                <InfinityIcon className="w-3.5 h-3.5 shrink-0" />
+                <span>Berlaku Tanpa Batas Waktu (Permanen)</span>
+              </div>
+              <span className="text-[11px] text-slate-400 hidden sm:inline">
+                Aktif hingga diganti manual oleh Guru
+              </span>
+            </div>
           </div>
         </div>
       </div>
