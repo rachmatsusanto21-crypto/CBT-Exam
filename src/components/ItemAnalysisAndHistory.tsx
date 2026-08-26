@@ -27,7 +27,7 @@ import { ExamPackage, ItemAnalysisSummary, SchoolProfile, StudentExamSession } f
 import { calculateItemAnalysis, exportGradebookToExcel, exportItemAnalysisToExcel } from "../utils/sheetExport";
 import { DifficultyD3BarChart } from "./DifficultyD3BarChart";
 import { StudentGradeEditModal } from "./StudentGradeEditModal";
-import { generateStudentExamPdfReport } from "../utils/studentPdfReport";
+import { generateStudentExamPdfReport, generateBatchStudentsPdfReport } from "../utils/studentPdfReport";
 
 interface ItemAnalysisAndHistoryProps {
   exam: ExamPackage;
@@ -359,6 +359,28 @@ export const ItemAnalysisAndHistory: React.FC<ItemAnalysisAndHistoryProps> = ({
                 >
                   <FileSpreadsheet className="w-3.5 h-3.5" />
                   <span>Export Terpilih (.xlsx)</span>
+                </button>
+                <button
+                  onClick={async () => {
+                    const selectedSessions = history.filter((s) => selectedIds.has(s.id));
+                    if (selectedSessions.length === 0) return;
+                    try {
+                      if (selectedSessions.length === 1) {
+                        await generateStudentExamPdfReport(selectedSessions[0], exam, school);
+                        showNotification(`Rapor siswa "${selectedSessions[0].studentName}" berhasil diunduh.`);
+                      } else {
+                        await generateBatchStudentsPdfReport(selectedSessions, exam, school);
+                        showNotification(`Berhasil mengunduh 1 berkas PDF rapor gabungan untuk ${selectedSessions.length} siswa terpilih.`);
+                      }
+                    } catch (err: any) {
+                      alert("Gagal mengunduh rapor PDF: " + err.message);
+                    }
+                  }}
+                  className="px-3 py-1.5 bg-indigo-700 hover:bg-indigo-600 text-white rounded-xl text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+                  title="Unduh rapor seluruh siswa terpilih menjadi 1 berkas PDF"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Unduh Rapor PDF ({selectedIds.size} Siswa, 1 File)</span>
                 </button>
                 <button
                   onClick={() => handleBatchMarkPassed(true)}

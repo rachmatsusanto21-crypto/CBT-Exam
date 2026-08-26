@@ -30,7 +30,7 @@ import {
 } from "lucide-react";
 import { ExamPackage, SchoolProfile, StudentExamSession, StudentTokenItem } from "../types";
 import { exportGradebookToExcel, exportItemAnalysisToExcel } from "../utils/sheetExport";
-import { generateStudentExamPdfReport } from "../utils/studentPdfReport";
+import { generateStudentExamPdfReport, generateBatchStudentsPdfReport } from "../utils/studentPdfReport";
 import { LiveStudentEditModal, StudentRowItem } from "./LiveStudentEditModal";
 
 interface ToastNotification {
@@ -354,7 +354,7 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
     }
   };
 
-  const handleBatchPrintPdf = () => {
+  const handleBatchPrintPdf = async () => {
     const completedSelected = studentRows
       .filter((r) => selectedIds.has(r.tokenItem.id) && r.session?.status === "submitted")
       .map((r) => r.session as StudentExamSession);
@@ -364,13 +364,22 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
       return;
     }
 
-    completedSelected.forEach((sess, idx) => {
-      setTimeout(() => {
-        generateStudentExamPdfReport(sess, exam, school);
-      }, idx * 400);
-    });
-
-    showActionFeedback(`Menyiapkan ${completedSelected.length} berkas rapor PDF untuk diunduh.`);
+    try {
+      if (completedSelected.length === 1) {
+        await generateStudentExamPdfReport(completedSelected[0], exam, school);
+        showActionFeedback(`Rapor siswa "${completedSelected[0].studentName}" berhasil diunduh (1 file PDF).`);
+      } else {
+        await generateBatchStudentsPdfReport(
+          completedSelected,
+          exam,
+          school,
+          filterClass !== "all" ? filterClass : undefined
+        );
+        showActionFeedback(`Berhasil mengunduh 1 berkas PDF rapor gabungan untuk ${completedSelected.length} siswa terpilih.`);
+      }
+    } catch (err: any) {
+      alert("Gagal mengunduh rapor PDF: " + err.message);
+    }
   };
 
   return (
@@ -423,18 +432,24 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
           </button>
           {completedSessions.length > 0 && (
             <button
-              onClick={() => {
-                completedSessions.forEach((sess, idx) => {
-                  setTimeout(() => {
-                    generateStudentExamPdfReport(sess, exam, school);
-                  }, idx * 500);
-                });
+              onClick={async () => {
+                try {
+                  await generateBatchStudentsPdfReport(
+                    completedSessions,
+                    exam,
+                    school,
+                    filterClass !== "all" ? filterClass : undefined
+                  );
+                  showActionFeedback(`Berhasil mengunduh 1 berkas PDF rapor gabungan untuk ${completedSessions.length} siswa.`);
+                } catch (err: any) {
+                  alert("Gagal mengunduh rapor PDF: " + err.message);
+                }
               }}
               className="flex items-center gap-1.5 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-lg shadow-indigo-950 transition-all cursor-pointer"
-              title="Unduh seluruh rapor siswa yang sudah selesai mengerjakan"
+              title="Unduh seluruh rapor siswa yang sudah selesai mengerjakan dalam 1 file PDF"
             >
               <FileDown className="w-4 h-4" />
-              <span>Unduh Semua Rapor PDF ({completedSessions.length})</span>
+              <span>Unduh Semua Rapor PDF ({completedSessions.length} Siswa, 1 File)</span>
             </button>
           )}
         </div>

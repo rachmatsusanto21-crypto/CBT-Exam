@@ -3,18 +3,34 @@ import autoTable from "jspdf-autotable";
 import { ExamPackage, SchoolProfile, StudentExamSession } from "../types";
 
 /**
- * Generates and triggers download of an individual student's comprehensive PDF exam report.
+ * Sanitizes a string for safe and clean PDF filename composition.
+ * Replaces slashes, special characters, and spaces with underscores/hyphens.
  */
-export async function generateStudentExamPdfReport(
+export function sanitizeFilenamePart(text: string): string {
+  if (!text) return "";
+  return text
+    .trim()
+    .replace(/[/\\]/g, "-") // replace slashes with hyphens
+    .replace(/[?%*:|"<>.,]/g, "") // remove forbidden filename characters
+    .replace(/[\s\t\n\r]+/g, "_") // replace whitespace with underscore
+    .replace(/_+/g, "_") // collapse consecutive underscores
+    .replace(/^[-_]+|[-_]+$/g, ""); // trim leading and trailing symbols
+}
+
+/**
+ * Renders a single student's comprehensive exam report into an existing jsPDF document instance.
+ * If isFirstStudentInDoc is false, a new page is added before rendering.
+ */
+export function renderSingleStudentReportToDoc(
+  doc: jsPDF,
   studentSession: StudentExamSession,
   exam: ExamPackage,
-  school: SchoolProfile
+  school: SchoolProfile,
+  isFirstStudentInDoc: boolean = true
 ) {
-  const doc = new jsPDF({
-    orientation: "portrait",
-    unit: "mm",
-    format: "a4",
-  });
+  if (!isFirstStudentInDoc) {
+    doc.addPage();
+  }
 
   const pageWidth = doc.internal.pageSize.getWidth(); // ~210mm
   const margin = 14;
@@ -106,7 +122,7 @@ export async function generateStudentExamPdfReport(
 
   const leftColX = margin + 4;
   const rightColX = margin + contentWidth / 2 + 3;
-  let identityY = currentY + 5;
+  const identityY = currentY + 5;
 
   doc.setFontSize(7.5);
   // Left Column (Student Info)
@@ -455,9 +471,91 @@ export async function generateStudentExamPdfReport(
     margin,
     signatureY + 37
   );
+}
 
-  // Trigger download
-  const cleanName = (studentSession.studentName || "Siswa").replace(/[^a-zA-Z0-9]/g, "_");
-  const filename = `Rapor_CBT_${cleanName}_${studentSession.nisn || "NISN"}.pdf`;
+/**
+ * Generates and downloads a SINGLE student's PDF exam report.
+ * Filename format requirement: [nama siswa]_[mata pelajaran]_[kode soal].pdf
+ */
+export async function generateStudentExamPdfReport(
+  studentSession: StudentExamSession,
+  exam: ExamPackage,
+  school: SchoolProfile
+) {
+  const doc = new jsPDF({
+    orientation: "portrait",
+    unit: "mm",
+    format: "a4",
+  });
+
+  renderSingleStudentReportToDoc(doc, studentSession, exam, school, true);
+
+  const cleanStudentName = sanitizeFilenamePart(studentSession.studentName || "Siswa");
+  const cleanSubject = sanitizeFilenamePart(exam.teacherProfile.subject || exam.title || "MataPelajaran");
+  const cleanExamCode = sanitizeFilenamePart(exam.code || "KODESOAL");
+
+  const filename = `${cleanStudentName}_${cleanSubject}_${cleanExamCode}.pdf`;
+  doc.save(filename);
+}
+
+/**
+ * Generates and downloads a COMBINED SINGLE PDF file containing all selected or all students' exam reports.
+ * Filename format requirement: [nama kelas]_[mata pelajaran]_[kode soal].pdf
+ */
+export async function generateBatchStudentsPdfReport(
+  studentSessions: StudentExamSession[],
+  exam: ExamPackage,
+  school: SchoolProfile,
+  classFilterName?: string
+) {
+  if (!studentSessions || studentSessions.length === 0) {
+    throw new Error("Tidak ada siswa dengan status 'Selesai' untuk dicetak rapor.");
+  }
+
+  // If only 1 student in the list and no class filter provided, fall back to single student naming
+  if (studentSessions.length === 1 && (!classFilterName || classFilterName === "all")) {
+    return generateStudentExamPdfReport(studentSessions[0], exam, school);
+  }
+
+  const doc = new jsPDF({
+    orientation: "portrait",
+    unit: "mm",
+    format: "a4",
+  });
+
+  studentSessions.forEach((session, index) => {
+    renderSingleStudentReportToDoc(doc, session, exam, school, index === 0);
+  });
+
+  // Determine Class Name for filename
+  let rawClassName = classFilterName && classFilterName !== "all" ? classFilterName : "";
+
+  if (!rawClassName) {
+    const uniqueClasses = Array.from(new Set(studentSessions.map((s) => s.className).filter(Boolean)));
+    if (uniqueClasses.length === 1) {
+      rawClassName = uniqueClasses[0];
+    } else if (uniqueClasses.length > 1 && uniqueClasses.length <= 2) {
+      rawClassName = uniqueClasses.join("_");
+    } else if (exam.teacherProfile.gradeLevel) {
+      rawClassName = exam.teacherProfile.gradeLevel;
+    } else {
+      rawClassName = "Semua_Kelas";
+    }
+  }
+
+  // If the raw class name doesn't start with "kelas" or "semua", prefix with Kelas_
+  let formattedClassName = rawClassName;
+  if (
+    !formattedClassName.toLowerCase().startsWith("kelas") &&
+    !formattedClassName.toLowerCase().startsWith("semua")
+  ) {
+    formattedClassName = `Kelas_${formattedClassName}`;
+  }
+
+  const cleanClassName = sanitizeFilenamePart(formattedClassName || "Kelas");
+  const cleanSubject = sanitizeFilenamePart(exam.teacherProfile.subject || exam.title || "MataPelajaran");
+  const cleanExamCode = sanitizeFilenamePart(exam.code || "KODESOAL");
+
+  const filename = `${cleanClassName}_${cleanSubject}_${cleanExamCode}.pdf`;
   doc.save(filename);
 }
