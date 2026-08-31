@@ -177,6 +177,9 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
 
   // Active Session State
   const [session, setSession] = useState<StudentExamSession | null>(currentSession);
+  const sessionRef = useRef<StudentExamSession | null>(session);
+  sessionRef.current = session;
+
   const [currentSlideIndex, setCurrentSlideIndex] = useState<number>(currentSession?.currentSlideIndex || 0);
   const [fontSize, setFontSize] = useState<"normal" | "large" | "xlarge">("normal");
   const [showSummaryModal, setShowSummaryModal] = useState<boolean>(false);
@@ -219,6 +222,8 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
     }
     return totalDurationSeconds;
   });
+  const secondsRemainingRef = useRef<number>(secondsRemaining);
+  secondsRemainingRef.current = secondsRemaining;
 
   // Track violation count in ref to prevent stale closures
   const violationCountRef = useRef<number>(currentSession?.violationCount || 0);
@@ -309,42 +314,53 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
     return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
   }, [isLoggedIn, isSubmitted]);
 
-  // Timer Tick & Low-Time Sounds
+  // Timer Tick Interval
   useEffect(() => {
-    if (!isLoggedIn || isSubmitted || secondsRemaining <= 0) return;
+    if (!isLoggedIn || isSubmitted) return;
 
     const timer = setInterval(() => {
       setSecondsRemaining((prev) => {
         if (prev <= 1) {
-          clearInterval(timer);
-          handleFinalSubmit("timed_out");
           return 0;
         }
-
-        // 5-Minute Audio Alert (at exactly 300 seconds)
-        if (prev === 300 && !hasAlerted5Min.current) {
-          hasAlerted5Min.current = true;
-          setDismissedWarningBanner(false);
-          if (isSoundNotificationEnabled()) {
-            playExamTimeWarningSound("5min");
-          }
-        }
-
-        // 1-Minute Critical Audio Alert (at exactly 60 seconds)
-        if (prev === 60 && !hasAlerted1Min.current) {
-          hasAlerted1Min.current = true;
-          setDismissedWarningBanner(false);
-          if (isSoundNotificationEnabled()) {
-            playExamTimeWarningSound("1min");
-          }
-        }
-
         return prev - 1;
       });
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [isLoggedIn, isSubmitted, secondsRemaining]);
+  }, [isLoggedIn, isSubmitted]);
+
+  // Handle Timeout Auto-submit
+  useEffect(() => {
+    if (!isLoggedIn || isSubmitted) return;
+
+    if (secondsRemaining <= 0) {
+      handleFinalSubmit("timed_out");
+    }
+  }, [secondsRemaining, isLoggedIn, isSubmitted]);
+
+  // Audio Alerts at 5 min and 1 min thresholds
+  useEffect(() => {
+    if (!isLoggedIn || isSubmitted) return;
+
+    // 5-Minute Audio Alert (at exactly 300 seconds)
+    if (secondsRemaining === 300 && !hasAlerted5Min.current) {
+      hasAlerted5Min.current = true;
+      setDismissedWarningBanner(false);
+      if (isSoundNotificationEnabled()) {
+        playExamTimeWarningSound("5min");
+      }
+    }
+
+    // 1-Minute Critical Audio Alert (at exactly 60 seconds)
+    if (secondsRemaining === 60 && !hasAlerted1Min.current) {
+      hasAlerted1Min.current = true;
+      setDismissedWarningBanner(false);
+      if (isSoundNotificationEnabled()) {
+        playExamTimeWarningSound("1min");
+      }
+    }
+  }, [secondsRemaining, isLoggedIn, isSubmitted]);
 
   // Record Cheating Violation
   const recordCheatViolation = (
@@ -722,11 +738,12 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
   };
 
   const handleFinalSubmit = (status: "submitted" | "timed_out" = "submitted") => {
-    if (!session) return;
+    const currentActiveSession = sessionRef.current || session;
+    if (!currentActiveSession) return;
 
     let totalScoreEarned = 0;
     activeQuestions.forEach((q) => {
-      const ans = session.answers[q.id];
+      const ans = currentActiveSession.answers[q.id];
       if (!ans) return;
 
       if (q.type === "menjodohkan") {
@@ -769,10 +786,10 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
     const maxScore = exam.totalScore > 0 ? exam.totalScore : 100;
     const percentage = Math.round((totalScoreEarned / maxScore) * 100);
     const passed = percentage >= (exam.teacherProfile.passingGrade || 75);
-    const timeSpentSeconds = totalDurationSeconds - secondsRemaining;
+    const timeSpentSeconds = Math.max(0, totalDurationSeconds - secondsRemainingRef.current);
 
     const finalizedSession: StudentExamSession = {
-      ...session,
+      ...currentActiveSession,
       status,
       submitTime: new Date().toISOString(),
       timeSpentSeconds,
