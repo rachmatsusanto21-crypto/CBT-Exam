@@ -31,9 +31,11 @@ interface TokenManagerProps {
   exam: ExamPackage;
   school: SchoolProfile;
   tokens: StudentTokenItem[];
+  allExams?: ExamPackage[];
   onUpdateExamToken: (newToken: string) => void;
   onUpdateTokens: (tokens: StudentTokenItem[]) => void;
   onUpdateExam?: (updated: ExamPackage) => void;
+  onSelectExam?: (exam: ExamPackage) => void;
 }
 
 const DRAFT_CLASS_STORAGE_KEY = "slideexam_draft_student_roster";
@@ -42,9 +44,11 @@ export const TokenManager: React.FC<TokenManagerProps> = ({
   exam,
   school,
   tokens,
+  allExams = [],
   onUpdateExamToken,
   onUpdateTokens,
   onUpdateExam,
+  onSelectExam,
 }) => {
   const [copiedToken, setCopiedToken] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
@@ -632,6 +636,9 @@ export const TokenManager: React.FC<TokenManagerProps> = ({
         onClose={() => setIsShareModalOpen(false)}
         exam={exam}
         token={exam.sessionToken}
+        tokens={tokens}
+        allExams={allExams}
+        onSelectExam={onSelectExam}
       />
     </div>
   );

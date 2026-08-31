@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   X,
   Copy,
@@ -28,6 +28,8 @@ interface DirectStudentShareModalProps {
   exam: ExamPackage;
   token?: string;
   tokens?: StudentTokenItem[];
+  allExams?: ExamPackage[];
+  onSelectExam?: (exam: ExamPackage) => void;
 }
 
 export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = ({
@@ -36,7 +38,10 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
   exam,
   token,
   tokens,
+  allExams = [],
+  onSelectExam,
 }) => {
+  const [selectedExamId, setSelectedExamId] = useState<string>(exam.id);
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedShortLink, setCopiedShortLink] = useState(false);
   const [copiedTemplate, setCopiedTemplate] = useState(false);
@@ -46,45 +51,67 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
   const [showEnlargedQr, setShowEnlargedQr] = useState(false);
   const qrRef = useRef<SVGSVGElement | null>(null);
 
+  // Sync selectedExamId when exam prop changes
+  useEffect(() => {
+    if (exam && exam.id) {
+      setSelectedExamId(exam.id);
+    }
+  }, [exam.id]);
+
+  const currentExam = useMemo(() => {
+    if (allExams && allExams.length > 0) {
+      const found = allExams.find((e) => e.id === selectedExamId);
+      if (found) return found;
+    }
+    return exam;
+  }, [allExams, selectedExamId, exam]);
+
+  const currentToken = useMemo(() => {
+    return currentExam.sessionToken || token || "TOKEN1";
+  }, [currentExam.sessionToken, token]);
+
   const availableTokens = useMemo(() => {
     if (tokens && tokens.length > 0) return tokens;
     const list = getStudentTokens();
-    const matching = list.filter((t) => !t.examCode || t.examCode === exam.code);
+    const matching = list.filter((t) => !t.examCode || t.examCode === currentExam.code);
     return matching.length > 0 ? matching : list;
-  }, [tokens, exam.code]);
+  }, [tokens, currentExam.code]);
 
   if (!isOpen) return null;
 
-  const currentUrl = window.location.origin + window.location.pathname;
+  const currentUrl = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
   const baseUrl = currentUrl.endsWith("/") ? currentUrl.slice(0, -1) : currentUrl;
 
   // 1. Full compressed link containing package data
   const fullPackageLinkWithToken = generateStudentShareUrl(
     baseUrl,
-    exam,
-    token,
+    currentExam,
+    currentToken,
     availableTokens,
     true
   );
   const fullPackageLinkWithoutToken = generateStudentShareUrl(
     baseUrl,
-    exam,
+    currentExam,
     undefined,
     availableTokens,
     true
   );
-  const fullPackageActiveLink = includeTokenInLink && token ? fullPackageLinkWithToken : fullPackageLinkWithoutToken;
+  const fullPackageActiveLink = includeTokenInLink && currentToken ? fullPackageLinkWithToken : fullPackageLinkWithoutToken;
 
   // 2. Short clean link (ideal for QR codes, projectors, or school intranet)
-  const shortLinkWithToken = generateShortStudentUrl(baseUrl, exam, token);
-  const shortLinkWithoutToken = generateShortStudentUrl(baseUrl, exam, undefined);
-  const shortActiveLink = includeTokenInLink && token ? shortLinkWithToken : shortLinkWithoutToken;
+  const shortLinkWithToken = generateShortStudentUrl(baseUrl, currentExam, currentToken);
+  const shortLinkWithoutToken = generateShortStudentUrl(baseUrl, currentExam, undefined);
+  const shortActiveLink = includeTokenInLink && currentToken ? shortLinkWithToken : shortLinkWithoutToken;
 
   // Active link selected in the main input box
   const activeSelectedLink = linkMode === "full_package" ? fullPackageActiveLink : shortActiveLink;
 
-  // QR Code payload to render
-  const qrCodeTargetUrl = qrMode === "short" ? shortActiveLink : fullPackageActiveLink;
+  // QR Code payload to render (Safety cap: QR standard max capacity is ~1500 chars for reliable scanning)
+  const isFullPackageTooLongForQr = fullPackageActiveLink.length > 1400;
+  const qrCodeTargetUrl = (qrMode === "full_package" && !isFullPackageTooLongForQr)
+    ? fullPackageActiveLink
+    : shortActiveLink;
 
   const handleCopyLink = (textToCopy: string, isShort: boolean = false) => {
     navigator.clipboard.writeText(textToCopy);
@@ -97,12 +124,12 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
     }
   };
 
-  const shareMessageText = `📋 *LINK UJIAN CBT SISWA - ${exam.title.toUpperCase()}*\n\n` +
-    `👤 Mata Pelajaran: *${exam.teacherProfile.subject}* (${exam.teacherProfile.gradeLevel})\n` +
-    `⏱️ Durasi: *${exam.durationMinutes} Menit* (${exam.questions.length} Butir Soal)\n` +
-    (token ? `🔑 Token Masuk: *${token}*\n\n` : "\n") +
+  const shareMessageText = `📋 *LINK UJIAN CBT SISWA - ${currentExam.title.toUpperCase()}*\n\n` +
+    `👤 Mata Pelajaran: *${currentExam.teacherProfile?.subject || "Umum"}* (${currentExam.teacherProfile?.gradeLevel || "Umum"})\n` +
+    `⏱️ Durasi: *${currentExam.durationMinutes || 60} Menit* (${currentExam.questions?.length || 0} Butir Soal)\n` +
+    (includeTokenInLink && currentToken ? `🔑 Token Masuk: *${currentToken}*\n\n` : "\n") +
     `👉 *Klik Link Ujian Berikut untuk Mulai:*\n${activeSelectedLink}\n\n` +
-    `_Petunjuk: Buka link, pilih nama dari daftar kelas, masukkan token ujian, dan kerjakan dengan teliti._`;
+    `_Petunjuk: Buka link di HP/Laptop, pilih nama siswa, masukkan token jika diminta, lalu kerjakan soal dengan teliti._`;
 
   const handleCopyWhatsAppTemplate = () => {
     navigator.clipboard.writeText(shareMessageText);
@@ -123,11 +150,19 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `QR-Ujian-${exam.code || "CBT"}.svg`;
+    link.download = `QR-Ujian-${currentExam.code || "CBT"}.svg`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+  };
+
+  const handleSwitchExam = (newId: string) => {
+    setSelectedExamId(newId);
+    if (onSelectExam && allExams) {
+      const found = allExams.find((e) => e.id === newId);
+      if (found) onSelectExam(found);
+    }
   };
 
   return (
@@ -165,31 +200,57 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
 
         {/* Modal Body */}
         <div className="p-4 sm:p-6 space-y-4 sm:space-y-5 overflow-y-auto">
+          {/* Multi-Exam Switcher Dropdown (if teacher has multiple packages in bank) */}
+          {allExams && allExams.length > 1 && (
+            <div className="p-3 bg-[#18181c] rounded-2xl border border-indigo-500/30 space-y-1.5">
+              <label className="text-[11px] font-bold text-indigo-300 flex items-center justify-between">
+                <span>Pilih Paket Soal Yang Ingin Dibagikan:</span>
+                <span className="text-[10px] text-slate-400 font-normal">{allExams.length} Paket Tersedia</span>
+              </label>
+              <select
+                value={selectedExamId}
+                onChange={(e) => handleSwitchExam(e.target.value)}
+                className="w-full px-3 py-2 bg-[#101012] border border-slate-700 rounded-xl text-white text-xs font-semibold focus:outline-none focus:border-indigo-500 cursor-pointer"
+              >
+                {allExams.map((ex) => (
+                  <option key={ex.id} value={ex.id}>
+                    {ex.title} ({ex.code}) - {ex.questions?.length || 0} Soal - {ex.teacherProfile?.subject || "Umum"}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {/* Exam Summary Badge */}
           <div className="p-3.5 sm:p-4 bg-[#161618] rounded-2xl border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-            <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400 block mb-0.5">
-                Paket Ujian Aktif
-              </span>
-              <div className="font-bold text-white text-sm">{exam.title}</div>
-              <div className="text-slate-400 mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                <span>{exam.teacherProfile.subject}</span>
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-400">
+                  Paket Soal Terpilih
+                </span>
+                <span className="text-[10px] px-2 py-0.2 rounded-full bg-indigo-950 text-indigo-300 border border-indigo-500/30 font-mono font-bold">
+                  {currentExam.code}
+                </span>
+              </div>
+              <div className="font-bold text-white text-sm">{currentExam.title}</div>
+              <div className="text-slate-400 text-[11px] flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                <span>{currentExam.teacherProfile?.subject || "Mata Pelajaran"}</span>
                 <span>•</span>
-                <span>{exam.teacherProfile.gradeLevel}</span>
+                <span>{currentExam.teacherProfile?.gradeLevel || "Kelas"}</span>
                 <span>•</span>
-                <span className="text-emerald-400 font-semibold">{exam.questions.length} Butir Soal</span>
+                <span className="text-emerald-400 font-semibold">{currentExam.questions?.length || 0} Butir Soal</span>
                 <span>•</span>
-                <span>Kode: <span className="font-mono text-indigo-300 font-bold">{exam.code}</span></span>
+                <span>{currentExam.durationMinutes || 60} Menit</span>
               </div>
             </div>
 
-            {token && (
+            {currentToken && (
               <div className="p-2.5 bg-indigo-950/50 border border-indigo-500/40 rounded-xl flex items-center gap-2 shrink-0">
                 <KeyRound className="w-4 h-4 text-indigo-400" />
                 <div>
-                  <div className="text-[10px] text-slate-400">Token Aktif:</div>
+                  <div className="text-[10px] text-slate-400">Token Ujian:</div>
                   <div className="font-mono font-black text-sm text-indigo-300 tracking-wider">
-                    {token}
+                    {currentToken}
                   </div>
                 </div>
               </div>
@@ -279,7 +340,7 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
             {linkMode === "full_package" ? (
               <p className="text-[11px] text-emerald-400/95 flex items-center gap-1.5 font-medium">
                 <PackageCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                <span>Link ini telah mengompresi {exam.questions.length} butir soal, siap dibuka di WhatsApp/HP siswa tanpa perlu sinkronisasi manual.</span>
+                <span>Link ini telah mengompresi {currentExam.questions?.length || 0} butir soal, siap dibuka di WhatsApp/HP siswa tanpa perlu sinkronisasi manual.</span>
               </p>
             ) : (
               <p className="text-[11px] text-amber-400/90 flex items-center gap-1.5 font-medium">
@@ -300,14 +361,20 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
                 </div>
 
                 <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    title="Toggle QR Ringkas / Lengkap"
-                    onClick={() => setQrMode(qrMode === "short" ? "full_package" : "short")}
-                    className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-950/60 text-indigo-300 border border-indigo-500/30 hover:bg-indigo-900/60 cursor-pointer"
-                  >
-                    {qrMode === "short" ? "Mode: Ringkas" : "Mode: Lengkap"}
-                  </button>
+                  {!isFullPackageTooLongForQr ? (
+                    <button
+                      type="button"
+                      title="Toggle QR Ringkas / Lengkap"
+                      onClick={() => setQrMode(qrMode === "short" ? "full_package" : "short")}
+                      className="text-[10px] px-2 py-0.5 rounded-md bg-indigo-950/60 text-indigo-300 border border-indigo-500/30 hover:bg-indigo-900/60 cursor-pointer"
+                    >
+                      {qrMode === "short" ? "Mode: Ringkas" : "Mode: Lengkap"}
+                    </button>
+                  ) : (
+                    <span className="text-[10px] px-2 py-0.5 rounded-md bg-emerald-950/60 text-emerald-300 border border-emerald-500/30 font-semibold">
+                      Mode: Ringkas (Cepat)
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -321,7 +388,7 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
                   ref={qrRef}
                   value={qrCodeTargetUrl}
                   size={140}
-                  level={qrMode === "short" ? "M" : "L"}
+                  level="M"
                   bgColor="#ffffff"
                   fgColor="#09090b"
                   marginSize={1}
@@ -334,7 +401,7 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
 
               <div className="space-y-1.5 w-full">
                 <p className="text-[10px] text-slate-400 leading-tight">
-                  {qrMode === "short"
+                  {qrMode === "short" || isFullPackageTooLongForQr
                     ? "✨ QR Ringkas: Sangat cepat dipindai di proyektor kelas atau layar monitor."
                     : "📦 QR Lengkap: Berisi seluruh paket soal langsung ke kamera HP siswa."}
                 </p>
@@ -430,7 +497,7 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
             <div className="flex items-center justify-between">
               <div className="text-left">
                 <h3 className="font-bold text-white text-base">QR Code Ujian CBT</h3>
-                <p className="text-xs text-indigo-300 font-medium">{exam.title} ({exam.code})</p>
+                <p className="text-xs text-indigo-300 font-medium">{currentExam.title} ({currentExam.code})</p>
               </div>
               <button
                 onClick={() => setShowEnlargedQr(false)}
@@ -444,7 +511,7 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
               <QRCodeSVG
                 value={qrCodeTargetUrl}
                 size={260}
-                level={qrMode === "short" ? "M" : "L"}
+                level="M"
                 bgColor="#ffffff"
                 fgColor="#09090b"
                 marginSize={2}

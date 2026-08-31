@@ -456,12 +456,10 @@ export default function App() {
             onSaveSession={handleSaveStudentSession}
             onSubmitExam={handleSubmitStudentExam}
             onExit={() => {
-              // Switch back to normal admin mode
-              const url = new URL(window.location.href);
-              url.searchParams.delete("mode");
-              url.searchParams.delete("token");
-              url.searchParams.delete("examId");
-              window.history.pushState({}, "", url.toString());
+              // Switch back to normal admin mode and clean query parameters
+              if (typeof window !== "undefined") {
+                window.history.replaceState({}, "", window.location.pathname);
+              }
               setIsDirectStudentMode(false);
               setActiveTab("monitoring");
             }}
@@ -713,9 +711,11 @@ export default function App() {
             exam={activeExam}
             school={schoolProfile}
             tokens={tokens}
+            allExams={exams}
             onUpdateExamToken={handleUpdateExamToken}
             onUpdateTokens={handleUpdateTokens}
             onUpdateExam={handleUpdateActiveExam}
+            onSelectExam={(e) => handleSelectExamId(e.id)}
           />
         )}
 
@@ -741,6 +741,9 @@ export default function App() {
         onClose={() => setIsShareModalOpen(false)}
         exam={activeExam}
         token={activeExam.sessionToken}
+        tokens={tokens}
+        allExams={exams}
+        onSelectExam={(e) => handleSelectExamId(e.id)}
       />
 
       {/* Gemini API Key Configuration Modal */}
