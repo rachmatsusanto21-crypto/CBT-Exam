@@ -34,6 +34,7 @@ interface StudentResultViewProps {
   exam: ExamPackage;
   onExit: () => void;
   isTeacherTrial?: boolean;
+  isDirectLink?: boolean;
   onRetryTrial?: () => void;
 }
 
@@ -42,12 +43,14 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
   exam,
   onExit,
   isTeacherTrial = false,
+  isDirectLink = false,
   onRetryTrial,
 }) => {
   const [isAnalyzingAi, setIsAnalyzingAi] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(session.aiRemediation || null);
   const [aiError, setAiError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"summary" | "review">("summary");
+  const [showFinishedAlert, setShowFinishedAlert] = useState(false);
 
   useEffect(() => {
     // Trigger festive celebratory confetti
@@ -252,13 +255,42 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
           </button>
 
           <button
-            onClick={onExit}
+            onClick={() => {
+              if (isTeacherTrial) {
+                onExit();
+              } else if (isDirectLink) {
+                setShowFinishedAlert(true);
+              } else {
+                onExit();
+              }
+            }}
             className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold cursor-pointer transition-all shadow-md shadow-indigo-950"
           >
-            <span>{isTeacherTrial ? "Selesai & Kembali ke Editor" : "Selesai & Keluar"}</span>
-            <ChevronRight className="w-4 h-4" />
+            <span>{isTeacherTrial ? "Selesai & Kembali ke Editor" : isDirectLink ? "Ujian Telah Selesai" : "Selesai & Keluar"}</span>
+            <CheckCircle className="w-4 h-4" />
           </button>
         </div>
+
+        {/* Direct Student Mode Finished Alert Dialog */}
+        {showFinishedAlert && (
+          <div className="mt-4 p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl text-left flex items-start gap-3 animate-in fade-in">
+            <CheckCircle className="w-5 h-5 text-emerald-400 mt-0.5 shrink-0" />
+            <div className="space-y-1 text-xs">
+              <div className="font-bold text-emerald-300">
+                Pengerjaan Anda telah tersimpan secara resmi!
+              </div>
+              <p className="text-slate-300 leading-relaxed">
+                Jawaban dan skor akhir Anda telah terkirim ke rekapitulasi penilaian guru. Anda dapat meninjau pembahasan butir soal di bawah ini atau menutup jendela browser dengan aman.
+              </p>
+              <button
+                onClick={() => setShowFinishedAlert(false)}
+                className="mt-1 text-[11px] text-emerald-400 font-bold hover:underline cursor-pointer"
+              >
+                Tutup pemberitahuan
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Tabs Navigation: Summary vs Detailed Review */}

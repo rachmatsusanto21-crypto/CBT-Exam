@@ -860,6 +860,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
         exam={exam}
         onExit={onExit}
         isTeacherTrial={isTeacherTrial}
+        isDirectLink={isDirectLink}
         onRetryTrial={handleRetryTeacherTrial}
       />
     );
@@ -883,8 +884,8 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
               {exam.teacherProfile.subject} • {exam.schoolProfile.schoolName}
             </p>
 
-            {/* Multi-Exam Switcher (if multiple exams exist in school) */}
-            {allExams && allExams.length > 1 && (
+            {/* Multi-Exam Switcher (only shown in internal teacher testing mode, hidden on direct student links) */}
+            {allExams && allExams.length > 1 && !isDirectLink && (
               <div className="pt-2">
                 <select
                   value={exam.id}
@@ -1118,16 +1119,18 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
             </button>
           </form>
 
-          {/* Discrete exit link */}
-          <div className="text-center pt-2 border-t border-slate-800">
-            <button
-              type="button"
-              onClick={onExit}
-              className="text-xs text-slate-500 hover:text-slate-400 underline cursor-pointer"
-            >
-              Masuk sebagai Guru / Administrator
-            </button>
-          </div>
+          {/* Discrete exit link (only visible in internal testing view, hidden for direct students) */}
+          {!isDirectLink && (
+            <div className="text-center pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={onExit}
+                className="text-xs text-slate-500 hover:text-slate-400 underline cursor-pointer"
+              >
+                Masuk sebagai Guru / Administrator
+              </button>
+            </div>
+          )}
         </div>
       </div>
     );

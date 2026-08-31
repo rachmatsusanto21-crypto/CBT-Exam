@@ -472,23 +472,15 @@ export default function App() {
           />
         </main>
 
-        <footer className="bg-[#0c0c0e] border-t border-slate-850 py-3 px-4 text-center text-xs text-slate-500">
+        <footer className="bg-[#0c0c0e] border-t border-slate-800/80 py-3 px-4 text-center text-xs text-slate-500">
           <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
             <div className="text-[11px] text-slate-400">
-              {activeExam.schoolProfile.schoolName} • SlideExam CBT Siswa
+              {activeExam.schoolProfile.schoolName} • Slide CBT Siswa Mandiri
             </div>
-            <button
-              onClick={() => {
-                const url = new URL(window.location.href);
-                url.searchParams.delete("mode");
-                window.history.pushState({}, "", url.toString());
-                setIsDirectStudentMode(false);
-                setActiveTab("monitoring");
-              }}
-              className="text-[11px] text-indigo-400 hover:text-indigo-300 font-semibold cursor-pointer underline"
-            >
-              Masuk ke Dashboard Guru / Admin
-            </button>
+            <div className="text-[11px] text-slate-500 font-mono flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+              Mode Pengerjaan Siswa (Slide CBT) • Dilindungi Sistem Anti-Kecurangan
+            </div>
           </div>
         </footer>
       </div>

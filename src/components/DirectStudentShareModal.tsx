@@ -146,11 +146,11 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
               <h2 className="text-base sm:text-lg font-black text-white flex items-center gap-2">
                 <span>Bagikan Link & QR Code Ujian</span>
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 uppercase tracking-wider font-bold">
-                  Siswa Mandiri
+                  Mode Slide CBT Siswa
                 </span>
               </h2>
               <p className="text-xs text-slate-400">
-                Siswa langsung masuk ke form ujian full-screen tanpa menu navigasi guru.
+                Membuka tampilan pengerjaan slide CBT per butir soal & langsung menampilkan skor akhir siswa tanpa akses ke menu guru.
               </p>
             </div>
           </div>
