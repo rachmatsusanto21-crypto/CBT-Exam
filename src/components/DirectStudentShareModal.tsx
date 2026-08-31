@@ -128,7 +128,7 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
     `👤 Mata Pelajaran: *${currentExam.teacherProfile?.subject || "Umum"}* (${currentExam.teacherProfile?.gradeLevel || "Umum"})\n` +
     `⏱️ Durasi: *${currentExam.durationMinutes || 60} Menit* (${currentExam.questions?.length || 0} Butir Soal)\n` +
     (includeTokenInLink && currentToken ? `🔑 Token Masuk: *${currentToken}*\n\n` : "\n") +
-    `👉 *Klik Link Ujian Berikut untuk Mulai:*\n${activeSelectedLink}\n\n` +
+    `👉 *Klik Link Ujian Berikut untuk Mulai:*\n${fullPackageActiveLink}\n\n` +
     `_Petunjuk: Buka link di HP/Laptop, pilih nama siswa, masukkan token jika diminta, lalu kerjakan soal dengan teliti._`;
 
   const handleCopyWhatsAppTemplate = () => {

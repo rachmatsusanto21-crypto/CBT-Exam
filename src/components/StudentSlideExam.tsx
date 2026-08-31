@@ -69,6 +69,7 @@ interface StudentSlideExamProps {
   isTeacherTrial?: boolean;
   allExams?: ExamPackage[];
   onSwitchExam?: (exam: ExamPackage) => void;
+  requestedExamCode?: string | null;
 }
 
 export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
@@ -83,6 +84,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
   isTeacherTrial = false,
   allExams,
   onSwitchExam,
+  requestedExamCode,
 }) => {
   // Available registered students roster from profile data
   const availableStudents = React.useMemo(() => {
@@ -101,6 +103,15 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
   const [loginExamCode, setLoginExamCode] = useState(exam.code);
   const [loginToken, setLoginToken] = useState(initialToken || exam.sessionToken);
   const [loginError, setLoginError] = useState<string | null>(null);
+
+  // Sync login fields when exam prop changes
+  useEffect(() => {
+    setLoginExamCode(exam.code);
+    setLoginClass(exam.teacherProfile.gradeLevel || "Kelas X");
+    if (!initialToken && exam.sessionToken) {
+      setLoginToken(exam.sessionToken);
+    }
+  }, [exam, initialToken]);
 
   // Student dropdown selector handler
   const handleSelectStudent = (studentId: string) => {
@@ -938,9 +949,30 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
               {exam.teacherProfile.subject} • {exam.schoolProfile.schoolName}
             </p>
 
-            {/* Multi-Exam Switcher (only shown in internal teacher testing mode, hidden on direct student links) */}
-            {allExams && allExams.length > 1 && !isDirectLink && (
+            {/* Warning if requested exam from short link is not found in this browser */}
+            {requestedExamCode &&
+              requestedExamCode.trim().toUpperCase() !== exam.code.trim().toUpperCase() &&
+              requestedExamCode.trim() !== exam.id && (
+                <div className="p-3 bg-amber-950/40 border border-amber-500/40 rounded-2xl text-left space-y-1.5 text-xs text-amber-200 animate-in fade-in">
+                  <div className="flex items-center gap-1.5 font-bold text-amber-300">
+                    <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span>Perhatian: Kode "{requestedExamCode}" Belum Tersimpan</span>
+                  </div>
+                  <p className="text-[11px] text-amber-200/90 leading-relaxed">
+                    Tautan yang dibuka adalah link ringkas. Perangkat ini sedang membuka paket: <strong>{exam.title} ({exam.code})</strong>.
+                  </p>
+                  <p className="text-[10px] text-amber-300/80 font-medium">
+                    💡 <em>Untuk siswa: Minta guru membagikan <strong>Link Lengkap WhatsApp</strong> (yang berisi &pkg=...) agar naskah Bahasa Indonesia langsung terbuka otomatis di HP Anda.</em>
+                  </p>
+                </div>
+              )}
+
+            {/* Multi-Exam Switcher (allow switching exams so user can select any loaded exam) */}
+            {allExams && allExams.length > 1 && (
               <div className="pt-2">
+                <label className="text-[10px] text-slate-400 font-semibold block mb-1">
+                  Mata Pelajaran / Paket Ujian:
+                </label>
                 <select
                   value={exam.id}
                   onChange={(e) => {
@@ -951,7 +983,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
                       setLoginError(null);
                     }
                   }}
-                  className="px-3 py-1.5 bg-[#1a1a1c] hover:bg-slate-800 border border-slate-700 rounded-xl text-xs text-indigo-300 font-semibold focus:border-indigo-500 focus:outline-none cursor-pointer max-w-full truncate"
+                  className="w-full px-3 py-2 bg-[#1a1a1c] hover:bg-slate-800 border border-slate-700 rounded-xl text-xs text-indigo-300 font-semibold focus:border-indigo-500 focus:outline-none cursor-pointer max-w-full truncate"
                   title="Ganti paket soal / mata pelajaran ujian"
                 >
                   {allExams.map((ex) => (

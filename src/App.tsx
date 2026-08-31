@@ -157,6 +157,52 @@ export default function App() {
   const [history, setHistoryState] = useState<StudentExamSession[]>(getExamHistory);
   const [activeSession, setActiveSessionState] = useState<StudentExamSession | null>(getActiveStudentSession);
 
+  const [requestedExamCode, setRequestedExamCode] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    const params = new URLSearchParams(window.location.search);
+    return params.get("code") || params.get("examId") || null;
+  });
+
+  // If URL specified an exam code/ID not in local storage, attempt to fetch from server registry
+  useEffect(() => {
+    if (!requestedExamCode) return;
+    const isAlreadyLoaded = exams.some(
+      (e) => e.id === requestedExamCode || e.code.toUpperCase() === requestedExamCode.toUpperCase()
+    );
+    if (isAlreadyLoaded) return;
+
+    // Fetch from backend share registry
+    const fetchRemoteExam = async () => {
+      try {
+        const res = await fetch(`/api/exams/by-code/${encodeURIComponent(requestedExamCode)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.success && data.exam) {
+          setExamsState((prev) => {
+            const idx = prev.findIndex(
+              (e) => e.id === data.exam.id || e.code.toUpperCase() === data.exam.code.toUpperCase()
+            );
+            let updated: ExamPackage[];
+            if (idx >= 0) {
+              updated = [...prev];
+              updated[idx] = data.exam;
+            } else {
+              updated = [data.exam, ...prev];
+            }
+            saveExamPackages(updated);
+            return updated;
+          });
+          setActiveExamIdState(data.exam.id);
+          saveActiveExamId(data.exam.id);
+          if (data.token) setUrlToken(data.token);
+        }
+      } catch (err) {
+        console.warn("Could not fetch remote exam code:", err);
+      }
+    };
+    fetchRemoteExam();
+  }, [requestedExamCode, exams]);
+
   // Check Gemini API Key Status
   const checkGeminiStatus = async () => {
     try {
@@ -216,6 +262,7 @@ export default function App() {
       if (token) setUrlToken(token);
       const examParam = params.get("examId") || params.get("code");
       if (examParam) {
+        setRequestedExamCode(examParam);
         const found = exams.find((e) => e.id === examParam || e.code.toUpperCase() === examParam.toUpperCase());
         if (found) {
           setActiveExamIdState(found.id);
@@ -248,6 +295,15 @@ export default function App() {
 
   // Active Exam
   const activeExam = exams.find((e) => e.id === activeExamId) || exams[0] || createNewExamPackage("Ujian Standar");
+
+  // Dynamically update document title based on active exam
+  useEffect(() => {
+    if (activeExam?.title) {
+      document.title = `${activeExam.title} - SlideExam CBT`;
+    } else {
+      document.title = "SlideExam CBT - Ujian Interaktif & Analisis AI";
+    }
+  }, [activeExam]);
 
   // Handlers for Data Updates
   const handleUpdateSchool = (updated: SchoolProfile) => {
@@ -461,12 +517,14 @@ export default function App() {
                 window.history.replaceState({}, "", window.location.pathname);
               }
               setIsDirectStudentMode(false);
+              setRequestedExamCode(null);
               setActiveTab("monitoring");
             }}
             initialToken={urlToken}
             isDirectLink={true}
             allExams={exams}
             onSwitchExam={(targetExam) => handleSelectExamId(targetExam.id)}
+            requestedExamCode={requestedExamCode}
           />
         </main>
 
@@ -639,6 +697,7 @@ export default function App() {
             isTeacherTrial={isTeacherTrial}
             allExams={exams}
             onSwitchExam={(targetExam) => handleSelectExamId(targetExam.id)}
+            requestedExamCode={requestedExamCode}
             onExit={() => {
               if (isTeacherTrial) {
                 setIsTeacherTrial(false);

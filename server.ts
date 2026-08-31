@@ -112,9 +112,51 @@ const getGeminiClient = (customKey?: string) => {
   });
 };
 
+// In-memory exam package registry for short-link resolution across devices
+const sharedExamsRegistry = new Map<string, any>();
+
 // Health check
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
+// Save or sync shared exam package to server
+app.post("/api/exams/share", (req, res) => {
+  try {
+    const { exam, token, tokens } = req.body;
+    if (!exam || !exam.id) {
+      return res.status(400).json({ success: false, error: "Invalid exam package payload" });
+    }
+    const cleanCode = (exam.code || "").trim().toUpperCase();
+    const cleanId = (exam.id || "").trim();
+    
+    // Store by ID and by Code
+    const record = {
+      exam,
+      token,
+      tokens,
+      updatedAt: new Date().toISOString(),
+    };
+    if (cleanId) sharedExamsRegistry.set(cleanId, record);
+    if (cleanCode) sharedExamsRegistry.set(cleanCode, record);
+
+    res.json({ success: true, examId: cleanId, code: cleanCode });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || "Failed to share exam" });
+  }
+});
+
+// Retrieve shared exam package by code or ID
+app.get("/api/exams/by-code/:code", (req, res) => {
+  const code = (req.params.code || "").trim();
+  const upperCode = code.toUpperCase();
+  const record = sharedExamsRegistry.get(code) || sharedExamsRegistry.get(upperCode);
+
+  if (!record) {
+    return res.status(404).json({ success: false, message: `Exam with code '${code}' not found on server.` });
+  }
+
+  res.json({ success: true, ...record });
 });
 
 // Check Gemini API Key Status
