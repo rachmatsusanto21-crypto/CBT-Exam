@@ -1952,6 +1952,12 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
         onClose={() => setShowShareModal(false)}
         exam={activeExam}
         token={activeToken}
+        allExams={exams}
+        onSelectExam={(e) => {
+          if (onSelectExamId) {
+            onSelectExamId(e.id);
+          }
+        }}
       />
 
       {/* Import Questions Modal (Excel & Docs) */}

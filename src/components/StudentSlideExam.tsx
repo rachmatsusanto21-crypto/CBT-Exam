@@ -231,6 +231,21 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
   // Active questions (using shuffled questions if exists in session, else exam questions)
   const activeQuestions: Question[] = session?.shuffledQuestions || exam.questions;
 
+  // Per-Question Timer Tracking State & Ref (seconds spent per question)
+  const [timeSpentPerQuestion, setTimeSpentPerQuestion] = useState<Record<string, number>>(() => {
+    const initialMap: Record<string, number> = {};
+    if (currentSession?.answers) {
+      Object.entries(currentSession.answers).forEach(([qId, ans]: [string, any]) => {
+        if (ans && typeof ans.timeSpentSeconds === "number") {
+          initialMap[qId] = ans.timeSpentSeconds;
+        }
+      });
+    }
+    return initialMap;
+  });
+  const timeSpentPerQuestionRef = useRef<Record<string, number>>(timeSpentPerQuestion);
+  timeSpentPerQuestionRef.current = timeSpentPerQuestion;
+
   // Slides configuration:
   // Slide 0: Profil Sekolah & Header Instansi
   // Slide 1: Profil Guru & Mata Pelajaran
@@ -314,7 +329,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
     return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
   }, [isLoggedIn, isSubmitted]);
 
-  // Timer Tick Interval
+  // Timer Tick Interval (Main Exam Countdown & Active Question Duration)
   useEffect(() => {
     if (!isLoggedIn || isSubmitted) return;
 
@@ -325,10 +340,22 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
         }
         return prev - 1;
       });
+
+      // Increment per-question timer if currently on a question slide
+      if (currentQuestionIndex >= 0 && activeQuestions[currentQuestionIndex]) {
+        const activeQId = activeQuestions[currentQuestionIndex].id;
+        setTimeSpentPerQuestion((prev) => {
+          const currentCount = prev[activeQId] || 0;
+          return {
+            ...prev,
+            [activeQId]: currentCount + 1,
+          };
+        });
+      }
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [isLoggedIn, isSubmitted]);
+  }, [isLoggedIn, isSubmitted, currentQuestionIndex, activeQuestions]);
 
   // Handle Timeout Auto-submit
   useEffect(() => {
@@ -559,6 +586,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
       isCorrect,
       scoreEarned,
       answeredAt: new Date().toISOString(),
+      timeSpentSeconds: timeSpentPerQuestionRef.current[questionId] || 0,
     } as any;
 
     const updatedAnswers = {
@@ -610,6 +638,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
       isCorrect,
       scoreEarned,
       answeredAt: new Date().toISOString(),
+      timeSpentSeconds: timeSpentPerQuestionRef.current[questionId] || 0,
     } as any;
 
     const updatedAnswers = {
@@ -665,6 +694,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
       isCorrect: isFullyCorrect,
       scoreEarned: Math.round(partialScore * 10) / 10,
       answeredAt: new Date().toISOString(),
+      timeSpentSeconds: timeSpentPerQuestionRef.current[questionId] || 0,
     } as any;
 
     const updatedAnswers = {
@@ -788,8 +818,32 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
     const passed = percentage >= (exam.teacherProfile.passingGrade || 75);
     const timeSpentSeconds = Math.max(0, totalDurationSeconds - secondsRemainingRef.current);
 
+    // Merge latest per-question time spent into all answers
+    const mergedAnswers = { ...currentActiveSession.answers };
+    activeQuestions.forEach((q) => {
+      const existing = mergedAnswers[q.id];
+      const qTime = timeSpentPerQuestionRef.current[q.id] || 0;
+      if (existing) {
+        mergedAnswers[q.id] = {
+          ...existing,
+          timeSpentSeconds: qTime,
+        };
+      } else if (qTime > 0) {
+        mergedAnswers[q.id] = {
+          questionId: q.id,
+          selectedOption: "",
+          isFlagged: false,
+          isCorrect: false,
+          scoreEarned: 0,
+          timeSpentSeconds: qTime,
+          answeredAt: new Date().toISOString(),
+        } as any;
+      }
+    });
+
     const finalizedSession: StudentExamSession = {
       ...currentActiveSession,
+      answers: mergedAnswers,
       status,
       submitTime: new Date().toISOString(),
       timeSpentSeconds,
@@ -1598,7 +1652,16 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
                   )}
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  {/* Live Per-Question Timer Badge */}
+                  <div
+                    className="flex items-center gap-1.5 px-3 py-1 bg-indigo-950/60 border border-indigo-500/30 text-indigo-300 rounded-xl text-xs font-mono font-bold shadow-xs"
+                    title="Durasi waktu yang dihabiskan pada butir soal ini"
+                  >
+                    <Clock className="w-3.5 h-3.5 text-indigo-400 animate-pulse" />
+                    <span>Waktu Soal: <strong className="text-white font-mono">{formatTime(timeSpentPerQuestion[currentQuestion.id] || 0)}</strong></span>
+                  </div>
+
                   <span className="text-xs font-bold text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 px-2.5 py-1 rounded-xl">
                     Bobot: {currentQuestion.score} Poin
                   </span>
@@ -1852,12 +1915,13 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
               </p>
             </div>
 
-            {/* Answer Matrix Grid */}
-            <div className="grid grid-cols-5 sm:grid-cols-8 gap-2.5 p-5 bg-[#161618] rounded-2xl border border-slate-800 max-h-[260px] overflow-y-auto">
+            {/* Answer Matrix Grid with Per-Question Timers */}
+            <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-2.5 p-4 sm:p-5 bg-[#161618] rounded-2xl border border-slate-800 max-h-[280px] overflow-y-auto">
               {activeQuestions.map((q, idx) => {
                 const ans = session?.answers[q.id];
                 const hasAnswer = !!ans?.selectedOption && ans.selectedOption !== "{}";
                 const isFlagged = !!ans?.isFlagged;
+                const qDuration = timeSpentPerQuestion[q.id] || ans?.timeSpentSeconds || 0;
 
                 let badgeStyle = "bg-[#1a1a1c] border-slate-700 text-slate-400";
                 if (isFlagged) {
@@ -1870,14 +1934,60 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
                   <button
                     key={q.id}
                     onClick={() => handleJumpToSlide(3 + idx)}
-                    className={`h-12 rounded-xl border flex flex-col items-center justify-center transition-all cursor-pointer hover:scale-105 ${badgeStyle}`}
+                    className={`py-2 px-1.5 rounded-xl border flex flex-col items-center justify-center transition-all cursor-pointer hover:scale-105 ${badgeStyle}`}
                   >
-                    <span className="text-[10px] opacity-80">Soal</span>
-                    <span className="text-sm font-extrabold">{idx + 1}</span>
+                    <div className="flex items-center gap-1">
+                      <span className="text-[10px] opacity-80">Soal</span>
+                      <span className="text-sm font-extrabold">{idx + 1}</span>
+                    </div>
+                    <span className="text-[9px] font-mono opacity-90 mt-0.5 px-1 py-0.2 rounded bg-black/20">
+                      ⏱ {formatTime(qDuration)}
+                    </span>
                   </button>
                 );
               })}
             </div>
+
+            {/* Engagement Analytics Summary Card */}
+            {(() => {
+              const times = activeQuestions.map((q) => ({
+                id: q.id,
+                time: timeSpentPerQuestion[q.id] || session?.answers[q.id]?.timeSpentSeconds || 0,
+              }));
+              const totalSpent = times.reduce((acc, t) => acc + t.time, 0);
+              const avgTime = activeQuestions.length > 0 ? Math.round(totalSpent / activeQuestions.length) : 0;
+              const maxTime = Math.max(...times.map((t) => t.time), 0);
+              const minTime = Math.min(...times.map((t) => t.time), 0);
+
+              return (
+                <div className="p-4 bg-[#141416] rounded-2xl border border-indigo-500/20 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-indigo-300 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>Analisis Keterlibatan & Waktu per Soal</span>
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      Rata-rata: <strong className="text-white">{formatTime(avgTime)}</strong> / soal
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                    <div className="p-2 bg-[#1a1a1c] rounded-xl border border-slate-800">
+                      <div className="text-[10px] text-slate-400">Total Waktu Soal</div>
+                      <div className="font-mono font-bold text-white text-sm">{formatTime(totalSpent)}</div>
+                    </div>
+                    <div className="p-2 bg-[#1a1a1c] rounded-xl border border-slate-800">
+                      <div className="text-[10px] text-slate-400">Paling Lama</div>
+                      <div className="font-mono font-bold text-amber-400 text-sm">{formatTime(maxTime)}</div>
+                    </div>
+                    <div className="p-2 bg-[#1a1a1c] rounded-xl border border-slate-800">
+                      <div className="text-[10px] text-slate-400">Paling Singkat</div>
+                      <div className="font-mono font-bold text-emerald-400 text-sm">{formatTime(minTime)}</div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Legend */}
             <div className="flex flex-wrap items-center justify-center gap-4 text-xs">
@@ -1940,6 +2050,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
                 const hasAnswer = !!ans?.selectedOption && ans.selectedOption !== "{}";
                 const isFlagged = !!ans?.isFlagged;
                 const isCurrent = currentQuestionIndex === idx;
+                const qDuration = timeSpentPerQuestion[q.id] || ans?.timeSpentSeconds || 0;
 
                 let style = "bg-[#1a1a1c] border-slate-700 text-slate-400";
                 if (isFlagged) {
@@ -1956,10 +2067,15 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
                   <button
                     key={q.id}
                     onClick={() => handleJumpToSlide(3 + idx)}
-                    className={`h-11 rounded-xl border flex flex-col items-center justify-center transition-all cursor-pointer ${style}`}
+                    className={`py-2 px-1.5 rounded-xl border flex flex-col items-center justify-center transition-all cursor-pointer ${style}`}
                   >
-                    <span className="text-[10px] opacity-80">Soal</span>
-                    <span className="text-xs font-black">{idx + 1}</span>
+                    <div className="flex items-center gap-1">
+                      <span className="text-[10px] opacity-80">Soal</span>
+                      <span className="text-xs font-black">{idx + 1}</span>
+                    </div>
+                    <span className="text-[9px] font-mono opacity-85 mt-0.5 px-1 py-0.2 rounded bg-black/20">
+                      ⏱ {formatTime(qDuration)}
+                    </span>
                   </button>
                 );
               })}

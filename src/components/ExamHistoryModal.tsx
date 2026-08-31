@@ -21,7 +21,8 @@ import {
   AlertTriangle,
   HelpCircle,
   CheckSquare,
-  Filter
+  Filter,
+  Share2
 } from "lucide-react";
 import { ExamPackage, Question, QuestionType, SchoolProfile } from "../types";
 import {
@@ -30,6 +31,7 @@ import {
   printFormattedExamDocument,
   calculateBloomAndersonSummary
 } from "../utils/sheetExport";
+import { DirectStudentShareModal } from "./DirectStudentShareModal";
 
 interface ExamHistoryModalProps {
   isOpen: boolean;
@@ -63,6 +65,7 @@ export const ExamHistoryModal: React.FC<ExamHistoryModalProps> = ({
   const [expandedExamId, setExpandedExamId] = useState<string | null>(null);
   const [questionSearch, setQuestionSearch] = useState("");
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [shareExamTarget, setShareExamTarget] = useState<ExamPackage | null>(null);
 
   if (!isOpen) return null;
 
@@ -433,6 +436,18 @@ export const ExamHistoryModal: React.FC<ExamHistoryModalProps> = ({
                           <span>Buka Editor</span>
                         </button>
 
+                        {/* Direct Share Link to Students */}
+                        <button
+                          onClick={() => {
+                            setShareExamTarget(examItem);
+                          }}
+                          className="px-3 py-2 bg-indigo-950/70 hover:bg-indigo-900/80 text-indigo-300 border border-indigo-500/30 rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shadow-sm"
+                          title="Buat dan bagikan link ujian / barcode QR langsung untuk siswa"
+                        >
+                          <Share2 className="w-3.5 h-3.5 text-indigo-400" />
+                          <span>Bagikan Link</span>
+                        </button>
+
                         {/* Toggle Question List to Manage & Delete Questions */}
                         <button
                           onClick={() => {
@@ -663,6 +678,18 @@ export const ExamHistoryModal: React.FC<ExamHistoryModalProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Direct Student Share Modal for Selected Exam */}
+      {shareExamTarget && (
+        <DirectStudentShareModal
+          isOpen={!!shareExamTarget}
+          onClose={() => setShareExamTarget(null)}
+          exam={shareExamTarget}
+          token={shareExamTarget.sessionToken}
+          allExams={exams}
+          onSelectExam={(e) => setShareExamTarget(e)}
+        />
+      )}
     </div>
   );
 };
