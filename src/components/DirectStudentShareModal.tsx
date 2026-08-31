@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import {
   X,
   Copy,
@@ -10,15 +10,19 @@ import {
   Globe,
   Sparkles,
   KeyRound,
-  MessageSquare
+  MessageSquare,
+  PackageCheck
 } from "lucide-react";
-import { ExamPackage } from "../types";
+import { ExamPackage, StudentTokenItem } from "../types";
+import { generateStudentShareUrl } from "../utils/examShareEncoder";
+import { getStudentTokens } from "../utils/storage";
 
 interface DirectStudentShareModalProps {
   isOpen: boolean;
   onClose: () => void;
   exam: ExamPackage;
   token?: string;
+  tokens?: StudentTokenItem[];
 }
 
 export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = ({
@@ -26,20 +30,28 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
   onClose,
   exam,
   token,
+  tokens,
 }) => {
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedWithToken, setCopiedWithToken] = useState(false);
   const [copiedTemplate, setCopiedTemplate] = useState(false);
   const [includeTokenInLink, setIncludeTokenInLink] = useState(true);
 
+  const availableTokens = useMemo(() => {
+    if (tokens && tokens.length > 0) return tokens;
+    const list = getStudentTokens();
+    const matching = list.filter((t) => !t.examCode || t.examCode === exam.code);
+    return matching.length > 0 ? matching : list;
+  }, [tokens, exam.code]);
+
   if (!isOpen) return null;
 
   const currentUrl = window.location.origin + window.location.pathname;
   const baseUrl = currentUrl.endsWith("/") ? currentUrl.slice(0, -1) : currentUrl;
 
-  const baseStudentLink = `${baseUrl}?mode=student&examId=${encodeURIComponent(exam.id)}`;
+  const baseStudentLink = generateStudentShareUrl(baseUrl, exam, undefined, availableTokens);
   const directLinkWithToken = token
-    ? `${baseStudentLink}&token=${encodeURIComponent(token)}`
+    ? generateStudentShareUrl(baseUrl, exam, token, availableTokens)
     : baseStudentLink;
 
   const activeShareLink = includeTokenInLink && token ? directLinkWithToken : baseStudentLink;
@@ -189,6 +201,10 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
                 )}
               </button>
             </div>
+            <p className="text-[11px] text-emerald-400/90 flex items-center gap-1.5 font-medium">
+              <PackageCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <span>Link otomatis memuat seluruh {exam.questions.length} butir soal hasil editan editor ke perangkat siswa.</span>
+            </p>
             <p className="text-[11px] text-slate-400">
               💡 Siswa yang membuka link ini langsung diarahkan ke form pengerjaan ujian secara full-screen tanpa menu navigasi guru.
             </p>

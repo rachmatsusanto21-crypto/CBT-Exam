@@ -458,10 +458,10 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
     }
   };
 
-  const handleSaveQuestionEdit = () => {
-    if (!editingQuestion) return;
+  const handleUpdateCurrentQuestion = (updatedQ: Question) => {
+    setEditingQuestion(updatedQ);
     const updatedList = activeExam.questions.map((q) =>
-      q.id === editingQuestion.id ? editingQuestion : q
+      q.id === updatedQ.id ? updatedQ : q
     );
     const totalScore = updatedList.reduce((acc, q) => acc + (q.score || 0), 0);
     onUpdateExam({
@@ -470,6 +470,11 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
       totalScore,
       updatedAt: new Date().toISOString(),
     });
+  };
+
+  const handleSaveQuestionEdit = () => {
+    if (!editingQuestion) return;
+    handleUpdateCurrentQuestion(editingQuestion);
     setAiSuccessMsg("Perubahan butir soal berhasil disimpan.");
     setTimeout(() => setAiSuccessMsg(null), 3000);
   };
@@ -536,7 +541,7 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
     const newOptions = editingQuestion.options.map((opt) =>
       opt.key === key ? { ...opt, text } : opt
     );
-    setEditingQuestion({ ...editingQuestion, options: newOptions });
+    handleUpdateCurrentQuestion({ ...editingQuestion, options: newOptions });
   };
 
   // Matching pair helpers
@@ -548,7 +553,7 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
       left: `Pernyataan / Konsep ${currentPairs.length + 1}`,
       right: `Pasangan Cocok ${currentPairs.length + 1}`,
     };
-    setEditingQuestion({
+    handleUpdateCurrentQuestion({
       ...editingQuestion,
       matchingPairs: [...currentPairs, newPair],
     });
@@ -559,13 +564,13 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
     const updated = editingQuestion.matchingPairs.map((p) =>
       p.id === pairId ? { ...p, [field]: value } : p
     );
-    setEditingQuestion({ ...editingQuestion, matchingPairs: updated });
+    handleUpdateCurrentQuestion({ ...editingQuestion, matchingPairs: updated });
   };
 
   const handleDeleteMatchingPair = (pairId: string) => {
     if (!editingQuestion || !editingQuestion.matchingPairs) return;
     const updated = editingQuestion.matchingPairs.filter((p) => p.id !== pairId);
-    setEditingQuestion({ ...editingQuestion, matchingPairs: updated });
+    handleUpdateCurrentQuestion({ ...editingQuestion, matchingPairs: updated });
   };
 
   // Image Insertion Handlers
@@ -594,13 +599,7 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
         imagePrompt: promptToUse,
       };
 
-      setEditingQuestion(updatedQ);
-
-      // Auto update in exam package
-      const updatedList = activeExam.questions.map((q) =>
-        q.id === updatedQ.id ? updatedQ : q
-      );
-      onUpdateExam({ ...activeExam, questions: updatedList, updatedAt: new Date().toISOString() });
+      handleUpdateCurrentQuestion(updatedQ);
     } catch (err: any) {
       setImageError(err.message || "Gagal membuat gambar AI.");
     } finally {
@@ -620,12 +619,7 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
       imageUrl: imageUrlInput.trim(),
       imageCaption: editingQuestion.imageCaption || "Gambar Pendukung Soal",
     };
-    setEditingQuestion(updatedQ);
-
-    const updatedList = activeExam.questions.map((q) =>
-      q.id === updatedQ.id ? updatedQ : q
-    );
-    onUpdateExam({ ...activeExam, questions: updatedList, updatedAt: new Date().toISOString() });
+    handleUpdateCurrentQuestion(updatedQ);
     setImageError(null);
   };
 
@@ -651,12 +645,7 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
         imageUrl: base64,
         imageCaption: file.name.replace(/\.[^/.]+$/, ""),
       };
-      setEditingQuestion(updatedQ);
-
-      const updatedList = activeExam.questions.map((q) =>
-        q.id === updatedQ.id ? updatedQ : q
-      );
-      onUpdateExam({ ...activeExam, questions: updatedList, updatedAt: new Date().toISOString() });
+      handleUpdateCurrentQuestion(updatedQ);
       setImageError(null);
     };
     reader.readAsDataURL(file);
@@ -670,13 +659,8 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
       imageCaption: undefined,
       imagePrompt: undefined,
     };
-    setEditingQuestion(updatedQ);
+    handleUpdateCurrentQuestion(updatedQ);
     setImageUrlInput("");
-
-    const updatedList = activeExam.questions.map((q) =>
-      q.id === updatedQ.id ? updatedQ : q
-    );
-    onUpdateExam({ ...activeExam, questions: updatedList, updatedAt: new Date().toISOString() });
   };
 
   // Anti-Cheating toggles
@@ -1446,7 +1430,7 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                     value={editingQuestion.type || "pilihan_ganda"}
                     onChange={(e) => {
                       const newType = e.target.value as QuestionType;
-                      setEditingQuestion({
+                      handleUpdateCurrentQuestion({
                         ...editingQuestion,
                         type: newType,
                         matchingPairs:
@@ -1494,7 +1478,7 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                     type="text"
                     value={editingQuestion.topicTag || ""}
                     onChange={(e) =>
-                      setEditingQuestion({ ...editingQuestion, topicTag: e.target.value })
+                      handleUpdateCurrentQuestion({ ...editingQuestion, topicTag: e.target.value })
                     }
                     className="w-full px-3 py-2 bg-[#1a1a1c] border border-slate-800 rounded-xl text-slate-200 text-xs focus:border-indigo-500 focus:outline-none"
                     placeholder="Misal: Keamanan Siber"
@@ -1506,7 +1490,7 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                     type="text"
                     value={editingQuestion.cognitiveLevel || ""}
                     onChange={(e) =>
-                      setEditingQuestion({ ...editingQuestion, cognitiveLevel: e.target.value })
+                      handleUpdateCurrentQuestion({ ...editingQuestion, cognitiveLevel: e.target.value })
                     }
                     className="w-full px-3 py-2 bg-[#1a1a1c] border border-slate-800 rounded-xl text-slate-200 text-xs focus:border-indigo-500 focus:outline-none"
                     placeholder="Misal: C4 - Menganalisis (HOTS)"
@@ -1518,7 +1502,7 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                     type="number"
                     value={editingQuestion.score}
                     onChange={(e) =>
-                      setEditingQuestion({ ...editingQuestion, score: Number(e.target.value) })
+                      handleUpdateCurrentQuestion({ ...editingQuestion, score: Number(e.target.value) })
                     }
                     className="w-full px-3 py-2 bg-[#1a1a1c] border border-slate-800 rounded-xl text-indigo-300 text-xs focus:border-indigo-500 focus:outline-none font-bold"
                   />
@@ -1564,7 +1548,7 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                           type="text"
                           value={editingQuestion.imageCaption || ""}
                           onChange={(e) =>
-                            setEditingQuestion({ ...editingQuestion, imageCaption: e.target.value })
+                            handleUpdateCurrentQuestion({ ...editingQuestion, imageCaption: e.target.value })
                           }
                           className="w-full px-3 py-1.5 bg-[#1a1a1c] border border-slate-800 rounded-xl text-slate-200 text-xs"
                           placeholder="Misal: Gambar 1.1 Struktur Jaringan"
@@ -1742,7 +1726,7 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                   rows={3}
                   value={editingQuestion.stimulus || ""}
                   onChange={(e) =>
-                    setEditingQuestion({ ...editingQuestion, stimulus: e.target.value })
+                    handleUpdateCurrentQuestion({ ...editingQuestion, stimulus: e.target.value })
                   }
                   className="w-full px-3 py-2 bg-[#1a1a1c] border border-slate-800 rounded-xl text-slate-200 text-xs focus:border-indigo-500 focus:outline-none placeholder-slate-600"
                   placeholder="Tuliskan teks bacaan, tabel angka, atau studi kasus..."
@@ -1758,7 +1742,7 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                   rows={3}
                   value={editingQuestion.questionText}
                   onChange={(e) =>
-                    setEditingQuestion({ ...editingQuestion, questionText: e.target.value })
+                    handleUpdateCurrentQuestion({ ...editingQuestion, questionText: e.target.value })
                   }
                   className="w-full px-3 py-2 bg-[#1a1a1c] border border-slate-800 rounded-xl text-white text-xs font-medium focus:border-indigo-500 focus:outline-none placeholder-slate-600"
                   placeholder="Tuliskan pertanyaan yang jelas dan tidak ambigu..."
@@ -1798,7 +1782,7 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                           <button
                             type="button"
                             onClick={() =>
-                              setEditingQuestion({ ...editingQuestion, correctAnswer: opt.key })
+                              handleUpdateCurrentQuestion({ ...editingQuestion, correctAnswer: opt.key })
                             }
                             className={`w-8 h-8 rounded-lg font-bold text-xs flex items-center justify-center shrink-0 cursor-pointer transition-all ${
                               isCorrect
@@ -1904,7 +1888,7 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                       type="text"
                       value={editingQuestion.correctAnswer}
                       onChange={(e) =>
-                        setEditingQuestion({ ...editingQuestion, correctAnswer: e.target.value })
+                        handleUpdateCurrentQuestion({ ...editingQuestion, correctAnswer: e.target.value })
                       }
                       className="w-full px-3.5 py-2.5 bg-[#1a1a1c] border border-emerald-500/40 rounded-xl text-emerald-300 text-xs font-mono font-bold focus:border-emerald-500 focus:outline-none"
                       placeholder="Misal: Klorofil, Zat Hijau Daun"
@@ -1927,7 +1911,7 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                       rows={3}
                       value={editingQuestion.sampleAnswer || ""}
                       onChange={(e) =>
-                        setEditingQuestion({ ...editingQuestion, sampleAnswer: e.target.value })
+                        handleUpdateCurrentQuestion({ ...editingQuestion, sampleAnswer: e.target.value })
                       }
                       className="w-full px-3 py-2 bg-[#1a1a1c] border border-slate-800 rounded-xl text-slate-200 text-xs focus:border-indigo-500 focus:outline-none placeholder-slate-600"
                       placeholder="Poin 1: Menyebutkan definisi (skor 5). Poin 2: Menjelaskan 2 contoh penerapan (skor 5)..."
@@ -1945,7 +1929,7 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
                   rows={2}
                   value={editingQuestion.explanation}
                   onChange={(e) =>
-                    setEditingQuestion({ ...editingQuestion, explanation: e.target.value })
+                    handleUpdateCurrentQuestion({ ...editingQuestion, explanation: e.target.value })
                   }
                   className="w-full px-3 py-2 bg-[#1a1a1c] border border-slate-800 rounded-xl text-slate-300 text-xs focus:border-indigo-500 focus:outline-none placeholder-slate-600"
                   placeholder="Penjelasan mendalam mengapa jawaban tersebut benar..."

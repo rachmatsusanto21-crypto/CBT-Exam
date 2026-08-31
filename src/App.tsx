@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   GraduationCap,
   Sparkles,
@@ -54,16 +54,23 @@ import { GeminiApiKeyModal } from "./components/GeminiApiKeyModal";
 import { DirectStudentShareModal } from "./components/DirectStudentShareModal";
 import { getGeminiRequestHeaders } from "./utils/storage";
 import { normalizeToken } from "./utils/tokenValidator";
+import { decodeExamFromCurrentUrl } from "./utils/examShareEncoder";
 
 export default function App() {
+  // Decode any packed exam payload from URL
+  const sharedPayload = useMemo(() => {
+    return decodeExamFromCurrentUrl();
+  }, []);
+
   // Direct Student Link Detection
   const [isDirectStudentMode, setIsDirectStudentMode] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
     const params = new URLSearchParams(window.location.search);
-    return params.get("mode") === "student";
+    return params.get("mode") === "student" || !!sharedPayload;
   });
 
   const [urlToken, setUrlToken] = useState<string>(() => {
+    if (sharedPayload?.token) return sharedPayload.token;
     if (typeof window === "undefined") return "";
     const params = new URLSearchParams(window.location.search);
     return params.get("token") || "";
@@ -79,8 +86,30 @@ export default function App() {
 
   // App Data State
   const [schoolProfile, setSchoolProfileState] = useState<SchoolProfile>(getSchoolProfile);
-  const [exams, setExamsState] = useState<ExamPackage[]>(getExamPackages);
+  const [exams, setExamsState] = useState<ExamPackage[]>(() => {
+    const existing = getExamPackages();
+    if (sharedPayload?.exam) {
+      const idx = existing.findIndex(
+        (e) => e.id === sharedPayload.exam.id || e.code.toUpperCase() === sharedPayload.exam.code.toUpperCase()
+      );
+      let updated: ExamPackage[];
+      if (idx >= 0) {
+        updated = [...existing];
+        updated[idx] = sharedPayload.exam;
+      } else {
+        updated = [sharedPayload.exam, ...existing];
+      }
+      saveExamPackages(updated);
+      return updated;
+    }
+    return existing;
+  });
+
   const [activeExamId, setActiveExamIdState] = useState<string>(() => {
+    if (sharedPayload?.exam) {
+      saveActiveExamId(sharedPayload.exam.id);
+      return sharedPayload.exam.id;
+    }
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
       const examParam = params.get("examId") || params.get("code");
@@ -109,7 +138,22 @@ export default function App() {
     const all = getExamPackages();
     return all.some((e) => e.id === saved) ? saved : all[0]?.id || "";
   });
-  const [tokens, setTokensState] = useState<StudentTokenItem[]>(getStudentTokens);
+
+  const [tokens, setTokensState] = useState<StudentTokenItem[]>(() => {
+    const existingTokens = getStudentTokens();
+    if (sharedPayload?.tokens && sharedPayload.tokens.length > 0) {
+      const merged = [...sharedPayload.tokens];
+      existingTokens.forEach((item) => {
+        if (!merged.some((m) => m.token === item.token)) {
+          merged.push(item);
+        }
+      });
+      saveStudentTokens(merged);
+      return merged;
+    }
+    return existingTokens;
+  });
+
   const [history, setHistoryState] = useState<StudentExamSession[]>(getExamHistory);
   const [activeSession, setActiveSessionState] = useState<StudentExamSession | null>(getActiveStudentSession);
 
@@ -132,6 +176,39 @@ export default function App() {
   // Listen to popstate / url changes
   useEffect(() => {
     const handleUrlCheck = () => {
+      const sharedFromUrl = decodeExamFromCurrentUrl();
+      if (sharedFromUrl?.exam) {
+        setExamsState((prev) => {
+          const idx = prev.findIndex(
+            (e) => e.id === sharedFromUrl.exam.id || e.code.toUpperCase() === sharedFromUrl.exam.code.toUpperCase()
+          );
+          let updated: ExamPackage[];
+          if (idx >= 0) {
+            updated = [...prev];
+            updated[idx] = sharedFromUrl.exam;
+          } else {
+            updated = [sharedFromUrl.exam, ...prev];
+          }
+          saveExamPackages(updated);
+          return updated;
+        });
+        setActiveExamIdState(sharedFromUrl.exam.id);
+        saveActiveExamId(sharedFromUrl.exam.id);
+        if (sharedFromUrl.token) setUrlToken(sharedFromUrl.token);
+        if (sharedFromUrl.tokens && sharedFromUrl.tokens.length > 0) {
+          setTokensState((prev) => {
+            const merged = [...sharedFromUrl.tokens!];
+            prev.forEach((t) => {
+              if (!merged.some((m) => m.token === t.token)) merged.push(t);
+            });
+            saveStudentTokens(merged);
+            return merged;
+          });
+        }
+        setIsDirectStudentMode(true);
+        return;
+      }
+
       const params = new URLSearchParams(window.location.search);
       const isStudent = params.get("mode") === "student";
       setIsDirectStudentMode(isStudent);
