@@ -33,7 +33,10 @@ import {
   AlignLeft,
   Search,
   FlaskConical,
-  RotateCcw
+  RotateCcw,
+  Hash,
+  IdCard,
+  ListOrdered
 } from "lucide-react";
 import {
   ExamPackage,
@@ -46,6 +49,8 @@ import {
 } from "../types";
 import { StudentResultView } from "./StudentResultView";
 import { prepareStudentExamQuestions } from "../utils/shuffle";
+import { validateExamToken, normalizeToken } from "../utils/tokenValidator";
+import { getStudentTokens } from "../utils/storage";
 import {
   playExamTimeWarningSound,
   isSoundNotificationEnabled,
@@ -62,6 +67,8 @@ interface StudentSlideExamProps {
   initialToken?: string;
   isDirectLink?: boolean;
   isTeacherTrial?: boolean;
+  allExams?: ExamPackage[];
+  onSwitchExam?: (exam: ExamPackage) => void;
 }
 
 export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
@@ -74,15 +81,99 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
   initialToken,
   isDirectLink = false,
   isTeacherTrial = false,
+  allExams,
+  onSwitchExam,
 }) => {
+  // Available registered students roster from profile data
+  const availableStudents = React.useMemo(() => {
+    const list = tokens && tokens.length > 0 ? tokens : getStudentTokens();
+    const matching = list.filter((t) => !t.examCode || t.examCode === exam.code);
+    return matching.length > 0 ? matching : list;
+  }, [tokens, exam.code]);
+
   // Login Gate State (if no session active)
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(!!currentSession);
+  const [selectedStudentId, setSelectedStudentId] = useState<string>("");
+  const [isManualInput, setIsManualInput] = useState<boolean>(false);
   const [loginStudentName, setLoginStudentName] = useState("");
   const [loginNisn, setLoginNisn] = useState("");
-  const [loginClass, setLoginClass] = useState("X MIPA 1");
+  const [loginClass, setLoginClass] = useState(exam.teacherProfile.gradeLevel || "X MIPA 1");
   const [loginExamCode, setLoginExamCode] = useState(exam.code);
   const [loginToken, setLoginToken] = useState(initialToken || exam.sessionToken);
   const [loginError, setLoginError] = useState<string | null>(null);
+
+  // Student dropdown selector handler
+  const handleSelectStudent = (studentId: string) => {
+    setSelectedStudentId(studentId);
+
+    if (studentId === "__manual__") {
+      setIsManualInput(true);
+      setLoginStudentName("");
+      setLoginNisn("");
+      setLoginClass(exam.teacherProfile.gradeLevel || "Kelas X");
+      return;
+    }
+
+    setIsManualInput(false);
+
+    if (!studentId) {
+      setLoginStudentName("");
+      setLoginNisn("");
+      return;
+    }
+
+    const foundIdx = availableStudents.findIndex((st) => st.id === studentId || st.studentName === studentId);
+    if (foundIdx !== -1) {
+      const student = availableStudents[foundIdx];
+      const noUrut = String(foundIdx + 1).padStart(2, "0");
+
+      // 1. Set nama siswa
+      setLoginStudentName(student.studentName);
+
+      // 2. Set nomor peserta sesuai nomor urut nama siswa di data profil
+      setLoginNisn(noUrut);
+
+      // 3. Set kelas otomatis sesuai data profil
+      setLoginClass(student.className || exam.teacherProfile.gradeLevel || "Kelas X");
+
+      // 4. Set token if available
+      if (student.token) {
+        setLoginToken(student.token);
+      } else if (exam.sessionToken) {
+        setLoginToken(exam.sessionToken);
+      }
+
+      if (loginError) setLoginError(null);
+    }
+  };
+
+  // Real-time Token Validator
+  const tokenValidation = React.useMemo(() => {
+    if (!loginToken.trim()) return null;
+    return validateExamToken(loginToken, exam, tokens, allExams);
+  }, [loginToken, exam, tokens, allExams]);
+
+  // Auto-fill student info if matching personal student token is found
+  useEffect(() => {
+    if (tokenValidation?.isValid && tokenValidation.matchedStudent) {
+      const matched = tokenValidation.matchedStudent;
+      const foundIdx = availableStudents.findIndex(
+        (st) => st.id === matched.id || st.studentName === matched.studentName
+      );
+      if (foundIdx !== -1) {
+        setSelectedStudentId(availableStudents[foundIdx].id);
+        const noUrut = String(foundIdx + 1).padStart(2, "0");
+        setLoginStudentName(availableStudents[foundIdx].studentName);
+        setLoginNisn(noUrut);
+        setLoginClass(availableStudents[foundIdx].className || exam.teacherProfile.gradeLevel || "Kelas X");
+      } else {
+        setLoginStudentName(matched.studentName);
+        setLoginNisn(matched.seatNumber || matched.nisn || "01");
+        setLoginClass(matched.className || exam.teacherProfile.gradeLevel || "Kelas X");
+      }
+      if (loginError) setLoginError(null);
+    }
+  }, [tokenValidation, availableStudents, exam.teacherProfile.gradeLevel]);
 
   // Active Session State
   const [session, setSession] = useState<StudentExamSession | null>(currentSession);
@@ -368,37 +459,40 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
 
   // Login Validator
   const executeStartExam = (forceAdmin = false) => {
+    let activeTargetExam = exam;
+
     if (!forceAdmin) {
       if (!loginStudentName.trim()) {
         setLoginError("Silakan masukkan nama lengkap Anda.");
         return;
       }
 
-      // Check token match - permanently valid until changed manually by teacher
-      const enteredToken = loginToken.trim().toUpperCase();
-      const examSessionToken = exam.sessionToken.trim().toUpperCase();
-
-      const matchedToken = tokens.find(
-        (t) => t.token.toUpperCase() === enteredToken && (!t.examCode || t.examCode === exam.code)
-      );
-
-      if (!matchedToken && enteredToken !== examSessionToken && enteredToken !== "GURU2026") {
-        setLoginError("Token ujian tidak sesuai. Masukkan token aktif yang diberikan oleh Pengawas atau Guru.");
+      const validation = validateExamToken(loginToken, exam, tokens, allExams);
+      if (!validation.isValid) {
+        setLoginError(
+          validation.errorMessage ||
+            "Token ujian tidak sesuai. Masukkan token aktif yang diberikan oleh Pengawas atau Guru."
+        );
         return;
+      }
+
+      if (validation.matchedExam && validation.matchedExam.id !== exam.id) {
+        activeTargetExam = validation.matchedExam;
+        onSwitchExam?.(validation.matchedExam);
       }
     }
 
     setLoginError(null);
 
     // Prepare randomized question order and options
-    const preparedQuestions = prepareStudentExamQuestions(exam);
+    const preparedQuestions = prepareStudentExamQuestions(activeTargetExam);
 
     const newSession: StudentExamSession = {
       id: `sess-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
-      examId: exam.id,
-      examCode: exam.code,
-      examTitle: exam.title,
-      subject: exam.teacherProfile.subject,
+      examId: activeTargetExam.id,
+      examCode: activeTargetExam.code,
+      examTitle: activeTargetExam.title,
+      subject: activeTargetExam.teacherProfile.subject,
       studentName: loginStudentName.trim() || "Siswa Mandiri",
       nisn: loginNisn.trim() || "0078" + Math.floor(100000 + Math.random() * 900000),
       className: loginClass,
@@ -408,7 +502,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
       startTime: new Date().toISOString(),
       timeSpentSeconds: 0,
       totalScoreEarned: 0,
-      maxScore: exam.totalScore,
+      maxScore: activeTargetExam.totalScore,
       percentage: 0,
       passed: false,
       status: "in_progress",
@@ -420,7 +514,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
     setSession(newSession);
     setIsLoggedIn(true);
     setCurrentSlideIndex(0);
-    setSecondsRemaining(totalDurationSeconds);
+    setSecondsRemaining(activeTargetExam.durationMinutes * 60);
     onSaveSession(newSession);
   };
 
@@ -771,76 +865,229 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
             <p className="text-xs text-slate-400">
               {exam.teacherProfile.subject} • {exam.schoolProfile.schoolName}
             </p>
+
+            {/* Multi-Exam Switcher (if multiple exams exist in school) */}
+            {allExams && allExams.length > 1 && (
+              <div className="pt-2">
+                <select
+                  value={exam.id}
+                  onChange={(e) => {
+                    const target = allExams.find((ex) => ex.id === e.target.value);
+                    if (target) {
+                      onSwitchExam?.(target);
+                      setLoginToken(target.sessionToken);
+                      setLoginError(null);
+                    }
+                  }}
+                  className="px-3 py-1.5 bg-[#1a1a1c] hover:bg-slate-800 border border-slate-700 rounded-xl text-xs text-indigo-300 font-semibold focus:border-indigo-500 focus:outline-none cursor-pointer max-w-full truncate"
+                  title="Ganti paket soal / mata pelajaran ujian"
+                >
+                  {allExams.map((ex) => (
+                    <option key={ex.id} value={ex.id}>
+                      📖 {ex.title} ({ex.teacherProfile.subject} - {ex.code})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
 
           {/* Form */}
           <form onSubmit={handleStartExamLogin} className="space-y-4">
+            {/* 1. NAMA SISWA DROPDOWN */}
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                Nama Lengkap Siswa <span className="text-rose-400">*</span>
-              </label>
-              <input
-                type="text"
-                required
-                value={loginStudentName}
-                onChange={(e) => setLoginStudentName(e.target.value)}
-                placeholder="Contoh: Muhammad Bintang Pratama"
-                className="w-full px-4 py-3 bg-[#1a1a1c] border border-slate-800 rounded-xl text-slate-200 text-sm focus:border-indigo-500 focus:outline-none"
-              />
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                  <UserCheck className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Nama Lengkap Siswa</span>
+                  <span className="text-rose-400">*</span>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nextMode = !isManualInput;
+                    setIsManualInput(nextMode);
+                    if (nextMode) {
+                      setSelectedStudentId("__manual__");
+                    } else {
+                      setSelectedStudentId("");
+                      setLoginStudentName("");
+                      setLoginNisn("");
+                    }
+                  }}
+                  className="text-[11px] text-indigo-400 hover:text-indigo-300 font-medium underline cursor-pointer"
+                >
+                  {isManualInput ? "📋 Pilih dari Data Profil" : "✏️ Input Manual"}
+                </button>
+              </div>
+
+              {!isManualInput ? (
+                <div className="relative">
+                  <select
+                    id="student-name-dropdown"
+                    required
+                    value={selectedStudentId}
+                    onChange={(e) => handleSelectStudent(e.target.value)}
+                    className="w-full pl-10 pr-10 py-3 bg-[#1a1a1c] border border-slate-800 focus:border-indigo-500 rounded-xl text-slate-100 text-sm font-semibold focus:outline-none appearance-none cursor-pointer"
+                  >
+                    <option value="">-- Pilih Nama Siswa / Peserta Ujian --</option>
+                    {availableStudents.map((st, idx) => {
+                      const noUrut = String(idx + 1).padStart(2, "0");
+                      return (
+                        <option key={st.id || idx} value={st.id || st.studentName}>
+                          {noUrut}. {st.studentName} ({st.className || exam.teacherProfile.gradeLevel})
+                        </option>
+                      );
+                    })}
+                    <option value="__manual__">✏️ Tulis Nama Siswa Lainnya (Manual)...</option>
+                  </select>
+                  <UserCheck className="w-4 h-4 text-slate-500 absolute left-3.5 top-3.5 pointer-events-none" />
+                  <ChevronRight className="w-4 h-4 text-slate-500 rotate-90 absolute right-3.5 top-3.5 pointer-events-none" />
+                </div>
+              ) : (
+                <div className="relative">
+                  <input
+                    type="text"
+                    required
+                    value={loginStudentName}
+                    onChange={(e) => {
+                      setLoginStudentName(e.target.value);
+                      if (loginError) setLoginError(null);
+                    }}
+                    placeholder="Ketik Nama Lengkap Siswa..."
+                    className="w-full pl-10 pr-4 py-3 bg-[#1a1a1c] border border-indigo-500/50 rounded-xl text-slate-100 text-sm font-semibold focus:border-indigo-500 focus:outline-none"
+                  />
+                  <UserCheck className="w-4 h-4 text-indigo-400 absolute left-3.5 top-3.5" />
+                </div>
+              )}
+
+              {selectedStudentId && !isManualInput && selectedStudentId !== "__manual__" && (
+                <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-emerald-400 font-medium animate-in fade-in">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>Siswa terverifikasi di profil: <strong>{loginStudentName}</strong></span>
+                </div>
+              )}
             </div>
 
+            {/* 2 & 3. NOMOR PESERTA & KELAS */}
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  NISN / No. Peserta
-                </label>
-                <input
-                  type="text"
-                  value={loginNisn}
-                  onChange={(e) => setLoginNisn(e.target.value)}
-                  placeholder="0078123456"
-                  className="w-full px-4 py-3 bg-[#1a1a1c] border border-slate-800 rounded-xl text-slate-200 text-sm focus:border-indigo-500 focus:outline-none"
-                />
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-semibold text-slate-300 flex items-center gap-1">
+                    <Hash className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Nomor Peserta</span>
+                  </label>
+                  <span className="text-[10px] text-indigo-400 font-semibold bg-indigo-500/10 px-1.5 py-0.5 rounded">
+                    No. Urut
+                  </span>
+                </div>
+                <div className="relative">
+                  <input
+                    type="text"
+                    required
+                    readOnly={!isManualInput}
+                    value={loginNisn}
+                    onChange={(e) => setLoginNisn(e.target.value)}
+                    placeholder="01"
+                    className={`w-full pl-9 pr-3 py-3 rounded-xl text-sm font-mono font-bold focus:outline-none ${
+                      !isManualInput
+                        ? "bg-[#161618] border border-slate-800 text-indigo-300 cursor-not-allowed"
+                        : "bg-[#1a1a1c] border border-slate-800 text-slate-200 focus:border-indigo-500"
+                    }`}
+                  />
+                  <Hash className="w-4 h-4 text-slate-500 absolute left-3 top-3.5" />
+                </div>
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Otomatis nomor urut di data profil.
+                </p>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  Rombel / Kelas
-                </label>
-                <input
-                  type="text"
-                  value={loginClass}
-                  onChange={(e) => setLoginClass(e.target.value)}
-                  placeholder="X MIPA 1"
-                  className="w-full px-4 py-3 bg-[#1a1a1c] border border-slate-800 rounded-xl text-slate-200 text-sm focus:border-indigo-500 focus:outline-none"
-                />
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-semibold text-slate-300 flex items-center gap-1">
+                    <Building2 className="w-3.5 h-3.5 text-indigo-400" />
+                    <span>Rombel / Kelas</span>
+                  </label>
+                  <span className="text-[10px] text-emerald-400 font-semibold bg-emerald-500/10 px-1.5 py-0.5 rounded">
+                    Otomatis
+                  </span>
+                </div>
+                <div className="relative">
+                  <input
+                    type="text"
+                    required
+                    readOnly={!isManualInput}
+                    value={loginClass}
+                    onChange={(e) => setLoginClass(e.target.value)}
+                    placeholder="X MIPA 1"
+                    className={`w-full pl-9 pr-3 py-3 rounded-xl text-sm font-semibold focus:outline-none ${
+                      !isManualInput
+                        ? "bg-[#161618] border border-slate-800 text-emerald-300 cursor-not-allowed"
+                        : "bg-[#1a1a1c] border border-slate-800 text-slate-200 focus:border-indigo-500"
+                    }`}
+                  />
+                  <Building2 className="w-4 h-4 text-slate-500 absolute left-3 top-3.5" />
+                </div>
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Otomatis mengisi dari data profil.
+                </p>
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                Token Akses Ujian <span className="text-rose-400">*</span>
-              </label>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-xs font-semibold text-slate-300">
+                  Token Akses Ujian <span className="text-rose-400">*</span>
+                </label>
+                {exam.sessionToken && (
+                  <span className="text-[11px] font-mono text-slate-500">
+                    Sesi: <strong className="text-indigo-400">{exam.sessionToken}</strong>
+                  </span>
+                )}
+              </div>
               <div className="relative">
                 <input
                   type="text"
                   required
                   value={loginToken}
-                  onChange={(e) => setLoginToken(e.target.value.toUpperCase())}
-                  placeholder="Masukkan 6 Digit Token..."
-                  className="w-full pl-10 pr-4 py-3 bg-[#1a1a1c] border border-indigo-500/40 rounded-xl text-indigo-300 font-mono font-bold tracking-widest text-base focus:border-indigo-500 focus:outline-none"
+                  onChange={(e) => {
+                    setLoginToken(e.target.value.toUpperCase());
+                    if (loginError) setLoginError(null);
+                  }}
+                  placeholder="Masukkan Token Sesi / Token Siswa..."
+                  className="w-full pl-10 pr-4 py-3 bg-[#1a1a1c] border border-indigo-500/40 rounded-xl text-indigo-300 font-mono font-bold tracking-widest text-base focus:border-indigo-500 focus:outline-none uppercase"
                 />
                 <Key className="w-5 h-5 text-indigo-400 absolute left-3 top-3.5" />
               </div>
-              <p className="text-[11px] text-slate-500 mt-1">
-                Token diberikan oleh Guru Pengawas ruang ujian.
-              </p>
+
+              {/* Real-time Token Verification Feedback */}
+              {tokenValidation?.isValid ? (
+                <div className="mt-2 p-2 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-400 text-xs flex items-center gap-2 animate-in fade-in">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span className="font-semibold">
+                    {tokenValidation.type === "student_personal" && tokenValidation.matchedStudent
+                      ? `✓ Token Terverifikasi: ${tokenValidation.matchedStudent.studentName} (${tokenValidation.matchedStudent.className})`
+                      : tokenValidation.type === "exam_master" && tokenValidation.matchedExam
+                      ? `✓ Token Sesi Valid untuk: ${tokenValidation.matchedExam.title} (${tokenValidation.matchedExam.teacherProfile.subject})`
+                      : "✓ Token Terverifikasi & Siap Ujian"}
+                  </span>
+                </div>
+              ) : (
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Masukkan token sesi bersama (misal: <strong>{exam.sessionToken}</strong>) atau token personal dari kartu ujian siswa.
+                </p>
+              )}
             </div>
 
             {loginError && (
               <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-xs flex items-start gap-2">
                 <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
-                <span>{loginError}</span>
+                <div className="space-y-1">
+                  <div className="font-semibold">{loginError}</div>
+                  <div className="text-[11px] text-rose-300/80">
+                    Pastikan naskah ujian yang dipilih di atas sudah benar, atau hubungi Pengawas ruang untuk token aktif.
+                  </div>
+                </div>
               </div>
             )}
 

@@ -53,6 +53,7 @@ import { BackupRestoreView } from "./components/BackupRestoreView";
 import { GeminiApiKeyModal } from "./components/GeminiApiKeyModal";
 import { DirectStudentShareModal } from "./components/DirectStudentShareModal";
 import { getGeminiRequestHeaders } from "./utils/storage";
+import { normalizeToken } from "./utils/tokenValidator";
 
 export default function App() {
   // Direct Student Link Detection
@@ -83,10 +84,25 @@ export default function App() {
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
       const examParam = params.get("examId") || params.get("code");
+      const tokenParam = params.get("token");
       const all = getExamPackages();
+
       if (examParam) {
         const found = all.find((e) => e.id === examParam || e.code.toUpperCase() === examParam.toUpperCase());
         if (found) return found.id;
+      }
+
+      if (tokenParam) {
+        const norm = normalizeToken(tokenParam);
+        const matchBySession = all.find((e) => normalizeToken(e.sessionToken) === norm || normalizeToken(e.code) === norm);
+        if (matchBySession) return matchBySession.id;
+
+        const allTokens = getStudentTokens();
+        const matchByStudentToken = allTokens.find((t) => normalizeToken(t.token) === norm);
+        if (matchByStudentToken && matchByStudentToken.examCode) {
+          const matchExam = all.find((e) => normalizeToken(e.code) === normalizeToken(matchByStudentToken.examCode) || e.id === matchByStudentToken.examCode);
+          if (matchExam) return matchExam.id;
+        }
       }
     }
     const saved = getActiveExamId();
@@ -127,6 +143,25 @@ export default function App() {
         if (found) {
           setActiveExamIdState(found.id);
           saveActiveExamId(found.id);
+          return;
+        }
+      }
+      if (token) {
+        const norm = normalizeToken(token);
+        const matchBySession = exams.find((e) => normalizeToken(e.sessionToken) === norm || normalizeToken(e.code) === norm);
+        if (matchBySession) {
+          setActiveExamIdState(matchBySession.id);
+          saveActiveExamId(matchBySession.id);
+          return;
+        }
+        const allTokens = getStudentTokens();
+        const matchByStudentToken = allTokens.find((t) => normalizeToken(t.token) === norm);
+        if (matchByStudentToken && matchByStudentToken.examCode) {
+          const matchExam = exams.find((e) => normalizeToken(e.code) === normalizeToken(matchByStudentToken.examCode) || e.id === matchByStudentToken.examCode);
+          if (matchExam) {
+            setActiveExamIdState(matchExam.id);
+            saveActiveExamId(matchExam.id);
+          }
         }
       }
     };
@@ -355,6 +390,8 @@ export default function App() {
             }}
             initialToken={urlToken}
             isDirectLink={true}
+            allExams={exams}
+            onSwitchExam={(targetExam) => handleSelectExamId(targetExam.id)}
           />
         </main>
 
@@ -533,6 +570,8 @@ export default function App() {
             onSaveSession={handleSaveStudentSession}
             onSubmitExam={handleSubmitStudentExam}
             isTeacherTrial={isTeacherTrial}
+            allExams={exams}
+            onSwitchExam={(targetExam) => handleSelectExamId(targetExam.id)}
             onExit={() => {
               if (isTeacherTrial) {
                 setIsTeacherTrial(false);
