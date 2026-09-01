@@ -1,0 +1,37 @@
+{
+  "entities": {
+    "exams": {
+      "title": "Exam Package",
+      "description": "CBT exam package with questions, options, duration, settings, and teacher profile",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique Exam ID" },
+        "code": { "type": "string", "description": "Short Exam Code e.g. PP-01" },
+        "title": { "type": "string", "description": "Exam Title" },
+        "sessionToken": { "type": "string", "description": "Exam Session Token" },
+        "durationMinutes": { "type": "number", "description": "Exam Duration in minutes" },
+        "questions": { "type": "array", "description": "List of exam questions" },
+        "schoolProfile": { "type": "object", "description": "School Profile" },
+        "teacherProfile": { "type": "object", "description": "Teacher Profile" },
+        "updatedAt": { "type": "string", "description": "Last updated ISO timestamp" }
+      },
+      "required": ["id", "code", "title", "questions"]
+    },
+    "sessions": {
+      "title": "Student Exam Session",
+      "description": "Live and finished student CBT exam answers and scores",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Session ID" },
+        "examId": { "type": "string", "description": "Exam ID" },
+        "studentName": { "type": "string", "description": "Student Name" },
+        "studentClass": { "type": "string", "description": "Student Class" },
+        "score": { "type": "number", "description": "Final Score" },
+        "answers": { "type": "object", "description": "Student Answers map" },
+        "status": { "type": "string", "description": "Session Status: in_progress | completed" },
+        "submittedAt": { "type": "string", "description": "Submission ISO timestamp" }
+      },
+      "required": ["id", "examId", "studentName"]
+    }
+  }
+}

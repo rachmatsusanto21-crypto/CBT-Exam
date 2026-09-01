@@ -55,6 +55,11 @@ import { DirectStudentShareModal } from "./components/DirectStudentShareModal";
 import { getGeminiRequestHeaders } from "./utils/storage";
 import { normalizeToken } from "./utils/tokenValidator";
 import { decodeExamFromCurrentUrl } from "./utils/examShareEncoder";
+import {
+  syncExamToFirestore,
+  fetchExamFromFirestore,
+  syncStudentSessionToFirestore
+} from "./utils/firestoreService";
 
 export default function App() {
   // Decode any packed exam payload from URL
@@ -163,7 +168,18 @@ export default function App() {
     return params.get("code") || params.get("examId") || null;
   });
 
-  // If URL specified an exam code/ID not in local storage, attempt to fetch from server registry
+  // Auto-sync active exam and all exams to Firestore in the background
+  useEffect(() => {
+    if (exams && exams.length > 0) {
+      exams.forEach((ex) => {
+        syncExamToFirestore(ex, tokens).catch((err) =>
+          console.warn("Background Firestore sync error:", err)
+        );
+      });
+    }
+  }, [exams, tokens]);
+
+  // If URL specified an exam code/ID not in local storage, attempt to fetch from Firestore then server registry
   useEffect(() => {
     if (!requestedExamCode) return;
     const isAlreadyLoaded = exams.some(
@@ -171,9 +187,44 @@ export default function App() {
     );
     if (isAlreadyLoaded) return;
 
-    // Fetch from backend share registry
+    // Fetch from Firestore & backend share registry
     const fetchRemoteExam = async () => {
       try {
+        // 1. Try Firestore First
+        const firestoreResult = await fetchExamFromFirestore(requestedExamCode);
+        if (firestoreResult.exam) {
+          const loadedExam = firestoreResult.exam;
+          setExamsState((prev) => {
+            const idx = prev.findIndex(
+              (e) => e.id === loadedExam.id || e.code.toUpperCase() === loadedExam.code.toUpperCase()
+            );
+            let updated: ExamPackage[];
+            if (idx >= 0) {
+              updated = [...prev];
+              updated[idx] = loadedExam;
+            } else {
+              updated = [loadedExam, ...prev];
+            }
+            saveExamPackages(updated);
+            return updated;
+          });
+          setActiveExamIdState(loadedExam.id);
+          saveActiveExamId(loadedExam.id);
+          if (firestoreResult.token) setUrlToken(firestoreResult.token);
+          if (firestoreResult.tokens && firestoreResult.tokens.length > 0) {
+            setTokensState((prev) => {
+              const merged = [...firestoreResult.tokens!];
+              prev.forEach((t) => {
+                if (!merged.some((m) => m.token === t.token)) merged.push(t);
+              });
+              saveStudentTokens(merged);
+              return merged;
+            });
+          }
+          return;
+        }
+
+        // 2. Fallback to Express backend share registry
         const res = await fetch(`/api/exams/by-code/${encodeURIComponent(requestedExamCode)}`);
         if (!res.ok) return;
         const data = await res.json();
@@ -322,6 +373,9 @@ export default function App() {
     const updatedExams = exams.map((e) => (e.id === updated.id ? updated : e));
     setExamsState(updatedExams);
     saveExamPackages(updatedExams);
+    syncExamToFirestore(updated, tokens).catch((err) =>
+      console.warn("Firestore sync error:", err)
+    );
     // If the exam package contains an updated schoolProfile, sync it globally as well
     if (updated.schoolProfile) {
       setSchoolProfileState(updated.schoolProfile);
@@ -407,6 +461,9 @@ export default function App() {
   const handleSaveStudentSession = (session: StudentExamSession) => {
     setActiveSessionState(session);
     saveActiveStudentSession(session);
+    syncStudentSessionToFirestore(session).catch((err) =>
+      console.warn("Firestore session sync error:", err)
+    );
 
     // If already exists in history, update; else add
     const existingIdx = history.findIndex((h) => h.id === session.id);
@@ -424,6 +481,9 @@ export default function App() {
   const handleSubmitStudentExam = (finalizedSession: StudentExamSession) => {
     setActiveSessionState(finalizedSession);
     saveActiveStudentSession(finalizedSession);
+    syncStudentSessionToFirestore(finalizedSession).catch((err) =>
+      console.warn("Firestore session submit sync error:", err)
+    );
 
     const existingIdx = history.findIndex((h) => h.id === finalizedSession.id);
     let updatedHistory: StudentExamSession[];

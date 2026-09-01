@@ -1,0 +1,27 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Exams collection: public read for student exam loading, writeable for exam packages
+    match /exams/{examId} {
+      allow read: if true;
+      allow write: if true;
+    }
+    
+    // Exam lookup by short code
+    match /examCodes/{code} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Student exam sessions and live progress
+    match /sessions/{sessionId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Default fallback
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

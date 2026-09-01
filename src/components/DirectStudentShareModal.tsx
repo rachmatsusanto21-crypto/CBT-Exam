@@ -15,12 +15,14 @@ import {
   Download,
   Maximize2,
   Zap,
-  Info
+  Info,
+  CloudCheck
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { ExamPackage, StudentTokenItem } from "../types";
 import { generateStudentShareUrl, generateShortStudentUrl } from "../utils/examShareEncoder";
 import { getStudentTokens } from "../utils/storage";
+import { syncExamToFirestore } from "../utils/firestoreService";
 
 interface DirectStudentShareModalProps {
   isOpen: boolean;
@@ -51,6 +53,8 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
   const [showEnlargedQr, setShowEnlargedQr] = useState(false);
   const qrRef = useRef<SVGSVGElement | null>(null);
 
+  const [cloudSynced, setCloudSynced] = useState(false);
+
   // Sync selectedExamId when exam prop changes
   useEffect(() => {
     if (exam && exam.id) {
@@ -76,6 +80,27 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
     const matching = list.filter((t) => !t.examCode || t.examCode === currentExam.code);
     return matching.length > 0 ? matching : list;
   }, [tokens, currentExam.code]);
+
+  // When modal is opened or exam is switched, auto-sync package to Firestore and backend server
+  useEffect(() => {
+    if (isOpen && currentExam && currentExam.id) {
+      // 1. Sync to Firestore
+      syncExamToFirestore(currentExam, availableTokens)
+        .then(() => setCloudSynced(true))
+        .catch((err) => console.warn("Firestore sync error on share modal:", err));
+
+      // 2. Also sync to Express backend
+      fetch("/api/exams/share", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          exam: currentExam,
+          token: currentToken,
+          tokens: availableTokens,
+        }),
+      }).catch((err) => console.warn("Express backend sync error on share modal:", err));
+    }
+  }, [isOpen, currentExam, currentToken, availableTokens]);
 
   if (!isOpen) return null;
 
@@ -230,6 +255,10 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
                 </span>
                 <span className="text-[10px] px-2 py-0.2 rounded-full bg-indigo-950 text-indigo-300 border border-indigo-500/30 font-mono font-bold">
                   {currentExam.code}
+                </span>
+                <span className="text-[10px] px-2 py-0.2 rounded-full bg-emerald-950/60 text-emerald-300 border border-emerald-500/30 font-medium flex items-center gap-1">
+                  <CloudCheck className="w-3 h-3 text-emerald-400" />
+                  <span>Tersinkron Cloud Firestore</span>
                 </span>
               </div>
               <div className="font-bold text-white text-sm">{currentExam.title}</div>
