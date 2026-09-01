@@ -434,7 +434,10 @@ export default function App() {
   };
 
   const handleUpdateActiveExam = (updated: ExamPackage) => {
-    const updatedExams = exams.map((e) => (e.id === updated.id ? updated : e));
+    const exists = exams.some((e) => e.id === updated.id);
+    const updatedExams = exists
+      ? exams.map((e) => (e.id === updated.id ? updated : e))
+      : [updated, ...exams];
     setExamsState(updatedExams);
     saveExamPackages(updatedExams);
     syncExamToFirestore(updated, tokens).catch((err) =>
@@ -518,7 +521,7 @@ export default function App() {
   };
 
   const handleUpdateExamToken = (newToken: string) => {
-    const updated = { ...activeExam, sessionToken: newToken };
+    const updated = { ...activeExam, sessionToken: newToken, updatedAt: new Date().toISOString() };
     handleUpdateActiveExam(updated);
     setUrlToken(newToken);
     if (typeof window !== "undefined" && window.location.search.includes("token=")) {
@@ -526,6 +529,9 @@ export default function App() {
       url.searchParams.set("token", newToken);
       window.history.replaceState({}, "", url.toString());
     }
+    // Clear active session to ensure new session uses the updated token and fresh questions
+    setActiveSessionState(null);
+    saveActiveStudentSession(null);
   };
 
   const handleSaveStudentSession = (session: StudentExamSession) => {

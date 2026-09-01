@@ -221,6 +221,33 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
   const [showMatrixDrawer, setShowMatrixDrawer] = useState<boolean>(false);
   const [isSubmitted, setIsSubmitted] = useState<boolean>(currentSession?.status === "submitted");
 
+  // Keep internal session state strictly synchronized with parent currentSession prop
+  useEffect(() => {
+    if (!currentSession) {
+      if (!isTeacherTrial) {
+        setSession(null);
+        setIsLoggedIn(false);
+        setCurrentSlideIndex(0);
+        setIsSubmitted(false);
+      }
+    } else {
+      setSession(currentSession);
+      setIsLoggedIn(true);
+      setCurrentSlideIndex(currentSession.currentSlideIndex || 0);
+      setIsSubmitted(currentSession.status === "submitted");
+    }
+  }, [currentSession, isTeacherTrial]);
+
+  // Reset session if the active exam ID changes to avoid leaking questions from another exam
+  useEffect(() => {
+    if (session && session.examId !== exam.id) {
+      setSession(null);
+      setIsLoggedIn(false);
+      setCurrentSlideIndex(0);
+      setIsSubmitted(false);
+    }
+  }, [exam.id]);
+
   // Lightbox Image Zoom Modal
   const [zoomImageSrc, setZoomImageSrc] = useState<string | null>(null);
 
@@ -1319,9 +1346,14 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
           </div>
 
           <div className="hidden sm:block">
-            <div className="text-xs font-bold text-white truncate max-w-xs">{exam.title}</div>
+            <div className="text-xs font-bold text-white truncate max-w-xs flex items-center gap-2">
+              <span className="truncate">{exam.title}</span>
+              <span className="font-mono text-[10px] bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 px-2 py-0.5 rounded shrink-0">
+                Sesi: {session?.token || exam.sessionToken}
+              </span>
+            </div>
             <div className="text-[11px] text-slate-400">
-              Siswa: <strong className="text-slate-300">{session?.studentName}</strong> ({session?.className})
+              Siswa: <strong className="text-slate-300">{session?.studentName}</strong> ({session?.className}) • Kode: <strong className="font-mono text-slate-300">{exam.code}</strong>
             </div>
           </div>
         </div>
@@ -1522,6 +1554,15 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
                 SLIDE 1 • PROFIL SEKOLAH & NASKAH UJIAN
               </span>
               <h2 className="text-2xl sm:text-3xl font-black text-white">{exam.title}</h2>
+              <div className="flex items-center justify-center gap-2 pt-1">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-indigo-600/20 border border-indigo-500/30 text-indigo-300 rounded-xl text-xs font-mono font-bold">
+                  <Key className="w-3.5 h-3.5" />
+                  TOKEN: {session?.token || exam.sessionToken}
+                </span>
+                <span className="inline-flex items-center gap-1 px-3 py-1 bg-slate-800 border border-slate-700 text-slate-300 rounded-xl text-xs font-mono font-semibold">
+                  KODE: {exam.code}
+                </span>
+              </div>
               <p className="text-slate-400 text-sm max-w-xl mx-auto">
                 Tahun Ajaran {exam.teacherProfile.academicYear} • Semester {exam.teacherProfile.semester}
               </p>

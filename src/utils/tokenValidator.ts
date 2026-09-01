@@ -91,11 +91,12 @@ export function validateExamToken(
     };
   }
 
-  // 4. Check across all exams in storage or props
+  // 4. Check across other exams in storage or props (excluding currentExam to prevent stale cache matching)
   const allExams = allExamsList && allExamsList.length > 0 ? allExamsList : getExamPackages();
+  const otherExams = allExams.filter((e) => e.id !== currentExam.id);
 
   // 4a. Check other exams' master tokens or codes
-  const matchedOtherExam = allExams.find(
+  const matchedOtherExam = otherExams.find(
     (e) => normalizeToken(e.sessionToken) === normInput || normalizeToken(e.code) === normInput
   );
 
@@ -112,9 +113,17 @@ export function validateExamToken(
   const matchedInAllTokens = allStoredTokens.find((t) => normalizeToken(t.token) === normInput);
 
   if (matchedInAllTokens) {
-    const targetExam = allExams.find(
-      (e) => normalizeToken(e.code) === normalizeToken(matchedInAllTokens.examCode) || e.id === matchedInAllTokens.examCode
-    ) || currentExam;
+    const isCurrentExamCode =
+      normalizeToken(matchedInAllTokens.examCode) === currentExamNormCode ||
+      matchedInAllTokens.examCode === currentExam.id;
+
+    const targetExam = isCurrentExamCode
+      ? currentExam
+      : allExams.find(
+          (e) =>
+            normalizeToken(e.code) === normalizeToken(matchedInAllTokens.examCode) ||
+            e.id === matchedInAllTokens.examCode
+        ) || currentExam;
 
     return {
       isValid: true,
