@@ -60,6 +60,12 @@ export const TokenManager: React.FC<TokenManagerProps> = ({
   const [filterClass, setFilterClass] = useState<string>("all");
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
 
+  // Sync state if exam prop changes externally
+  useEffect(() => {
+    setInputMasterToken(exam.sessionToken);
+    setInputExamCode(exam.code);
+  }, [exam.sessionToken, exam.code]);
+
   // Initialize draft class and student names from localStorage if available
   const [batchClass, setBatchClass] = useState(() => {
     try {

@@ -107,9 +107,23 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
   useEffect(() => {
     setLoginExamCode(exam.code);
     setLoginClass(exam.teacherProfile.gradeLevel || "");
-    if (!initialToken && exam.sessionToken) {
-      setLoginToken(exam.sessionToken);
+    
+    // If student selected has personal token, use that; otherwise use active exam session token
+    if (selectedStudentId && selectedStudentId !== "__manual__") {
+      const st = availableStudents.find((s) => s.id === selectedStudentId);
+      if (st && st.token) {
+        setLoginToken(st.token);
+      } else if (exam.sessionToken) {
+        setLoginToken(exam.sessionToken);
+      }
+    } else {
+      if (exam.sessionToken) {
+        setLoginToken(exam.sessionToken);
+      } else if (initialToken) {
+        setLoginToken(initialToken);
+      }
     }
+
     if (availableStudents.length === 0) {
       setIsManualInput(true);
       setSelectedStudentId("__manual__");

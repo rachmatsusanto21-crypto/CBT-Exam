@@ -520,6 +520,12 @@ export default function App() {
   const handleUpdateExamToken = (newToken: string) => {
     const updated = { ...activeExam, sessionToken: newToken };
     handleUpdateActiveExam(updated);
+    setUrlToken(newToken);
+    if (typeof window !== "undefined" && window.location.search.includes("token=")) {
+      const url = new URL(window.location.href);
+      url.searchParams.set("token", newToken);
+      window.history.replaceState({}, "", url.toString());
+    }
   };
 
   const handleSaveStudentSession = (session: StudentExamSession) => {
