@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { ExamPackage, SchoolProfile, StudentTokenItem } from "../types";
 import { exportTokensToExcel, printTokenCards } from "../utils/sheetExport";
+import { deduplicateStudentTokens } from "../utils/tokenValidator";
 import { DirectStudentShareModal } from "./DirectStudentShareModal";
 
 interface TokenManagerProps {
@@ -87,7 +88,7 @@ export const TokenManager: React.FC<TokenManagerProps> = ({
     setTimeout(() => setFeedbackMsg(null), 3000);
   };
 
-  const examTokens = tokens.filter((t) => t.examCode === exam.code);
+  const examTokens = deduplicateStudentTokens(tokens, exam.code);
 
   // Extract unique classes for filter
   const uniqueClasses = Array.from(new Set(examTokens.map((t) => t.className).filter(Boolean)));
@@ -181,15 +182,26 @@ export const TokenManager: React.FC<TokenManagerProps> = ({
   };
 
   const handleGenerateBulkTokens = () => {
-    const lines = studentNamesInput
+    const rawLines = studentNamesInput
       .split("\n")
       .map((l) => l.trim())
       .filter((l) => l.length > 0);
 
-    if (lines.length === 0) {
+    if (rawLines.length === 0) {
       alert("Masukkan minimal 1 nama siswa.");
       return;
     }
+
+    // Deduplicate input lines while preserving order
+    const seenNames = new Set<string>();
+    const lines: string[] = [];
+    rawLines.forEach((name) => {
+      const lower = name.toLowerCase();
+      if (!seenNames.has(lower)) {
+        seenNames.add(lower);
+        lines.push(name);
+      }
+    });
 
     const classNameToUse = batchClass.trim() || "X MIPA 1";
 
@@ -208,7 +220,11 @@ export const TokenManager: React.FC<TokenManagerProps> = ({
       };
     });
 
-    const combined = [...tokens.filter((t) => t.examCode !== exam.code), ...examTokens, ...newTokens];
+    // Remove old tokens for this exam and class to prevent duplicates
+    const otherTokens = tokens.filter(
+      (t) => !(t.examCode === exam.code && t.className === classNameToUse)
+    );
+    const combined = deduplicateStudentTokens([...otherTokens, ...newTokens], exam.code);
     onUpdateTokens(combined);
 
     // Auto-save draft so names are not lost
@@ -223,7 +239,7 @@ export const TokenManager: React.FC<TokenManagerProps> = ({
       );
     } catch {}
 
-    triggerFeedback(`Berhasil membuat ${newTokens.length} token siswa untuk kelas ${classNameToUse}! Data tersimpan aman.`);
+    triggerFeedback(`Berhasil membuat ${newTokens.length} token siswa untuk kelas ${classNameToUse}! Data tersimpan aman tanpa duplikasi.`);
   };
 
   const handleDeleteToken = (id: string) => {

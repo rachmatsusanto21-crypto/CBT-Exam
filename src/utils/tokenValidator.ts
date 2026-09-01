@@ -132,3 +132,54 @@ export function validateExamToken(
     errorMessage: `Token ujian "${tokenInput}" tidak sesuai. Pastikan huruf besar/kecil sesuai dan minta token aktif yang tertera di papan tulis atau kartu ujian pengawas${availableTokensHint}.`,
   };
 }
+
+/**
+ * Deduplicates an array of student tokens by student name.
+ * Prevents multiple copies of student names appearing in dropdowns and rosters.
+ */
+export function deduplicateStudentTokens(
+  tokenList: StudentTokenItem[],
+  targetExamCode?: string
+): StudentTokenItem[] {
+  if (!Array.isArray(tokenList) || tokenList.length === 0) return [];
+
+  const targetCode = targetExamCode ? targetExamCode.trim().toUpperCase() : null;
+
+  // 1. If targetCode is provided, check if there are specific tokens for this examCode
+  const exactMatches = targetCode
+    ? tokenList.filter((t) => t.examCode && t.examCode.trim().toUpperCase() === targetCode)
+    : [];
+
+  // Source list: If there are exact matches for this examCode, use them; otherwise, use the tokenList
+  const sourceList = exactMatches.length > 0 ? exactMatches : tokenList;
+
+  // Map to store unique students by normalized student name (trimmed, lowercased)
+  const uniqueMap = new Map<string, StudentTokenItem>();
+
+  sourceList.forEach((item) => {
+    if (!item || !item.studentName) return;
+    const cleanName = item.studentName.trim().toLowerCase();
+    if (!cleanName) return;
+
+    if (!uniqueMap.has(cleanName)) {
+      uniqueMap.set(cleanName, {
+        ...item,
+        examCode: item.examCode || (targetCode || undefined),
+      });
+    } else {
+      // If student name already exists in map, prefer the item specifically tagged with targetCode
+      const existing = uniqueMap.get(cleanName)!;
+      if (
+        targetCode &&
+        item.examCode &&
+        item.examCode.trim().toUpperCase() === targetCode &&
+        (!existing.examCode || existing.examCode.trim().toUpperCase() !== targetCode)
+      ) {
+        uniqueMap.set(cleanName, item);
+      }
+    }
+  });
+
+  return Array.from(uniqueMap.values());
+}
+

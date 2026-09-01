@@ -22,6 +22,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { ExamPackage, StudentTokenItem } from "../types";
 import { generateStudentShareUrl, generateShortStudentUrl } from "../utils/examShareEncoder";
 import { getStudentTokens } from "../utils/storage";
+import { deduplicateStudentTokens } from "../utils/tokenValidator";
 import { syncExamToFirestore } from "../utils/firestoreService";
 
 interface DirectStudentShareModalProps {
@@ -75,10 +76,8 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
   }, [currentExam.sessionToken, token]);
 
   const availableTokens = useMemo(() => {
-    if (tokens && tokens.length > 0) return tokens;
-    const list = getStudentTokens();
-    const matching = list.filter((t) => !t.examCode || t.examCode === currentExam.code);
-    return matching.length > 0 ? matching : list;
+    const list = tokens && tokens.length > 0 ? tokens : getStudentTokens();
+    return deduplicateStudentTokens(list, currentExam.code);
   }, [tokens, currentExam.code]);
 
   // When modal is opened or exam is switched, auto-sync package to Firestore and backend server

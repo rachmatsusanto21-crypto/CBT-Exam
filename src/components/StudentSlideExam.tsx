@@ -49,7 +49,7 @@ import {
 } from "../types";
 import { StudentResultView } from "./StudentResultView";
 import { prepareStudentExamQuestions } from "../utils/shuffle";
-import { validateExamToken, normalizeToken } from "../utils/tokenValidator";
+import { validateExamToken, normalizeToken, deduplicateStudentTokens } from "../utils/tokenValidator";
 import { getStudentTokens } from "../utils/storage";
 import {
   playExamTimeWarningSound,
@@ -86,11 +86,10 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
   onSwitchExam,
   requestedExamCode,
 }) => {
-  // Available registered students roster from profile data
+  // Available registered students roster from profile data (strictly deduplicated, no repeats)
   const availableStudents = React.useMemo(() => {
     const list = tokens && tokens.length > 0 ? tokens : getStudentTokens();
-    const matching = list.filter((t) => !t.examCode || t.examCode === exam.code);
-    return matching.length > 0 ? matching : list;
+    return deduplicateStudentTokens(list, exam.code);
   }, [tokens, exam.code]);
 
   // Login Gate State (if no session active)

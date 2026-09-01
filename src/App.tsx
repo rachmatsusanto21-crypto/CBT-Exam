@@ -53,7 +53,7 @@ import { BackupRestoreView } from "./components/BackupRestoreView";
 import { GeminiApiKeyModal } from "./components/GeminiApiKeyModal";
 import { DirectStudentShareModal } from "./components/DirectStudentShareModal";
 import { getGeminiRequestHeaders } from "./utils/storage";
-import { normalizeToken } from "./utils/tokenValidator";
+import { normalizeToken, deduplicateStudentTokens } from "./utils/tokenValidator";
 import { decodeExamFromCurrentUrl } from "./utils/examShareEncoder";
 import {
   syncExamToFirestore,
@@ -147,16 +147,13 @@ export default function App() {
   const [tokens, setTokensState] = useState<StudentTokenItem[]>(() => {
     const existingTokens = getStudentTokens();
     if (sharedPayload?.tokens && sharedPayload.tokens.length > 0) {
-      const merged = [...sharedPayload.tokens];
-      existingTokens.forEach((item) => {
-        if (!merged.some((m) => m.token === item.token)) {
-          merged.push(item);
-        }
-      });
+      const merged = deduplicateStudentTokens([...sharedPayload.tokens, ...existingTokens]);
       saveStudentTokens(merged);
       return merged;
     }
-    return existingTokens;
+    const deduplicatedExisting = deduplicateStudentTokens(existingTokens);
+    saveStudentTokens(deduplicatedExisting);
+    return deduplicatedExisting;
   });
 
   const [history, setHistoryState] = useState<StudentExamSession[]>(getExamHistory);
@@ -213,10 +210,7 @@ export default function App() {
           if (firestoreResult.token) setUrlToken(firestoreResult.token);
           if (firestoreResult.tokens && firestoreResult.tokens.length > 0) {
             setTokensState((prev) => {
-              const merged = [...firestoreResult.tokens!];
-              prev.forEach((t) => {
-                if (!merged.some((m) => m.token === t.token)) merged.push(t);
-              });
+              const merged = deduplicateStudentTokens([...firestoreResult.tokens!, ...prev]);
               saveStudentTokens(merged);
               return merged;
             });
@@ -294,10 +288,7 @@ export default function App() {
         if (sharedFromUrl.token) setUrlToken(sharedFromUrl.token);
         if (sharedFromUrl.tokens && sharedFromUrl.tokens.length > 0) {
           setTokensState((prev) => {
-            const merged = [...sharedFromUrl.tokens!];
-            prev.forEach((t) => {
-              if (!merged.some((m) => m.token === t.token)) merged.push(t);
-            });
+            const merged = deduplicateStudentTokens([...sharedFromUrl.tokens!, ...prev]);
             saveStudentTokens(merged);
             return merged;
           });

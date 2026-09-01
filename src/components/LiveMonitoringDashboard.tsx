@@ -31,6 +31,7 @@ import {
 import { ExamPackage, SchoolProfile, StudentExamSession, StudentTokenItem } from "../types";
 import { exportGradebookToExcel, exportItemAnalysisToExcel } from "../utils/sheetExport";
 import { generateStudentExamPdfReport, generateBatchStudentsPdfReport } from "../utils/studentPdfReport";
+import { deduplicateStudentTokens } from "../utils/tokenValidator";
 import { LiveStudentEditModal, StudentRowItem } from "./LiveStudentEditModal";
 
 interface ToastNotification {
@@ -151,16 +152,20 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
 
   const examSessions = history.filter((s) => s.examId === exam.id || s.examCode === exam.code);
 
-  // Group tokens and active sessions
-  const studentRows: StudentRowItem[] = tokens
-    .filter((t) => !t.examCode || t.examCode === exam.code)
-    .map((tokenItem) => {
-      const activeSession = examSessions.find((s) => s.token === tokenItem.token || s.nisn === tokenItem.nisn);
-      return {
-        tokenItem,
-        session: activeSession || null,
-      };
-    });
+  // Group tokens and active sessions (deduplicated by student name)
+  const uniqueExamTokens = deduplicateStudentTokens(tokens, exam.code);
+  const studentRows: StudentRowItem[] = uniqueExamTokens.map((tokenItem) => {
+    const activeSession = examSessions.find(
+      (s) =>
+        s.token === tokenItem.token ||
+        s.nisn === tokenItem.nisn ||
+        s.studentName.toLowerCase().trim() === tokenItem.studentName.toLowerCase().trim()
+    );
+    return {
+      tokenItem,
+      session: activeSession || null,
+    };
+  });
 
   // Also include any sessions not in pre-generated token list
   examSessions.forEach((s) => {
