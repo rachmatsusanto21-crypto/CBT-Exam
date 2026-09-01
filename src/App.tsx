@@ -338,6 +338,34 @@ export default function App() {
   // Active Exam
   const activeExam = exams.find((e) => e.id === activeExamId) || exams[0] || createNewExamPackage("Ujian Standar");
 
+  // Strictly filter student exam history records by activeExamId / activeExam.code
+  // so students and sessions from other exams or previous archives don't leak into current view
+  const activeExamHistory = useMemo(() => {
+    if (!activeExam) return [];
+    const currentId = activeExam.id;
+    const currentCode = (activeExam.code || "").trim().toUpperCase();
+
+    return history.filter((session) => {
+      if (!session) return false;
+      const matchId = currentId && session.examId === currentId;
+      const matchCode = currentCode && session.examCode && session.examCode.trim().toUpperCase() === currentCode;
+      return matchId || matchCode;
+    });
+  }, [history, activeExam]);
+
+  // Isolate tokens strictly for the active exam to prevent other classes/archives from leaking
+  const activeExamTokens = useMemo(() => {
+    return deduplicateStudentTokens(tokens, activeExam.code);
+  }, [tokens, activeExam.code]);
+
+  // Active student session isolated to current active exam
+  const examActiveSession = useMemo(() => {
+    if (!activeSession) return null;
+    const matchId = activeSession.examId === activeExam.id;
+    const matchCode = activeExam.code && activeSession.examCode?.trim().toUpperCase() === activeExam.code.trim().toUpperCase();
+    return matchId || matchCode ? activeSession : null;
+  }, [activeSession, activeExam]);
+
   // Dynamically update document title based on active exam
   useEffect(() => {
     if (activeExam?.title) {
@@ -528,6 +556,19 @@ export default function App() {
     }
   };
 
+  const handleUpdateActiveExamHistory = (updatedActiveHistory: StudentExamSession[]) => {
+    // Preserve records from all other exams
+    const otherExamsHistory = history.filter((h) => {
+      const isCurrentExam =
+        (activeExam.id && h.examId === activeExam.id) ||
+        (activeExam.code && h.examCode && h.examCode.trim().toUpperCase() === activeExam.code.trim().toUpperCase());
+      return !isCurrentExam;
+    });
+    const newFullHistory = [...otherExamsHistory, ...updatedActiveHistory];
+    setHistoryState(newFullHistory);
+    saveExamHistory(newFullHistory);
+  };
+
   const handleReloadAllData = () => {
     setSchoolProfileState(getSchoolProfile());
     const allExams = getExamPackages();
@@ -558,8 +599,8 @@ export default function App() {
         <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-6 lg:p-8">
           <StudentSlideExam
             exam={activeExam}
-            tokens={tokens}
-            currentSession={activeSession}
+            tokens={activeExamTokens}
+            currentSession={examActiveSession}
             onSaveSession={handleSaveStudentSession}
             onSubmitExam={handleSubmitStudentExam}
             onExit={() => {
@@ -741,8 +782,8 @@ export default function App() {
         {activeTab === "student_exam" && (
           <StudentSlideExam
             exam={activeExam}
-            tokens={tokens}
-            currentSession={activeSession}
+            tokens={activeExamTokens}
+            currentSession={examActiveSession}
             onSaveSession={handleSaveStudentSession}
             onSubmitExam={handleSubmitStudentExam}
             isTeacherTrial={isTeacherTrial}
@@ -765,14 +806,11 @@ export default function App() {
           <LiveMonitoringDashboard
             exam={activeExam}
             school={schoolProfile}
-            history={history}
-            tokens={tokens}
+            history={activeExamHistory}
+            tokens={activeExamTokens}
             onForceSubmitStudent={handleForceSubmitStudent}
             onResetStudentSession={handleResetStudentSession}
-            onUpdateHistory={(updatedHistory) => {
-              setHistoryState(updatedHistory);
-              saveExamHistory(updatedHistory);
-            }}
+            onUpdateHistory={handleUpdateActiveExamHistory}
             onUpdateTokens={handleUpdateTokens}
           />
         )}
@@ -807,11 +845,8 @@ export default function App() {
           <ItemAnalysisAndHistory
             exam={activeExam}
             school={schoolProfile}
-            history={history}
-            onUpdateHistory={(updated) => {
-              setHistoryState(updated);
-              saveExamHistory(updated);
-            }}
+            history={activeExamHistory}
+            onUpdateHistory={handleUpdateActiveExamHistory}
           />
         )}
 
@@ -851,7 +886,7 @@ export default function App() {
         onClose={() => setIsShareModalOpen(false)}
         exam={activeExam}
         token={activeExam.sessionToken}
-        tokens={tokens}
+        tokens={activeExamTokens}
         allExams={exams}
         onSelectExam={(e) => handleSelectExamId(e.id)}
       />
