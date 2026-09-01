@@ -81,6 +81,7 @@ export interface ExamPackage {
   allowReviewExplanation: boolean; // Tampilkan pembahasan setelah submit
   shuffleQuestions: boolean;
   shuffleOptions: boolean;
+  tokens?: StudentTokenItem[];
   createdAt: string;
   updatedAt: string;
 }

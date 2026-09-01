@@ -169,7 +169,12 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
 
   // Also include any sessions not in pre-generated token list
   examSessions.forEach((s) => {
-    if (!studentRows.some((row) => row.session?.id === s.id)) {
+    const isAlreadyListed = studentRows.some(
+      (row) =>
+        row.session?.id === s.id ||
+        row.tokenItem.studentName.toLowerCase().trim() === s.studentName.toLowerCase().trim()
+    );
+    if (!isAlreadyListed) {
       studentRows.push({
         tokenItem: {
           id: `dyn-${s.id}`,

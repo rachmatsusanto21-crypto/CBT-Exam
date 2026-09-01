@@ -130,11 +130,17 @@ app.post("/api/exams/share", (req, res) => {
     const cleanCode = (exam.code || "").trim().toUpperCase();
     const cleanId = (exam.id || "").trim();
     
+    // Ensure tokens only belong to this exam code
+    const rawTokens = Array.isArray(tokens) ? tokens : [];
+    const examTokens = rawTokens.filter(
+      (t: any) => t && t.examCode && t.examCode.trim().toUpperCase() === cleanCode
+    );
+    
     // Store by ID and by Code
     const record = {
       exam,
       token,
-      tokens,
+      tokens: examTokens,
       updatedAt: new Date().toISOString(),
     };
     if (cleanId) sharedExamsRegistry.set(cleanId, record);

@@ -86,7 +86,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
   onSwitchExam,
   requestedExamCode,
 }) => {
-  // Available registered students roster from profile data (strictly deduplicated, no repeats)
+  // Available registered students roster from profile data (strictly deduplicated & isolated to current exam code)
   const availableStudents = React.useMemo(() => {
     const list = tokens && tokens.length > 0 ? tokens : getStudentTokens();
     return deduplicateStudentTokens(list, exam.code);
@@ -95,22 +95,33 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
   // Login Gate State (if no session active)
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(!!currentSession);
   const [selectedStudentId, setSelectedStudentId] = useState<string>("");
-  const [isManualInput, setIsManualInput] = useState<boolean>(false);
+  const [isManualInput, setIsManualInput] = useState<boolean>(() => availableStudents.length === 0);
   const [loginStudentName, setLoginStudentName] = useState("");
   const [loginNisn, setLoginNisn] = useState("");
-  const [loginClass, setLoginClass] = useState(exam.teacherProfile.gradeLevel || "X MIPA 1");
+  const [loginClass, setLoginClass] = useState(exam.teacherProfile.gradeLevel || "");
   const [loginExamCode, setLoginExamCode] = useState(exam.code);
   const [loginToken, setLoginToken] = useState(initialToken || exam.sessionToken);
   const [loginError, setLoginError] = useState<string | null>(null);
 
-  // Sync login fields when exam prop changes
+  // Sync login fields when exam prop or available students change
   useEffect(() => {
     setLoginExamCode(exam.code);
-    setLoginClass(exam.teacherProfile.gradeLevel || "Kelas X");
+    setLoginClass(exam.teacherProfile.gradeLevel || "");
     if (!initialToken && exam.sessionToken) {
       setLoginToken(exam.sessionToken);
     }
-  }, [exam, initialToken]);
+    if (availableStudents.length === 0) {
+      setIsManualInput(true);
+      setSelectedStudentId("__manual__");
+      setLoginStudentName("");
+      setLoginNisn("");
+    } else {
+      setIsManualInput(false);
+      setSelectedStudentId("");
+      setLoginStudentName("");
+      setLoginNisn("");
+    }
+  }, [exam.code, exam.sessionToken, exam.teacherProfile.gradeLevel, initialToken, availableStudents.length]);
 
   // Student dropdown selector handler
   const handleSelectStudent = (studentId: string) => {
@@ -1005,23 +1016,25 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
                   <span>Nama Lengkap Siswa</span>
                   <span className="text-rose-400">*</span>
                 </label>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const nextMode = !isManualInput;
-                    setIsManualInput(nextMode);
-                    if (nextMode) {
-                      setSelectedStudentId("__manual__");
-                    } else {
-                      setSelectedStudentId("");
-                      setLoginStudentName("");
-                      setLoginNisn("");
-                    }
-                  }}
-                  className="text-[11px] text-indigo-400 hover:text-indigo-300 font-medium underline cursor-pointer"
-                >
-                  {isManualInput ? "📋 Pilih dari Data Profil" : "✏️ Input Manual"}
-                </button>
+                {availableStudents.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextMode = !isManualInput;
+                      setIsManualInput(nextMode);
+                      if (nextMode) {
+                        setSelectedStudentId("__manual__");
+                      } else {
+                        setSelectedStudentId("");
+                        setLoginStudentName("");
+                        setLoginNisn("");
+                      }
+                    }}
+                    className="text-[11px] text-indigo-400 hover:text-indigo-300 font-medium underline cursor-pointer"
+                  >
+                    {isManualInput ? "📋 Pilih dari Daftar Siswa" : "✏️ Input Manual"}
+                  </button>
+                )}
               </div>
 
               {!isManualInput ? (

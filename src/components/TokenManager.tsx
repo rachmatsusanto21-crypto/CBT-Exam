@@ -224,7 +224,7 @@ export const TokenManager: React.FC<TokenManagerProps> = ({
     const otherTokens = tokens.filter(
       (t) => !(t.examCode === exam.code && t.className === classNameToUse)
     );
-    const combined = deduplicateStudentTokens([...otherTokens, ...newTokens], exam.code);
+    const combined = deduplicateStudentTokens([...otherTokens, ...newTokens]);
     onUpdateTokens(combined);
 
     // Auto-save draft so names are not lost
