@@ -17,7 +17,8 @@ import {
   Menu,
   X,
   Share2,
-  ExternalLink
+  ExternalLink,
+  RefreshCw
 } from "lucide-react";
 import {
   ExamPackage,
@@ -58,13 +59,28 @@ import { decodeExamFromCurrentUrl } from "./utils/examShareEncoder";
 import {
   syncExamToFirestore,
   fetchExamFromFirestore,
-  syncStudentSessionToFirestore
+  syncStudentSessionToFirestore,
+  subscribeToExamSessions,
+  fetchExamSessions,
+  deleteStudentSessionFromFirestore,
+  subscribeQuotaStatus,
+  resetQuotaCheck,
+  FIRESTORE_UPGRADE_URL
 } from "./utils/firestoreService";
 
 export default function App() {
   // Decode any packed exam payload from URL
   const sharedPayload = useMemo(() => {
     return decodeExamFromCurrentUrl();
+  }, []);
+
+  // Track Firestore Quota state
+  const [firestoreQuotaExceeded, setFirestoreQuotaExceeded] = useState<boolean>(false);
+
+  useEffect(() => {
+    return subscribeQuotaStatus((exceeded) => {
+      setFirestoreQuotaExceeded(exceeded);
+    });
   }, []);
 
   // Direct Student Link Detection
@@ -164,17 +180,6 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     return params.get("code") || params.get("examId") || null;
   });
-
-  // Auto-sync active exam and all exams to Firestore in the background
-  useEffect(() => {
-    if (exams && exams.length > 0) {
-      exams.forEach((ex) => {
-        syncExamToFirestore(ex, tokens).catch((err) =>
-          console.warn("Background Firestore sync error:", err)
-        );
-      });
-    }
-  }, [exams, tokens]);
 
   // If URL specified an exam code/ID not in local storage, attempt to fetch from Firestore then server registry
   useEffect(() => {
@@ -375,6 +380,46 @@ export default function App() {
     }
   }, [activeExam]);
 
+  // Real-time synchronization for student sessions from Firestore & Server
+  useEffect(() => {
+    if (!activeExam?.id && !activeExam?.code) return;
+
+    const currentId = activeExam.id;
+    const currentCode = activeExam.code;
+
+    const mergeIncomingSessions = (remoteSessions: StudentExamSession[]) => {
+      if (!remoteSessions || remoteSessions.length === 0) return;
+      setHistoryState((prevHistory) => {
+        const sessionMap = new Map<string, StudentExamSession>();
+        prevHistory.forEach((h) => {
+          if (h && h.id) sessionMap.set(h.id, h);
+        });
+        remoteSessions.forEach((rs) => {
+          if (rs && rs.id) sessionMap.set(rs.id, rs);
+        });
+        const merged = Array.from(sessionMap.values());
+        saveExamHistory(merged);
+        return merged;
+      });
+    };
+
+    // 1. Initial immediate fetch
+    fetchExamSessions(currentId, currentCode).then(mergeIncomingSessions).catch(() => {});
+
+    // 2. Real-time Firestore subscription (onSnapshot)
+    const unsubscribe = subscribeToExamSessions(currentId, currentCode, mergeIncomingSessions);
+
+    // 3. Periodic fallback poll every 5 seconds
+    const pollInterval = setInterval(() => {
+      fetchExamSessions(currentId, currentCode).then(mergeIncomingSessions).catch(() => {});
+    }, 5000);
+
+    return () => {
+      unsubscribe();
+      clearInterval(pollInterval);
+    };
+  }, [activeExam?.id, activeExam?.code]);
+
   // Handlers for Data Updates
   const handleUpdateSchool = (updated: SchoolProfile) => {
     setSchoolProfileState(updated);
@@ -500,7 +545,7 @@ export default function App() {
   const handleSubmitStudentExam = (finalizedSession: StudentExamSession) => {
     setActiveSessionState(finalizedSession);
     saveActiveStudentSession(finalizedSession);
-    syncStudentSessionToFirestore(finalizedSession).catch((err) =>
+    syncStudentSessionToFirestore(finalizedSession, true).catch((err) =>
       console.warn("Firestore session submit sync error:", err)
     );
 
@@ -549,6 +594,7 @@ export default function App() {
     const updatedHistory = history.filter((item) => item.id !== sessionId);
     setHistoryState(updatedHistory);
     saveExamHistory(updatedHistory);
+    deleteStudentSessionFromFirestore(sessionId).catch(() => {});
 
     if (activeSession?.id === sessionId) {
       setActiveSessionState(null);
@@ -775,6 +821,42 @@ export default function App() {
           </div>
         )}
       </header>
+
+      {/* Firestore Quota Exceeded Informational Banner */}
+      {firestoreQuotaExceeded && (
+        <div className="bg-amber-950/80 border-b border-amber-800/80 px-4 py-2.5 text-xs text-amber-200">
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0"></span>
+              <span>
+                <strong>Batas Kuota Gratis Firestore Harian Tercapai:</strong> Aplikasi otomatis beralih menggunakan <em>Server & Local Storage Backup Engine</em> sehingga ujian & pemantauan tetap berjalan normal.
+              </span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => {
+                  resetQuotaCheck();
+                  window.location.reload();
+                }}
+                className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 rounded-lg text-[11px] font-medium transition-all cursor-pointer"
+                title="Coba sambungkan ulang ke Cloud Firestore"
+              >
+                <RefreshCw className="w-3 h-3 text-slate-400" />
+                <span>Coba Sambung Ulang</span>
+              </button>
+              <a
+                href={FIRESTORE_UPGRADE_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg text-[11px] transition-all cursor-pointer shadow-sm"
+              >
+                <span>Firebase Console</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">

@@ -32,6 +32,7 @@ import { ExamPackage, SchoolProfile, StudentExamSession, StudentTokenItem } from
 import { exportGradebookToExcel, exportItemAnalysisToExcel } from "../utils/sheetExport";
 import { generateStudentExamPdfReport, generateBatchStudentsPdfReport } from "../utils/studentPdfReport";
 import { deduplicateStudentTokens } from "../utils/tokenValidator";
+import { fetchExamSessions } from "../utils/firestoreService";
 import { LiveStudentEditModal, StudentRowItem } from "./LiveStudentEditModal";
 
 interface ToastNotification {
@@ -77,6 +78,24 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
   const [editingStudentRow, setEditingStudentRow] = useState<StudentRowItem | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const handleSyncCloud = async () => {
+    setIsSyncing(true);
+    try {
+      const remoteSessions = await fetchExamSessions(exam.id, exam.code);
+      if (remoteSessions && remoteSessions.length > 0 && onUpdateHistory) {
+        onUpdateHistory(remoteSessions);
+        showActionFeedback(`Sinkronisasi berhasil: ${remoteSessions.length} data pengerjaan siswa terdeteksi.`);
+      } else {
+        showActionFeedback("Sinkronisasi selesai: Data sudah mutakhir.");
+      }
+    } catch (err: any) {
+      showActionFeedback("Gagal sinkronisasi cloud: " + (err?.message || "Koneksi terputus"));
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   const addToast = (toast: Omit<ToastNotification, "id" | "time">) => {
     const newToast: ToastNotification = {
@@ -150,7 +169,17 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
     previousHistoryRef.current = history;
   }, [history, exam.id, exam.code]);
 
-  const examSessions = history.filter((s) => s.examId === exam.id || s.examCode === exam.code);
+  const cleanExamId = (exam.id || "").trim();
+  const cleanExamCode = (exam.code || "").trim().toUpperCase();
+
+  const examSessions = history.filter((s) => {
+    if (!s) return false;
+    const sId = (s.examId || "").trim();
+    const sCode = (s.examCode || "").trim().toUpperCase();
+    const matchId = cleanExamId && sId === cleanExamId;
+    const matchCode = cleanExamCode && sCode === cleanExamCode;
+    return matchId || matchCode;
+  });
 
   // Group tokens and active sessions (deduplicated by student name)
   const uniqueExamTokens = deduplicateStudentTokens(tokens, exam.code);
@@ -412,6 +441,18 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Realtime Cloud Sync Button */}
+          <button
+            id="sync-cloud-btn"
+            onClick={handleSyncCloud}
+            disabled={isSyncing}
+            className="flex items-center gap-1.5 px-3.5 py-2.5 bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-300 border border-indigo-700/50 rounded-xl text-xs font-semibold shadow-sm transition-all cursor-pointer disabled:opacity-50"
+            title="Sinkronkan data pengerjaan siswa langsung dari cloud database & server"
+          >
+            <RefreshCw className={`w-4 h-4 text-indigo-400 ${isSyncing ? "animate-spin" : ""}`} />
+            <span>{isSyncing ? "Menyinkronkan..." : "Sinkronkan Cloud"}</span>
+          </button>
+
           {/* Notification Center Button */}
           <button
             id="toggle-toast-history-btn"

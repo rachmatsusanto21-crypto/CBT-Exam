@@ -165,6 +165,48 @@ app.get("/api/exams/by-code/:code", (req, res) => {
   res.json({ success: true, ...record });
 });
 
+// Student Sessions Registry (In-Memory on backend server for fast backup & live monitoring)
+const studentSessionsRegistry = new Map<string, any>();
+
+// Record or update student session
+app.post("/api/sessions", (req, res) => {
+  try {
+    const session = req.body;
+    if (!session || !session.id) {
+      return res.status(400).json({ success: false, message: "Invalid session payload" });
+    }
+    const cleanId = String(session.id).trim();
+    studentSessionsRegistry.set(cleanId, {
+      ...session,
+      serverReceivedAt: new Date().toISOString(),
+    });
+    res.json({ success: true, sessionId: cleanId });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || "Failed to save session" });
+  }
+});
+
+// Get all sessions for a specific exam code or exam ID
+app.get("/api/sessions/by-exam/:codeOrId", (req, res) => {
+  const target = (req.params.codeOrId || "").trim().toUpperCase();
+  const matched: any[] = [];
+  studentSessionsRegistry.forEach((session) => {
+    const sId = (session.examId || "").trim().toUpperCase();
+    const sCode = (session.examCode || "").trim().toUpperCase();
+    if (sId === target || sCode === target || !target) {
+      matched.push(session);
+    }
+  });
+  res.json({ success: true, sessions: matched });
+});
+
+// Delete or reset student session
+app.delete("/api/sessions/:sessionId", (req, res) => {
+  const id = (req.params.sessionId || "").trim();
+  studentSessionsRegistry.delete(id);
+  res.json({ success: true, message: `Session ${id} deleted` });
+});
+
 // Check Gemini API Key Status
 app.get("/api/gemini/status", (req, res) => {
   const headerKey = req.headers["x-gemini-api-key"] as string | undefined;
