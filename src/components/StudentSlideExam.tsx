@@ -53,6 +53,7 @@ import { prepareStudentExamQuestions } from "../utils/shuffle";
 import { validateExamToken, normalizeToken, deduplicateStudentTokens } from "../utils/tokenValidator";
 import { getStudentTokens } from "../utils/storage";
 import { broadcastLiveSession } from "../utils/liveSync";
+import { syncStudentSessionToFirestore } from "../utils/firestoreService";
 import {
   playExamTimeWarningSound,
   isSoundNotificationEnabled,
@@ -622,6 +623,9 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
     setSecondsRemaining(activeTargetExam.durationMinutes * 60);
     onSaveSession(newSession);
     broadcastLiveSession(newSession);
+    if (!isTeacherTrial) {
+      syncStudentSessionToFirestore(newSession, true);
+    }
   };
 
   const handleStartExamLogin = (e: React.FormEvent) => {
@@ -925,6 +929,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
     if (!isTeacherTrial) {
       onSubmitExam(finalizedSession);
       broadcastLiveSession(finalizedSession);
+      syncStudentSessionToFirestore(finalizedSession, true);
     }
   };
 

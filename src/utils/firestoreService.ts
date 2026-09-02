@@ -212,7 +212,14 @@ export async function fetchExamFromFirestore(
 
     // 2. Fallback to server registry
     try {
-      const res = await fetch(`/api/exams/share/${encodeURIComponent(upperQuery)}`);
+      // Check code or id endpoints
+      let res = await fetch(`/api/exams/by-code/${encodeURIComponent(upperQuery)}`);
+      if (!res.ok) {
+        res = await fetch(`/api/exams/share/${encodeURIComponent(upperQuery)}`);
+      }
+      if (!res.ok) {
+        res = await fetch(`/api/exams/${encodeURIComponent(upperQuery)}`);
+      }
       if (res.ok) {
         const data = await res.json();
         if (data.success && data.exam) {
@@ -338,6 +345,24 @@ export async function fetchExamSessions(
             }
           });
         }
+      }
+    }
+
+    // Also fetch general sessions list to catch any cross-device session updates
+    const allRes = await fetch("/api/sessions");
+    if (allRes.ok) {
+      const json = await allRes.json();
+      if (json.success && Array.isArray(json.sessions)) {
+        json.sessions.forEach((s: StudentExamSession) => {
+          if (!s || !s.id) return;
+          const sId = (s.examId || "").trim();
+          const sCode = (s.examCode || "").trim().toUpperCase();
+          const matchId = cleanId && sId === cleanId;
+          const matchCode = cleanCode && sCode === cleanCode;
+          if (matchId || matchCode || (!cleanId && !cleanCode)) {
+            sessionsMap.set(s.id, s);
+          }
+        });
       }
     }
   } catch {

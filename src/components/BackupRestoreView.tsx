@@ -45,6 +45,13 @@ import {
   getFirebaseConfigData,
   requestGoogleTokenViaGIS,
 } from "../utils/googleAuth";
+import {
+  isDriveAutoSyncEnabled,
+  setDriveAutoSyncEnabled,
+  subscribeToDriveSync,
+  triggerFullBackupAutoSyncToDrive,
+  DriveSyncState,
+} from "../utils/googleDriveSync";
 import { User } from "firebase/auth";
 
 interface BackupRestoreViewProps {
@@ -62,6 +69,15 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
   const [driveFolderId, setDriveFolderId] = useState<string | null>(null);
   const [driveError, setDriveError] = useState<string | null>(null);
   const [driveSuccessMsg, setDriveSuccessMsg] = useState<string | null>(null);
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState<boolean>(() => isDriveAutoSyncEnabled());
+  const [syncState, setSyncState] = useState<DriveSyncState>({ status: "idle", lastSyncedAt: null });
+
+  // Drive sync subscription
+  useEffect(() => {
+    return subscribeToDriveSync((st) => {
+      setSyncState(st);
+    });
+  }, []);
 
   // Unauthorized Domain Guidance State
   const [unauthDomainInfo, setUnauthDomainInfo] = useState<{
@@ -335,6 +351,60 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
             <Download className="w-4 h-4" />
             <span>Unduh File JSON</span>
           </button>
+        </div>
+      </div>
+
+      {/* Auto-Sync Cloud Status Card */}
+      <div className="bg-[#18181c] border border-slate-800 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-start sm:items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 shrink-0">
+            <Sparkles className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h4 className="font-bold text-white text-sm">Otomatisasi Sinkronisasi Google Drive</h4>
+              <span
+                className={`text-[9px] px-2 py-0.5 rounded-full font-bold ${
+                  autoSyncEnabled && currentUser
+                    ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                    : "bg-slate-800 text-slate-400 border border-slate-700"
+                }`}
+              >
+                {autoSyncEnabled && currentUser ? "OTOMATIS AKTIF" : "NONAKTIF"}
+              </span>
+            </div>
+            <p className="text-xs text-slate-400 mt-0.5">
+              {syncState.status === "syncing" ? (
+                <span className="text-indigo-400 animate-pulse font-medium">{syncState.message || "Menyinkronkan data..."}</span>
+              ) : syncState.lastSyncedAt ? (
+                <span>Terakhir tersinkronisasi otomatis: {new Date(syncState.lastSyncedAt).toLocaleString("id-ID")}</span>
+              ) : (
+                <span>Otomatis mencadangkan paket soal & riwayat saat terjadi perubahan.</span>
+              )}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 shrink-0">
+          <label className="relative inline-flex items-center cursor-pointer">
+            <input
+              type="checkbox"
+              checked={autoSyncEnabled}
+              onChange={(e) => {
+                const next = e.target.checked;
+                setAutoSyncEnabled(next);
+                setDriveAutoSyncEnabled(next);
+                if (next && driveToken) {
+                  triggerFullBackupAutoSyncToDrive(500);
+                  setDriveSuccessMsg("Otomatisasi sinkronisasi diaktifkan.");
+                } else {
+                  setDriveSuccessMsg("Otomatisasi sinkronisasi dinonaktifkan.");
+                }
+              }}
+              className="sr-only peer"
+            />
+            <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+          </label>
         </div>
       </div>
 

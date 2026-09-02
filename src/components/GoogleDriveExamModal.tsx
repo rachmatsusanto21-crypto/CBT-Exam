@@ -40,6 +40,16 @@ import {
 } from "../utils/googleAuth";
 import { User } from "firebase/auth";
 
+import {
+  isDriveAutoSyncEnabled,
+  setDriveAutoSyncEnabled,
+  subscribeToDriveSync,
+  triggerExamAutoSyncToDrive,
+  performImmediateDriveSync,
+  DriveSyncState,
+} from "../utils/googleDriveSync";
+import { getExamPackages, saveExamPackages } from "../utils/storage";
+
 interface GoogleDriveExamModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -62,11 +72,22 @@ export const GoogleDriveExamModal: React.FC<GoogleDriveExamModalProps> = ({
   const [isConnecting, setIsConnecting] = useState(false);
   const [isLoadingList, setIsLoadingList] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isSyncingAll, setIsSyncingAll] = useState(false);
   const [loadingFileId, setLoadingFileId] = useState<string | null>(null);
   const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
   const [driveExams, setDriveExams] = useState<GoogleDriveExamItem[]>([]);
   const [statusMsg, setStatusMsg] = useState<{ type: "success" | "error" | "info"; text: string } | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [autoSync, setAutoSync] = useState<boolean>(() => isDriveAutoSyncEnabled());
+  const [driveSyncState, setDriveSyncState] = useState<DriveSyncState>({ status: "idle", lastSyncedAt: null });
+
+  // Sync listener
+  useEffect(() => {
+    const unsub = subscribeToDriveSync((state) => {
+      setDriveSyncState(state);
+    });
+    return () => unsub();
+  }, []);
 
   // Auth state listener
   useEffect(() => {
@@ -270,6 +291,80 @@ export const GoogleDriveExamModal: React.FC<GoogleDriveExamModalProps> = ({
     setTimeout(() => setCopiedId(null), 3000);
   };
 
+  const handleToggleAutoSync = (enabled: boolean) => {
+    setAutoSync(enabled);
+    setDriveAutoSyncEnabled(enabled);
+    if (enabled && driveToken) {
+      triggerExamAutoSyncToDrive(activeExam, 500, (updated) => onUpdateExam(updated));
+      setStatusMsg({
+        type: "success",
+        text: "Otomatisasi sinkronisasi ke Google Drive diaktifkan. Setiap perubahan soal akan otomatis tersimpan.",
+      });
+    } else {
+      setStatusMsg({
+        type: "info",
+        text: "Otomatisasi sinkronisasi ke Google Drive dinonaktifkan.",
+      });
+    }
+  };
+
+  // Sync all local exams to Google Drive in batch
+  const handleSyncAllExams = async () => {
+    if (!driveToken) {
+      await handleConnect();
+      return;
+    }
+
+    const allExams = getExamPackages();
+    if (allExams.length === 0) {
+      setStatusMsg({ type: "info", text: "Tidak ada paket naskah soal lokal untuk disinkronkan." });
+      return;
+    }
+
+    setIsSyncingAll(true);
+    setStatusMsg(null);
+    let successCount = 0;
+
+    try {
+      const updatedList: ExamPackage[] = [...allExams];
+      for (let i = 0; i < allExams.length; i++) {
+        const ex = allExams[i];
+        try {
+          const res = await saveExamToGoogleDrive(driveToken, ex);
+          updatedList[i] = {
+            ...ex,
+            gdriveFileId: res.fileId,
+            gdriveWebViewLink: res.webViewLink,
+            gdriveDownloadLink: res.downloadUrl,
+            gdriveSyncedAt: new Date().toISOString(),
+          };
+          successCount++;
+        } catch (itemErr) {
+          console.warn("Could not sync exam to Drive:", ex.title, itemErr);
+        }
+      }
+
+      saveExamPackages(updatedList);
+      const activeIdx = updatedList.findIndex((e) => e.id === activeExam.id);
+      if (activeIdx >= 0) {
+        onUpdateExam(updatedList[activeIdx]);
+      }
+
+      await fetchDriveExams(driveToken);
+      setStatusMsg({
+        type: "success",
+        text: `Berhasil menyinkronkan ${successCount} dari ${allExams.length} naskah soal ke Google Drive!`,
+      });
+    } catch (err: any) {
+      setStatusMsg({
+        type: "error",
+        text: err?.message || "Gagal menyinkronkan semua naskah ke Google Drive.",
+      });
+    } finally {
+      setIsSyncingAll(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
       <div className="bg-[#121214] border border-slate-800 rounded-3xl max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
@@ -282,18 +377,19 @@ export const GoogleDriveExamModal: React.FC<GoogleDriveExamModalProps> = ({
             <div>
               <h2 className="text-lg font-black text-white flex items-center gap-2">
                 <span>Penyimpanan Google Drive CBT</span>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold">
-                  Cloud Workspace
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  Otomatisasi Cloud
                 </span>
               </h2>
               <p className="text-xs text-slate-400">
-                Simpan, muat, dan bagikan naskah soal langsung melalui Google Drive guru
+                Simpan, muat, dan sinkronkan naskah soal secara otomatis ke Google Drive guru
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-2 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition-colors"
+            className="p-2 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -374,6 +470,52 @@ export const GoogleDriveExamModal: React.FC<GoogleDriveExamModalProps> = ({
                 >
                   <Cloud className="w-4 h-4" />
                   <span>{isConnecting ? "Menghubungkan..." : "Hubungkan Google Drive"}</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Auto-Sync Setting Card */}
+          <div className="p-4 bg-[#18181c] border border-slate-800 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-emerald-400" />
+                <span className="font-bold text-white text-xs">Otomatisasi Sinkronisasi Google Drive</span>
+                <span
+                  className={`text-[9px] px-2 py-0.5 rounded-full font-bold ${
+                    autoSync && currentUser
+                      ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                      : "bg-slate-800 text-slate-400 border border-slate-700"
+                  }`}
+                >
+                  {autoSync && currentUser ? "AKTIF" : "NONAKTIF"}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400">
+                Setiap kali Anda membuat, mengedit soal, atau menerima sesi siswa, data akan otomatis dicadangkan ke Google Drive.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3 shrink-0">
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={autoSync}
+                  onChange={(e) => handleToggleAutoSync(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+              </label>
+
+              {currentUser && (
+                <button
+                  onClick={handleSyncAllExams}
+                  disabled={isSyncingAll}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-indigo-500/30 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+                  title="Sinkronkan semua naskah lokal ke Google Drive"
+                >
+                  <CloudUpload className={`w-3.5 h-3.5 ${isSyncingAll ? "animate-spin" : ""}`} />
+                  <span>{isSyncingAll ? "Menyinkronkan..." : "Sinkron Semua"}</span>
                 </button>
               )}
             </div>

@@ -18,7 +18,8 @@ import {
   X,
   Share2,
   ExternalLink,
-  RefreshCw
+  RefreshCw,
+  AlertTriangle
 } from "lucide-react";
 import {
   ExamPackage,
@@ -84,11 +85,19 @@ export default function App() {
     });
   }, []);
 
-  // Direct Student Link Detection
+  // Direct Student Link Detection (Auto-detect mode=student, code, examId, pkg, or token)
   const [isDirectStudentMode, setIsDirectStudentMode] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
     const params = new URLSearchParams(window.location.search);
-    return params.get("mode") === "student" || !!sharedPayload;
+    const hasStudentParam =
+      params.get("mode") === "student" ||
+      !!sharedPayload ||
+      !!params.get("code") ||
+      !!params.get("examId") ||
+      !!params.get("pkg") ||
+      !!params.get("examData") ||
+      !!params.get("token");
+    return hasStudentParam;
   });
 
   const [urlToken, setUrlToken] = useState<string>(() => {
@@ -182,16 +191,35 @@ export default function App() {
     return params.get("code") || params.get("examId") || null;
   });
 
+  const [isFetchingRemoteExam, setIsFetchingRemoteExam] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    if (sharedPayload) return false;
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code") || params.get("examId");
+    if (!code) return false;
+    const all = getExamPackages();
+    return !all.some((e) => e.id === code || e.code.toUpperCase() === code.toUpperCase());
+  });
+  const [remoteFetchError, setRemoteFetchError] = useState<string | null>(null);
+
   // If URL specified an exam code/ID not in local storage, attempt to fetch from Firestore then server registry
   useEffect(() => {
-    if (!requestedExamCode) return;
+    if (!requestedExamCode) {
+      setIsFetchingRemoteExam(false);
+      return;
+    }
     const isAlreadyLoaded = exams.some(
       (e) => e.id === requestedExamCode || e.code.toUpperCase() === requestedExamCode.toUpperCase()
     );
-    if (isAlreadyLoaded) return;
+    if (isAlreadyLoaded) {
+      setIsFetchingRemoteExam(false);
+      return;
+    }
 
     // Fetch from Firestore & backend share registry
     const fetchRemoteExam = async () => {
+      setIsFetchingRemoteExam(true);
+      setRemoteFetchError(null);
       try {
         // 1. Try Firestore First
         const firestoreResult = await fetchExamFromFirestore(requestedExamCode);
@@ -221,34 +249,57 @@ export default function App() {
               return merged;
             });
           }
+          setIsFetchingRemoteExam(false);
           return;
         }
 
         // 2. Fallback to Express backend share registry
-        const res = await fetch(`/api/exams/by-code/${encodeURIComponent(requestedExamCode)}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (data.success && data.exam) {
-          setExamsState((prev) => {
-            const idx = prev.findIndex(
-              (e) => e.id === data.exam.id || e.code.toUpperCase() === data.exam.code.toUpperCase()
-            );
-            let updated: ExamPackage[];
-            if (idx >= 0) {
-              updated = [...prev];
-              updated[idx] = data.exam;
-            } else {
-              updated = [data.exam, ...prev];
-            }
-            saveExamPackages(updated);
-            return updated;
-          });
-          setActiveExamIdState(data.exam.id);
-          saveActiveExamId(data.exam.id);
-          if (data.token) setUrlToken(data.token);
+        let res = await fetch(`/api/exams/by-code/${encodeURIComponent(requestedExamCode)}`);
+        if (!res.ok) {
+          res = await fetch(`/api/exams/share/${encodeURIComponent(requestedExamCode)}`);
         }
+        if (!res.ok) {
+          res = await fetch(`/api/exams/${encodeURIComponent(requestedExamCode)}`);
+        }
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.exam) {
+            setExamsState((prev) => {
+              const idx = prev.findIndex(
+                (e) => e.id === data.exam.id || e.code.toUpperCase() === data.exam.code.toUpperCase()
+              );
+              let updated: ExamPackage[];
+              if (idx >= 0) {
+                updated = [...prev];
+                updated[idx] = data.exam;
+              } else {
+                updated = [data.exam, ...prev];
+              }
+              saveExamPackages(updated);
+              return updated;
+            });
+            setActiveExamIdState(data.exam.id);
+            saveActiveExamId(data.exam.id);
+            if (data.token) setUrlToken(data.token);
+            if (data.tokens && data.tokens.length > 0) {
+              setTokensState((prev) => {
+                const merged = deduplicateStudentTokens([...data.tokens, ...prev]);
+                saveStudentTokens(merged);
+                return merged;
+              });
+            }
+            setIsFetchingRemoteExam(false);
+            return;
+          }
+        }
+
+        setRemoteFetchError(`Naskah soal dengan kode "${requestedExamCode}" tidak ditemukan di server. Silakan periksa kembali kode atau minta guru membagikan link soal.`);
       } catch (err) {
         console.warn("Could not fetch remote exam code:", err);
+        setRemoteFetchError("Gagal menghubungi server ujian. Pastikan perangkat Anda terhubung ke internet.");
+      } finally {
+        setIsFetchingRemoteExam(false);
       }
     };
     fetchRemoteExam();
@@ -693,6 +744,79 @@ export default function App() {
   // STANDALONE DIRECT STUDENT LINK VIEW (NO TEACHER NAVIGATION / DISTRACTIONS)
   // =========================================================================
   if (isDirectStudentMode) {
+    if (isFetchingRemoteExam) {
+      return (
+        <div className="min-h-screen bg-[#09090b] text-slate-100 flex flex-col items-center justify-center p-4">
+          <div className="bg-[#121214] border border-slate-800 rounded-3xl p-8 max-w-md w-full text-center space-y-6 shadow-2xl">
+            <div className="w-16 h-16 rounded-2xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 mx-auto animate-pulse">
+              <Cloud className="w-8 h-8 animate-bounce" />
+            </div>
+            <div className="space-y-2">
+              <h2 className="text-xl font-black text-white tracking-tight">Memuat Naskah Soal Ujian</h2>
+              <p className="text-sm text-slate-400">
+                Menghubungkan ke server CBT untuk mengunduh naskah kode:
+              </p>
+              <div className="inline-block px-4 py-1.5 rounded-xl bg-indigo-950/60 border border-indigo-500/40 text-indigo-300 font-mono font-bold text-sm">
+                {requestedExamCode || "Paket Soal"}
+              </div>
+            </div>
+            <div className="flex items-center justify-center gap-2 text-xs text-slate-500">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+              Sinkronisasi data 2 arah...
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (remoteFetchError && !exams.some((e) => e.id === requestedExamCode || e.code.toUpperCase() === requestedExamCode?.toUpperCase())) {
+      return (
+        <div className="min-h-screen bg-[#09090b] text-slate-100 flex flex-col items-center justify-center p-4">
+          <div className="bg-[#121214] border border-red-500/30 rounded-3xl p-8 max-w-md w-full text-center space-y-6 shadow-2xl">
+            <div className="w-16 h-16 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400 mx-auto">
+              <AlertTriangle className="w-8 h-8" />
+            </div>
+            <div className="space-y-2">
+              <h2 className="text-lg font-bold text-white">Soal Ujian Belum Tersedia</h2>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                {remoteFetchError}
+              </p>
+            </div>
+            <div className="flex flex-col gap-2 pt-2">
+              <button
+                onClick={() => {
+                  setRemoteFetchError(null);
+                  setIsFetchingRemoteExam(true);
+                  fetchExamFromFirestore(requestedExamCode || "").then((res) => {
+                    if (res.exam) {
+                      setExamsState((prev) => [res.exam!, ...prev]);
+                      setActiveExamIdState(res.exam.id);
+                    }
+                    setIsFetchingRemoteExam(false);
+                  });
+                }}
+                className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold cursor-pointer transition-all"
+              >
+                Coba Hubungkan Kembali
+              </button>
+              <button
+                onClick={() => {
+                  if (typeof window !== "undefined") {
+                    window.history.replaceState({}, "", window.location.pathname);
+                  }
+                  setIsDirectStudentMode(false);
+                  setRequestedExamCode(null);
+                }}
+                className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer transition-all"
+              >
+                Buka Halaman Utama
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="min-h-screen bg-[#09090b] text-slate-100 flex flex-col justify-between selection:bg-indigo-600 selection:text-white">
         <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-6 lg:p-8">

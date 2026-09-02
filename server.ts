@@ -238,9 +238,9 @@ app.get("/api/exams", (req, res) => {
   res.json({ success: true, exams: examsList });
 });
 
-// Retrieve shared exam package by code or ID
-app.get("/api/exams/by-code/:code", (req, res) => {
-  const code = (req.params.code || "").trim();
+// Retrieve shared exam package by code or ID (multiple route aliases for maximum compatibility)
+const handleGetExamByCode = (req: any, res: any) => {
+  const code = (req.params.code || req.params.codeOrId || "").trim();
   const upperCode = code.toUpperCase();
   const record = sharedExamsRegistry.get(code) || sharedExamsRegistry.get(upperCode);
 
@@ -249,6 +249,14 @@ app.get("/api/exams/by-code/:code", (req, res) => {
   }
 
   res.json({ success: true, ...record });
+};
+
+app.get("/api/exams/by-code/:code", handleGetExamByCode);
+app.get("/api/exams/share/:code", handleGetExamByCode);
+app.get("/api/exams/code/:code", handleGetExamByCode);
+app.get("/api/exams/:codeOrId", (req, res, next) => {
+  if (req.params.codeOrId === "share" || req.params.codeOrId === "by-code") return next();
+  handleGetExamByCode(req, res);
 });
 
 // Record or update student session (2-way sync from student device to teacher)
