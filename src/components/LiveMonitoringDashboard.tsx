@@ -33,6 +33,8 @@ import { exportGradebookToExcel, exportItemAnalysisToExcel } from "../utils/shee
 import { generateStudentExamPdfReport, generateBatchStudentsPdfReport } from "../utils/studentPdfReport";
 import { deduplicateStudentTokens } from "../utils/tokenValidator";
 import { fetchExamSessions } from "../utils/firestoreService";
+import { getStudentTokens } from "../utils/storage";
+import { subscribeToLiveSessions } from "../utils/liveSync";
 import { LiveStudentEditModal, StudentRowItem } from "./LiveStudentEditModal";
 
 interface ToastNotification {
@@ -126,6 +128,54 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
+  // Auto-sync heartbeat & real-time LiveSync channel listener
+  useEffect(() => {
+    // 1. Subscribe to BroadcastChannel for instant cross-tab updates (0ms)
+    const unsubscribeLive = subscribeToLiveSessions((incomingSession) => {
+      if (!incomingSession) return;
+      const sId = (incomingSession.examId || "").trim();
+      const sCode = (incomingSession.examCode || "").trim().toUpperCase();
+      const targetId = (exam.id || "").trim();
+      const targetCode = (exam.code || "").trim().toUpperCase();
+
+      if (
+        (targetId && sId === targetId) ||
+        (targetCode && sCode === targetCode) ||
+        !incomingSession.examCode
+      ) {
+        if (onUpdateHistory) {
+          const existing = [...history];
+          const idx = existing.findIndex((h) => h.id === incomingSession.id);
+          if (idx >= 0) {
+            existing[idx] = incomingSession;
+          } else {
+            existing.unshift(incomingSession);
+          }
+          onUpdateHistory(existing);
+        }
+      }
+    });
+
+    // 2. Initial immediate sync from cloud / server
+    handleSyncCloud();
+
+    // 3. Periodic heartbeat poll every 3 seconds
+    const interval = setInterval(() => {
+      fetchExamSessions(exam.id, exam.code)
+        .then((remoteSessions) => {
+          if (remoteSessions && remoteSessions.length > 0 && onUpdateHistory) {
+            onUpdateHistory(remoteSessions);
+          }
+        })
+        .catch(() => {});
+    }, 3000);
+
+    return () => {
+      unsubscribeLive();
+      clearInterval(interval);
+    };
+  }, [exam.id, exam.code]);
+
   // Monitor changes in history to trigger live toasts
   useEffect(() => {
     const prevHistory = previousHistoryRef.current;
@@ -178,11 +228,19 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
     const sCode = (s.examCode || "").trim().toUpperCase();
     const matchId = cleanExamId && sId === cleanExamId;
     const matchCode = cleanExamCode && sCode === cleanExamCode;
-    return matchId || matchCode;
+    return matchId || matchCode || (!cleanExamId && !cleanExamCode);
   });
 
   // Group tokens and active sessions (deduplicated by student name)
-  const uniqueExamTokens = deduplicateStudentTokens(tokens, exam.code);
+  const tokenSource =
+    tokens && tokens.length > 0
+      ? tokens
+      : exam.tokens && exam.tokens.length > 0
+      ? exam.tokens
+      : getStudentTokens();
+
+  const uniqueExamTokens = deduplicateStudentTokens(tokenSource, exam.code);
+
   const studentRows: StudentRowItem[] = uniqueExamTokens.map((tokenItem) => {
     const activeSession = examSessions.find(
       (s) =>
@@ -190,13 +248,23 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
         s.nisn === tokenItem.nisn ||
         s.studentName.toLowerCase().trim() === tokenItem.studentName.toLowerCase().trim()
     );
+
+    const effectiveStatus: "belum_mulai" | "sedang_mengerjakan" | "selesai" = activeSession
+      ? activeSession.status === "submitted"
+        ? "selesai"
+        : "sedang_mengerjakan"
+      : "belum_mulai";
+
     return {
-      tokenItem,
+      tokenItem: {
+        ...tokenItem,
+        status: effectiveStatus,
+      },
       session: activeSession || null,
     };
   });
 
-  // Also include any sessions not in pre-generated token list
+  // Also include any sessions not in pre-generated token list (e.g. dynamic/manual student inputs)
   examSessions.forEach((s) => {
     const isAlreadyListed = studentRows.some(
       (row) =>

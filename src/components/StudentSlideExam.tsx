@@ -52,6 +52,7 @@ import { StudentResultView } from "./StudentResultView";
 import { prepareStudentExamQuestions } from "../utils/shuffle";
 import { validateExamToken, normalizeToken, deduplicateStudentTokens } from "../utils/tokenValidator";
 import { getStudentTokens } from "../utils/storage";
+import { broadcastLiveSession } from "../utils/liveSync";
 import {
   playExamTimeWarningSound,
   isSoundNotificationEnabled,
@@ -89,15 +90,20 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
 }) => {
   // Available registered students roster from profile data (strictly deduplicated & isolated to current exam code)
   const availableStudents = React.useMemo(() => {
-    const list = tokens && tokens.length > 0 ? tokens : getStudentTokens();
+    let list: StudentTokenItem[] = [];
+    if (tokens && tokens.length > 0) {
+      list = tokens;
+    } else if (exam.tokens && exam.tokens.length > 0) {
+      list = exam.tokens;
+    } else {
+      list = getStudentTokens();
+    }
     return deduplicateStudentTokens(list, exam.code);
-  }, [tokens, exam.code]);
+  }, [tokens, exam.tokens, exam.code]);
 
   // Login Gate State (if no session active)
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(!!currentSession);
-  const [selectedStudentId, setSelectedStudentId] = useState<string>(() => {
-    return availableStudents.length === 0 ? "__manual__" : "";
-  });
+  const [selectedStudentId, setSelectedStudentId] = useState<string>("");
   const [isManualInput, setIsManualInput] = useState<boolean>(() => availableStudents.length === 0);
   const [loginStudentName, setLoginStudentName] = useState("");
   const [loginNisn, setLoginNisn] = useState("");
@@ -114,6 +120,18 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
       setLoginToken(initialToken || exam.sessionToken || "");
     }
   }, [exam.code, exam.sessionToken, exam.teacherProfile.gradeLevel, initialToken]);
+
+  // Automatically update isManualInput when availableStudents roster is loaded
+  useEffect(() => {
+    if (availableStudents.length > 0) {
+      if (!loginStudentName && selectedStudentId !== "__manual__") {
+        setIsManualInput(false);
+      }
+    } else {
+      setIsManualInput(true);
+      setSelectedStudentId("__manual__");
+    }
+  }, [availableStudents.length]);
 
   // Student dropdown selector handler
   const handleSelectStudent = (studentId: string) => {
@@ -175,10 +193,13 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
     if (validation.isValid && validation.matchedStudent) {
       const matched = validation.matchedStudent;
       const foundIdx = availableStudents.findIndex(
-        (st) => st.id === matched.id || st.studentName === matched.studentName
+        (st) =>
+          st.id === matched.id ||
+          st.studentName.toLowerCase().trim() === matched.studentName.toLowerCase().trim()
       );
       if (foundIdx !== -1) {
         setSelectedStudentId(availableStudents[foundIdx].id);
+        setIsManualInput(false);
         const noUrut = String(foundIdx + 1).padStart(2, "0");
         setLoginStudentName(availableStudents[foundIdx].studentName);
         setLoginNisn(noUrut);
@@ -190,6 +211,14 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
       }
     }
   };
+
+  // Auto-fill student if initial token matches student token
+  useEffect(() => {
+    const activeTok = initialToken || exam.sessionToken;
+    if (activeTok) {
+      handleTokenChange(activeTok);
+    }
+  }, [initialToken, exam.sessionToken, availableStudents]);
 
   // Active Session State
   const [session, setSession] = useState<StudentExamSession | null>(currentSession);
@@ -592,6 +621,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
     setCurrentSlideIndex(0);
     setSecondsRemaining(activeTargetExam.durationMinutes * 60);
     onSaveSession(newSession);
+    broadcastLiveSession(newSession);
   };
 
   const handleStartExamLogin = (e: React.FormEvent) => {
@@ -634,6 +664,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
 
     setSession(updatedSession);
     onSaveSession(updatedSession);
+    broadcastLiveSession(updatedSession);
   };
 
   // Text Answer Handler (for isian_singkat and uraian)
@@ -686,6 +717,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
 
     setSession(updatedSession);
     onSaveSession(updatedSession);
+    broadcastLiveSession(updatedSession);
   };
 
   // Matching Pair Answer Handler (for menjodohkan)
@@ -742,6 +774,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
 
     setSession(updatedSession);
     onSaveSession(updatedSession);
+    broadcastLiveSession(updatedSession);
   };
 
   const handleToggleFlag = (questionId: string) => {
@@ -891,6 +924,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
     setShowSummaryModal(false);
     if (!isTeacherTrial) {
       onSubmitExam(finalizedSession);
+      broadcastLiveSession(finalizedSession);
     }
   };
 

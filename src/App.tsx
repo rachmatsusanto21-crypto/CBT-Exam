@@ -56,6 +56,7 @@ import { DirectStudentShareModal } from "./components/DirectStudentShareModal";
 import { getGeminiRequestHeaders } from "./utils/storage";
 import { normalizeToken, deduplicateStudentTokens } from "./utils/tokenValidator";
 import { decodeExamFromCurrentUrl } from "./utils/examShareEncoder";
+import { broadcastLiveSession, subscribeToLiveSessions } from "./utils/liveSync";
 import {
   syncExamToFirestore,
   fetchExamFromFirestore,
@@ -380,7 +381,7 @@ export default function App() {
     }
   }, [activeExam]);
 
-  // Real-time synchronization for student sessions from Firestore & Server
+  // Real-time synchronization for student sessions from LiveSync (BroadcastChannel), Firestore & Server
   useEffect(() => {
     if (!activeExam?.id && !activeExam?.code) return;
 
@@ -406,17 +407,44 @@ export default function App() {
     // 1. Initial immediate fetch
     fetchExamSessions(currentId, currentCode).then(mergeIncomingSessions).catch(() => {});
 
-    // 2. Real-time Firestore subscription (onSnapshot)
-    const unsubscribe = subscribeToExamSessions(currentId, currentCode, mergeIncomingSessions);
+    // 2. Real-time BroadcastChannel subscription for instant same-browser cross-tab sync (0ms)
+    const unsubscribeLive = subscribeToLiveSessions((incomingSession) => {
+      if (!incomingSession) return;
+      const sId = (incomingSession.examId || "").trim();
+      const sCode = (incomingSession.examCode || "").trim().toUpperCase();
+      const matchId = currentId && sId === currentId;
+      const matchCode = currentCode && sCode === currentCode.toUpperCase();
+      if (matchId || matchCode || !incomingSession.examCode) {
+        mergeIncomingSessions([incomingSession]);
+      }
+    });
 
-    // 3. Periodic fallback poll every 5 seconds
+    // 3. Real-time Firestore subscription (onSnapshot)
+    const unsubscribeFirestore = subscribeToExamSessions(currentId, currentCode, mergeIncomingSessions);
+
+    // 4. Periodic fallback poll every 3 seconds for remote multi-device sync
     const pollInterval = setInterval(() => {
       fetchExamSessions(currentId, currentCode).then(mergeIncomingSessions).catch(() => {});
-    }, 5000);
+    }, 3000);
+
+    // 5. Cross-tab storage listener
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === "slide_exam_history_v1" && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            setHistoryState(parsed);
+          }
+        } catch {}
+      }
+    };
+    window.addEventListener("storage", handleStorageChange);
 
     return () => {
-      unsubscribe();
+      unsubscribeLive();
+      unsubscribeFirestore();
       clearInterval(pollInterval);
+      window.removeEventListener("storage", handleStorageChange);
     };
   }, [activeExam?.id, activeExam?.code]);
 
@@ -537,6 +565,7 @@ export default function App() {
   const handleSaveStudentSession = (session: StudentExamSession) => {
     setActiveSessionState(session);
     saveActiveStudentSession(session);
+    broadcastLiveSession(session);
     syncStudentSessionToFirestore(session).catch((err) =>
       console.warn("Firestore session sync error:", err)
     );
@@ -557,6 +586,7 @@ export default function App() {
   const handleSubmitStudentExam = (finalizedSession: StudentExamSession) => {
     setActiveSessionState(finalizedSession);
     saveActiveStudentSession(finalizedSession);
+    broadcastLiveSession(finalizedSession);
     syncStudentSessionToFirestore(finalizedSession, true).catch((err) =>
       console.warn("Firestore session submit sync error:", err)
     );

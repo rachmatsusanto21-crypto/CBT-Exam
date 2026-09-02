@@ -144,7 +144,7 @@ export function validateExamToken(
 
 /**
  * Deduplicates an array of student tokens by student name.
- * Strictly isolates student names by active exam code so archives from other exams/classes do not leak or multiply.
+ * Isolates student names by active exam code while providing graceful fallback so student roster is never lost.
  */
 export function deduplicateStudentTokens(
   tokenList: StudentTokenItem[],
@@ -154,16 +154,21 @@ export function deduplicateStudentTokens(
 
   const targetCode = targetExamCode ? targetExamCode.trim().toUpperCase() : null;
 
-  // 1. If targetCode is specified, filter exclusively for this exam's tokens
+  // 1. If targetCode is specified, try to filter for this exam's tokens
   let sourceList: StudentTokenItem[] = [];
   if (targetCode) {
-    sourceList = tokenList.filter(
-      (t) => t && t.examCode && t.examCode.trim().toUpperCase() === targetCode
-    );
-    // If no specific tokens match this exam code, return empty array
-    // This strictly ensures that students from other classes or exams never leak into this exam!
-    if (sourceList.length === 0) {
-      return [];
+    const specificMatches = tokenList.filter((t) => {
+      if (!t) return false;
+      const c = (t.examCode || "").trim().toUpperCase();
+      return c === targetCode || c === (t.id || "").toUpperCase();
+    });
+
+    if (specificMatches.length > 0) {
+      sourceList = specificMatches;
+    } else {
+      // If no token explicitly has this targetCode (e.g. general student roster from class preset),
+      // use the full roster list so the dropdown is populated and students can select their name!
+      sourceList = tokenList;
     }
   } else {
     sourceList = tokenList;
@@ -172,22 +177,19 @@ export function deduplicateStudentTokens(
   // 2. Map to store unique students by normalized student name (trimmed, lowercased)
   const uniqueMap = new Map<string, StudentTokenItem>();
 
-  sourceList.forEach((item) => {
+  sourceList.forEach((item, idx) => {
     if (!item || !item.studentName) return;
     const cleanName = item.studentName.trim().toLowerCase();
     if (!cleanName) return;
 
-    // Key: If targetCode is set, key by cleanName so each student name only appears once.
-    // If targetCode is NOT set (global list across all exams), key by `${cleanName}__${item.examCode?.toUpperCase() || ""}`
-    // so students with the same name in different exams don't obliterate each other in global storage.
-    const key = targetCode
-      ? cleanName
-      : `${cleanName}__${(item.examCode || "").trim().toUpperCase()}`;
+    // Key by normalized name so each student only appears once in the list
+    const key = cleanName;
 
     if (!uniqueMap.has(key)) {
       uniqueMap.set(key, {
         ...item,
-        examCode: item.examCode || (targetCode || undefined),
+        id: item.id || `tok-${idx + 1}-${cleanName.replace(/\s+/g, "")}`,
+        examCode: item.examCode || targetCode || undefined,
       });
     }
   });
