@@ -143,38 +143,55 @@ export function validateExamToken(
 }
 
 /**
- * Deduplicates an array of student tokens by student name.
- * Isolates student names by active exam code while providing graceful fallback so student roster is never lost.
+ * Deduplicates and isolates student tokens strictly by exam code and/or class name.
+ * Prevents student rosters from other classes or different exams from leaking or mixing.
  */
 export function deduplicateStudentTokens(
   tokenList: StudentTokenItem[],
-  targetExamCode?: string
+  targetExamCode?: string,
+  targetClassName?: string
 ): StudentTokenItem[] {
   if (!Array.isArray(tokenList) || tokenList.length === 0) return [];
 
   const targetCode = targetExamCode ? targetExamCode.trim().toUpperCase() : null;
+  const targetClass = targetClassName ? targetClassName.trim().toLowerCase() : null;
 
-  // 1. If targetCode is specified, try to filter for this exam's tokens
   let sourceList: StudentTokenItem[] = [];
-  if (targetCode) {
-    const specificMatches = tokenList.filter((t) => {
-      if (!t) return false;
-      const c = (t.examCode || "").trim().toUpperCase();
-      return c === targetCode || c === (t.id || "").toUpperCase();
-    });
 
-    if (specificMatches.length > 0) {
-      sourceList = specificMatches;
-    } else {
-      // If no token explicitly has this targetCode (e.g. general student roster from class preset),
-      // use the full roster list so the dropdown is populated and students can select their name!
-      sourceList = tokenList;
+  if (targetCode || targetClass) {
+    // 1. First priority: match by exact examCode
+    if (targetCode) {
+      const codeMatches = tokenList.filter((t) => {
+        if (!t) return false;
+        const c = (t.examCode || "").trim().toUpperCase();
+        return c === targetCode || (t.id && t.id.toUpperCase() === targetCode);
+      });
+      if (codeMatches.length > 0) {
+        sourceList = codeMatches;
+      }
     }
+
+    // 2. Second priority: if no exact examCode match found, try matching by class name
+    if (sourceList.length === 0 && targetClass) {
+      const classMatches = tokenList.filter((t) => {
+        if (!t) return false;
+        const cl = (t.className || "").trim().toLowerCase();
+        return cl === targetClass;
+      });
+      if (classMatches.length > 0) {
+        sourceList = classMatches;
+      }
+    }
+
+    // Strict boundary: If neither exam code nor class matched, return empty so other classes NEVER mix!
   } else {
+    // Global list (e.g. general token repository view)
     sourceList = tokenList;
   }
 
-  // 2. Map to store unique students by normalized student name (trimmed, lowercased)
+  if (sourceList.length === 0) return [];
+
+  // Deduplicate unique students
   const uniqueMap = new Map<string, StudentTokenItem>();
 
   sourceList.forEach((item, idx) => {
@@ -182,14 +199,17 @@ export function deduplicateStudentTokens(
     const cleanName = item.studentName.trim().toLowerCase();
     if (!cleanName) return;
 
-    // Key by normalized name so each student only appears once in the list
-    const key = cleanName;
+    // When global list (no targetCode), include className and examCode in key so different classes are never merged
+    const key = targetCode
+      ? cleanName
+      : `${cleanName}__${(item.className || "").trim().toLowerCase()}__${(item.examCode || "").trim().toUpperCase()}`;
 
     if (!uniqueMap.has(key)) {
       uniqueMap.set(key, {
         ...item,
         id: item.id || `tok-${idx + 1}-${cleanName.replace(/\s+/g, "")}`,
         examCode: item.examCode || targetCode || undefined,
+        className: item.className || targetClassName || undefined,
       });
     }
   });

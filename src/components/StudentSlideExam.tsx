@@ -88,18 +88,18 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
   onSwitchExam,
   requestedExamCode,
 }) => {
-  // Available registered students roster from profile data (strictly deduplicated & isolated to current exam code)
+  // Available registered students roster from profile data (strictly deduplicated & isolated to current exam code and grade level)
   const availableStudents = React.useMemo(() => {
     let list: StudentTokenItem[] = [];
-    if (tokens && tokens.length > 0) {
-      list = tokens;
-    } else if (exam.tokens && exam.tokens.length > 0) {
+    if (exam.tokens && exam.tokens.length > 0) {
       list = exam.tokens;
+    } else if (tokens && tokens.length > 0) {
+      list = tokens;
     } else {
       list = getStudentTokens();
     }
-    return deduplicateStudentTokens(list, exam.code);
-  }, [tokens, exam.tokens, exam.code]);
+    return deduplicateStudentTokens(list, exam.code, exam.teacherProfile?.gradeLevel);
+  }, [tokens, exam.tokens, exam.code, exam.teacherProfile?.gradeLevel]);
 
   // Login Gate State (if no session active)
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(!!currentSession);

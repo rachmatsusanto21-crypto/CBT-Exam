@@ -76,9 +76,16 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
   }, [currentExam.sessionToken, token]);
 
   const availableTokens = useMemo(() => {
-    const list = tokens && tokens.length > 0 ? tokens : getStudentTokens();
-    return deduplicateStudentTokens(list, currentExam.code);
-  }, [tokens, currentExam.code]);
+    let list: StudentTokenItem[] = [];
+    if (currentExam.tokens && currentExam.tokens.length > 0) {
+      list = currentExam.tokens;
+    } else if (tokens && tokens.length > 0) {
+      list = tokens;
+    } else {
+      list = getStudentTokens();
+    }
+    return deduplicateStudentTokens(list, currentExam.code, currentExam.teacherProfile?.gradeLevel);
+  }, [tokens, currentExam.tokens, currentExam.code, currentExam.teacherProfile?.gradeLevel]);
 
   // When modal is opened or exam is switched, auto-sync package to Firestore and backend server
   useEffect(() => {

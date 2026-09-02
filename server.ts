@@ -112,12 +112,79 @@ const getGeminiClient = (customKey?: string) => {
   });
 };
 
-// In-memory exam package registry for short-link resolution across devices
-const sharedExamsRegistry = new Map<string, any>();
+import fs from "fs";
+
+// Persistent disk storage directory for 2-way multi-device communication
+const DATA_DIR = path.join(process.cwd(), ".data");
+if (!fs.existsSync(DATA_DIR)) {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  } catch {}
+}
+
+const EXAMS_FILE = path.join(DATA_DIR, "exams_store.json");
+const SESSIONS_FILE = path.join(DATA_DIR, "sessions_store.json");
+
+function loadExamsFromDisk(): Map<string, any> {
+  const map = new Map<string, any>();
+  try {
+    if (fs.existsSync(EXAMS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(EXAMS_FILE, "utf-8"));
+      if (typeof data === "object" && data !== null) {
+        Object.entries(data).forEach(([k, v]) => map.set(k, v));
+      }
+    }
+  } catch {}
+  return map;
+}
+
+function saveExamsToDisk(map: Map<string, any>) {
+  try {
+    const obj: Record<string, any> = {};
+    map.forEach((v, k) => {
+      obj[k] = v;
+    });
+    fs.writeFileSync(EXAMS_FILE, JSON.stringify(obj), "utf-8");
+  } catch {}
+}
+
+function loadSessionsFromDisk(): Map<string, any> {
+  const map = new Map<string, any>();
+  try {
+    if (fs.existsSync(SESSIONS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(SESSIONS_FILE, "utf-8"));
+      if (typeof data === "object" && data !== null) {
+        Object.entries(data).forEach(([k, v]) => map.set(k, v));
+      }
+    }
+  } catch {}
+  return map;
+}
+
+function saveSessionsToDisk(map: Map<string, any>) {
+  try {
+    const obj: Record<string, any> = {};
+    map.forEach((v, k) => {
+      obj[k] = v;
+    });
+    fs.writeFileSync(SESSIONS_FILE, JSON.stringify(obj), "utf-8");
+  } catch {}
+}
+
+// Persistent exam package registry for short-link resolution across devices
+const sharedExamsRegistry = loadExamsFromDisk();
+
+// Persistent Student Sessions Registry for live monitoring & grading
+const studentSessionsRegistry = loadSessionsFromDisk();
 
 // Health check
 app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
+  res.json({
+    status: "ok",
+    examsCount: sharedExamsRegistry.size,
+    sessionsCount: studentSessionsRegistry.size,
+    timestamp: new Date().toISOString(),
+  });
 });
 
 // Save or sync shared exam package to server
@@ -129,27 +196,46 @@ app.post("/api/exams/share", (req, res) => {
     }
     const cleanCode = (exam.code || "").trim().toUpperCase();
     const cleanId = (exam.id || "").trim();
-    
-    // Ensure tokens only belong to this exam code
-    const rawTokens = Array.isArray(tokens) ? tokens : [];
-    const examTokens = rawTokens.filter(
-      (t: any) => t && t.examCode && t.examCode.trim().toUpperCase() === cleanCode
-    );
-    
-    // Store by ID and by Code
+
+    // Preserve tokens associated with this exam
+    const rawTokens = Array.isArray(tokens) ? tokens : Array.isArray(exam.tokens) ? exam.tokens : [];
+    const examTokens = rawTokens.map((t: any) => ({
+      ...t,
+      examCode: t.examCode || cleanCode,
+    }));
+
     const record = {
-      exam,
-      token,
+      exam: {
+        ...exam,
+        tokens: examTokens,
+      },
+      token: token || exam.sessionToken,
       tokens: examTokens,
       updatedAt: new Date().toISOString(),
     };
+
     if (cleanId) sharedExamsRegistry.set(cleanId, record);
     if (cleanCode) sharedExamsRegistry.set(cleanCode, record);
 
-    res.json({ success: true, examId: cleanId, code: cleanCode });
+    saveExamsToDisk(sharedExamsRegistry);
+
+    res.json({ success: true, examId: cleanId, code: cleanCode, tokenCount: examTokens.length });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || "Failed to share exam" });
   }
+});
+
+// List all shared exams
+app.get("/api/exams", (req, res) => {
+  const examsList: any[] = [];
+  const seenIds = new Set<string>();
+  sharedExamsRegistry.forEach((record) => {
+    if (record?.exam?.id && !seenIds.has(record.exam.id)) {
+      seenIds.add(record.exam.id);
+      examsList.push(record.exam);
+    }
+  });
+  res.json({ success: true, exams: examsList });
 });
 
 // Retrieve shared exam package by code or ID
@@ -165,10 +251,7 @@ app.get("/api/exams/by-code/:code", (req, res) => {
   res.json({ success: true, ...record });
 });
 
-// Student Sessions Registry (In-Memory on backend server for fast backup & live monitoring)
-const studentSessionsRegistry = new Map<string, any>();
-
-// Record or update student session
+// Record or update student session (2-way sync from student device to teacher)
 app.post("/api/sessions", (req, res) => {
   try {
     const session = req.body;
@@ -180,20 +263,28 @@ app.post("/api/sessions", (req, res) => {
       ...session,
       serverReceivedAt: new Date().toISOString(),
     });
+
+    saveSessionsToDisk(studentSessionsRegistry);
+
     res.json({ success: true, sessionId: cleanId });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || "Failed to save session" });
   }
 });
 
-// Get all sessions for a specific exam code or exam ID
+// Get all student sessions or filter by exam code / exam ID
+app.get("/api/sessions", (req, res) => {
+  const allSessions = Array.from(studentSessionsRegistry.values());
+  res.json({ success: true, sessions: allSessions });
+});
+
 app.get("/api/sessions/by-exam/:codeOrId", (req, res) => {
   const target = (req.params.codeOrId || "").trim().toUpperCase();
   const matched: any[] = [];
   studentSessionsRegistry.forEach((session) => {
     const sId = (session.examId || "").trim().toUpperCase();
     const sCode = (session.examCode || "").trim().toUpperCase();
-    if (sId === target || sCode === target || !target) {
+    if (target === "ALL" || !target || sId === target || sCode === target) {
       matched.push(session);
     }
   });
@@ -204,6 +295,7 @@ app.get("/api/sessions/by-exam/:codeOrId", (req, res) => {
 app.delete("/api/sessions/:sessionId", (req, res) => {
   const id = (req.params.sessionId || "").trim();
   studentSessionsRegistry.delete(id);
+  saveSessionsToDisk(studentSessionsRegistry);
   res.json({ success: true, message: `Session ${id} deleted` });
 });
 

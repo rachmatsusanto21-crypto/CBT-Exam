@@ -361,8 +361,12 @@ export default function App() {
 
   // Isolate tokens strictly for the active exam to prevent other classes/archives from leaking
   const activeExamTokens = useMemo(() => {
-    return deduplicateStudentTokens(tokens, activeExam.code);
-  }, [tokens, activeExam.code]);
+    return deduplicateStudentTokens(
+      tokens,
+      activeExam.code,
+      activeExam.teacherProfile?.gradeLevel
+    );
+  }, [tokens, activeExam.code, activeExam.teacherProfile?.gradeLevel]);
 
   // Active student session isolated to current active exam
   const examActiveSession = useMemo(() => {
@@ -380,6 +384,13 @@ export default function App() {
       document.title = "SlideExam CBT - Ujian Interaktif & Analisis AI";
     }
   }, [activeExam]);
+
+  // Automatically broadcast and sync active exam to server & Firestore for 2-way multi-device discovery
+  useEffect(() => {
+    if (activeExam?.id && activeExam?.code) {
+      syncExamToFirestore(activeExam, activeExamTokens).catch(() => {});
+    }
+  }, [activeExam?.id, activeExam?.code, activeExam?.updatedAt]);
 
   // Real-time synchronization for student sessions from LiveSync (BroadcastChannel), Firestore & Server
   useEffect(() => {

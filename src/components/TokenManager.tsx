@@ -94,7 +94,11 @@ export const TokenManager: React.FC<TokenManagerProps> = ({
     setTimeout(() => setFeedbackMsg(null), 3000);
   };
 
-  const examTokens = deduplicateStudentTokens(tokens, exam.code);
+  const examTokens = deduplicateStudentTokens(
+    tokens,
+    exam.code,
+    exam.teacherProfile?.gradeLevel
+  );
 
   // Extract unique classes for filter
   const uniqueClasses = Array.from(new Set(examTokens.map((t) => t.className).filter(Boolean)));
@@ -232,6 +236,14 @@ export const TokenManager: React.FC<TokenManagerProps> = ({
     );
     const combined = deduplicateStudentTokens([...otherTokens, ...newTokens]);
     onUpdateTokens(combined);
+
+    if (onUpdateExam) {
+      onUpdateExam({
+        ...exam,
+        tokens: newTokens,
+        updatedAt: new Date().toISOString(),
+      });
+    }
 
     // Auto-save draft so names are not lost
     try {

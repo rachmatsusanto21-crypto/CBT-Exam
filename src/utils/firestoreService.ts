@@ -115,10 +115,13 @@ export async function syncExamToFirestore(
     const cleanId = exam.id.trim();
     const cleanCode = (exam.code || "").trim().toUpperCase();
 
-    // Extract tokens that specifically belong to this exam code
+    // Extract tokens that specifically belong to this exam
     const rawTokens = tokens || (exam as any).tokens || [];
     const examTokens = Array.isArray(rawTokens)
-      ? rawTokens.filter((t) => t && t.examCode && t.examCode.trim().toUpperCase() === cleanCode)
+      ? rawTokens.map((t) => ({
+          ...t,
+          examCode: t.examCode || cleanCode,
+        }))
       : [];
 
     const payload = sanitizeForFirestore({

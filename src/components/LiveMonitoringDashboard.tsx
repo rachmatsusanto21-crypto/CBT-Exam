@@ -239,7 +239,11 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
       ? exam.tokens
       : getStudentTokens();
 
-  const uniqueExamTokens = deduplicateStudentTokens(tokenSource, exam.code);
+  const uniqueExamTokens = deduplicateStudentTokens(
+    tokenSource,
+    exam.code,
+    exam.teacherProfile?.gradeLevel
+  );
 
   const studentRows: StudentRowItem[] = uniqueExamTokens.map((tokenItem) => {
     const activeSession = examSessions.find(
