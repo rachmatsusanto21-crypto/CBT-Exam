@@ -251,7 +251,7 @@ export default function App() {
       }
     };
     fetchRemoteExam();
-  }, [requestedExamCode, exams]);
+  }, [requestedExamCode]);
 
   // Check Gemini API Key Status
   const checkGeminiStatus = async () => {

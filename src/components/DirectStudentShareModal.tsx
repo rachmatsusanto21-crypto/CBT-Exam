@@ -99,7 +99,7 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
         }),
       }).catch((err) => console.warn("Express backend sync error on share modal:", err));
     }
-  }, [isOpen, currentExam, currentToken, availableTokens]);
+  }, [isOpen, currentExam.id, currentExam.code, currentExam.updatedAt, currentToken]);
 
   if (!isOpen) return null;
 

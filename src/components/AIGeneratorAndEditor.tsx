@@ -44,7 +44,8 @@ import {
   Calendar,
   CalendarDays,
   Bookmark,
-  FlaskConical
+  FlaskConical,
+  Cloud
 } from "lucide-react";
 import { ExamPackage, Question, QuestionOption, QuestionType, MatchingPair, SchoolProfile } from "../types";
 import { generateQuestionsWithGemini, generateImageWithAi } from "../utils/geminiApi";
@@ -52,6 +53,7 @@ import { DirectStudentShareModal } from "./DirectStudentShareModal";
 import { QuestionImportModal } from "./QuestionImportModal";
 import { QuestionExportModal } from "./QuestionExportModal";
 import { ExamHistoryModal } from "./ExamHistoryModal";
+import { GoogleDriveExamModal } from "./GoogleDriveExamModal";
 import {
   exportQuestionsToExcel,
   exportQuestionsToWordDoc,
@@ -125,6 +127,7 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
   // Share & History Modals State
   const [showShareModal, setShowShareModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [showGoogleDriveModal, setShowGoogleDriveModal] = useState(false);
 
   // Edit Exam Code / Title & Metadata Modal State
   const [showEditCodeModal, setShowEditCodeModal] = useState(false);
@@ -863,6 +866,20 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
           >
             <Save className="w-4 h-4" />
             <span>Simpan Soal</span>
+          </button>
+
+          {/* Google Drive Exam Sync & Storage Button */}
+          <button
+            id="google-drive-exam-top-btn"
+            onClick={() => setShowGoogleDriveModal(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2.5 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 rounded-xl font-bold text-xs transition-all shadow-sm cursor-pointer"
+            title="Kelola, Simpan & Muat Naskah Ujian di Google Drive"
+          >
+            <Cloud className="w-4 h-4 text-indigo-400" />
+            <span>Google Drive</span>
+            {activeExam.gdriveSyncedAt && (
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" title="Tersimpan di Google Drive" />
+            )}
           </button>
 
           {/* Teacher Sandbox Trial Button */}
@@ -2016,6 +2033,19 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
         }}
         onClearAllExams={onClearAllExams}
         school={schoolData}
+      />
+
+      {/* Google Drive Exam Manager Modal */}
+      <GoogleDriveExamModal
+        isOpen={showGoogleDriveModal}
+        onClose={() => setShowGoogleDriveModal(false)}
+        activeExam={activeExam}
+        onUpdateExam={onUpdateExam}
+        onSelectExam={(loadedExam) => {
+          if (onSelectExamId) {
+            onSelectExamId(loadedExam.id);
+          }
+        }}
       />
     </div>
   );

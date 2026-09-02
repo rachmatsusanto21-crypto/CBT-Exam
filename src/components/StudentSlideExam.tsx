@@ -36,7 +36,8 @@ import {
   RotateCcw,
   Hash,
   IdCard,
-  ListOrdered
+  ListOrdered,
+  Cloud
 } from "lucide-react";
 import {
   ExamPackage,
@@ -94,48 +95,25 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
 
   // Login Gate State (if no session active)
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(!!currentSession);
-  const [selectedStudentId, setSelectedStudentId] = useState<string>("");
+  const [selectedStudentId, setSelectedStudentId] = useState<string>(() => {
+    return availableStudents.length === 0 ? "__manual__" : "";
+  });
   const [isManualInput, setIsManualInput] = useState<boolean>(() => availableStudents.length === 0);
   const [loginStudentName, setLoginStudentName] = useState("");
   const [loginNisn, setLoginNisn] = useState("");
-  const [loginClass, setLoginClass] = useState(exam.teacherProfile.gradeLevel || "");
-  const [loginExamCode, setLoginExamCode] = useState(exam.code);
-  const [loginToken, setLoginToken] = useState(initialToken || exam.sessionToken);
+  const [loginClass, setLoginClass] = useState(() => exam.teacherProfile.gradeLevel || "");
+  const [loginExamCode, setLoginExamCode] = useState(() => exam.code);
+  const [loginToken, setLoginToken] = useState(() => initialToken || exam.sessionToken || "");
   const [loginError, setLoginError] = useState<string | null>(null);
 
-  // Sync login fields when exam prop or available students change
+  // Sync login fields when exam code, session token, or grade level change
   useEffect(() => {
     setLoginExamCode(exam.code);
-    setLoginClass(exam.teacherProfile.gradeLevel || "");
-    
-    // If student selected has personal token, use that; otherwise use active exam session token
-    if (selectedStudentId && selectedStudentId !== "__manual__") {
-      const st = availableStudents.find((s) => s.id === selectedStudentId);
-      if (st && st.token) {
-        setLoginToken(st.token);
-      } else if (exam.sessionToken) {
-        setLoginToken(exam.sessionToken);
-      }
-    } else {
-      if (exam.sessionToken) {
-        setLoginToken(exam.sessionToken);
-      } else if (initialToken) {
-        setLoginToken(initialToken);
-      }
+    setLoginClass((prev) => (!prev ? exam.teacherProfile.gradeLevel || "" : prev));
+    if (!loginToken && (initialToken || exam.sessionToken)) {
+      setLoginToken(initialToken || exam.sessionToken || "");
     }
-
-    if (availableStudents.length === 0) {
-      setIsManualInput(true);
-      setSelectedStudentId("__manual__");
-      setLoginStudentName("");
-      setLoginNisn("");
-    } else {
-      setIsManualInput(false);
-      setSelectedStudentId("");
-      setLoginStudentName("");
-      setLoginNisn("");
-    }
-  }, [exam.code, exam.sessionToken, exam.teacherProfile.gradeLevel, initialToken, availableStudents.length]);
+  }, [exam.code, exam.sessionToken, exam.teacherProfile.gradeLevel, initialToken]);
 
   // Student dropdown selector handler
   const handleSelectStudent = (studentId: string) => {
@@ -188,10 +166,14 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
     return validateExamToken(loginToken, exam, tokens, allExams);
   }, [loginToken, exam, tokens, allExams]);
 
-  // Auto-fill student info if matching personal student token is found
-  useEffect(() => {
-    if (tokenValidation?.isValid && tokenValidation.matchedStudent) {
-      const matched = tokenValidation.matchedStudent;
+  // Handle token input change with auto-fill matching personal student token
+  const handleTokenChange = (newToken: string) => {
+    setLoginToken(newToken);
+    if (loginError) setLoginError(null);
+
+    const validation = validateExamToken(newToken, exam, tokens, allExams);
+    if (validation.isValid && validation.matchedStudent) {
+      const matched = validation.matchedStudent;
       const foundIdx = availableStudents.findIndex(
         (st) => st.id === matched.id || st.studentName === matched.studentName
       );
@@ -206,9 +188,8 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
         setLoginNisn(matched.seatNumber || matched.nisn || "01");
         setLoginClass(matched.className || exam.teacherProfile.gradeLevel || "Kelas X");
       }
-      if (loginError) setLoginError(null);
     }
-  }, [tokenValidation, availableStudents, exam.teacherProfile.gradeLevel]);
+  };
 
   // Active Session State
   const [session, setSession] = useState<StudentExamSession | null>(currentSession);
@@ -236,17 +217,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
       setCurrentSlideIndex(currentSession.currentSlideIndex || 0);
       setIsSubmitted(currentSession.status === "submitted");
     }
-  }, [currentSession, isTeacherTrial]);
-
-  // Reset session if the active exam ID changes to avoid leaking questions from another exam
-  useEffect(() => {
-    if (session && session.examId !== exam.id) {
-      setSession(null);
-      setIsLoggedIn(false);
-      setCurrentSlideIndex(0);
-      setIsSubmitted(false);
-    }
-  }, [exam.id]);
+  }, [currentSession?.id, currentSession?.status, currentSession?.currentSlideIndex, isTeacherTrial]);
 
   // Lightbox Image Zoom Modal
   const [zoomImageSrc, setZoomImageSrc] = useState<string | null>(null);
@@ -1000,6 +971,15 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
               {exam.teacherProfile.subject} • {exam.schoolProfile.schoolName}
             </p>
 
+            {exam.gdriveSyncedAt && (
+              <div className="pt-1 flex items-center justify-center">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-indigo-500/10 border border-indigo-500/30 rounded-full text-[11px] text-indigo-300 font-medium">
+                  <Cloud className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Naskah Ujian Terhubung via Google Drive</span>
+                </span>
+              </div>
+            )}
+
             {/* Warning if requested exam from short link is not found in this browser */}
             {requestedExamCode &&
               requestedExamCode.trim().toUpperCase() !== exam.code.trim().toUpperCase() &&
@@ -1207,10 +1187,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
                   type="text"
                   required
                   value={loginToken}
-                  onChange={(e) => {
-                    setLoginToken(e.target.value.toUpperCase());
-                    if (loginError) setLoginError(null);
-                  }}
+                  onChange={(e) => handleTokenChange(e.target.value.toUpperCase())}
                   placeholder="Masukkan Token Sesi / Token Siswa..."
                   className="w-full pl-10 pr-4 py-3 bg-[#1a1a1c] border border-indigo-500/40 rounded-xl text-indigo-300 font-mono font-bold tracking-widest text-base focus:border-indigo-500 focus:outline-none uppercase"
                 />

@@ -15,6 +15,7 @@ const firebaseConfig = {
 export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
 // Initialize Firestore with custom databaseId if configured
-export const db: Firestore = firebaseConfigJson.firestoreDatabaseId
-  ? getFirestore(app, firebaseConfigJson.firestoreDatabaseId)
+const customDbId = (firebaseConfigJson as Record<string, any>).firestoreDatabaseId;
+export const db: Firestore = customDbId
+  ? getFirestore(app, customDbId)
   : getFirestore(app);
