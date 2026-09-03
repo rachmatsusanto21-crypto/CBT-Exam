@@ -294,10 +294,20 @@ app.get("/api/gdrive/exam/:fileId", async (req, res) => {
   }
 
   try {
+    const driveHeaders: Record<string, string> = {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    };
+    if (req.headers.authorization) {
+      driveHeaders["Authorization"] = req.headers.authorization;
+    }
+
     // Try multiple endpoints for resilient Google Drive fetching
     const urls = [
-      `https://drive.google.com/uc?id=${encodeURIComponent(fileId)}&export=download`,
       `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`,
+      `https://drive.usercontent.google.com/download?id=${encodeURIComponent(fileId)}&export=download&confirm=t`,
+      `https://drive.google.com/uc?id=${encodeURIComponent(fileId)}&export=download&confirm=t`,
+      `https://drive.google.com/uc?id=${encodeURIComponent(fileId)}&export=download`,
+      `https://docs.google.com/uc?export=download&id=${encodeURIComponent(fileId)}`,
     ];
 
     let examData: any = null;
@@ -307,20 +317,43 @@ app.get("/api/gdrive/exam/:fileId", async (req, res) => {
       try {
         const driveRes = await fetch(url, {
           redirect: "follow",
-          headers: {
-            "User-Agent": "Mozilla/5.0 (compatible; SlideExamCBT/1.0)",
-          },
+          headers: driveHeaders,
         });
 
         if (driveRes.ok) {
           const text = await driveRes.text();
           try {
             const parsed = JSON.parse(text);
-            if (parsed && Array.isArray(parsed.questions)) {
+            if (parsed && (Array.isArray(parsed.questions) || Array.isArray(parsed.items))) {
               examData = parsed;
               break;
             }
-          } catch {}
+          } catch {
+            // Check if Google Drive returned a virus scan confirmation page with a link
+            const matchConfirm =
+              text.match(/href="(\/uc\?export=download[^"]+)"/i) ||
+              text.match(/href="(https:\/\/drive\.google\.com\/uc\?export=download[^"]+)"/i) ||
+              text.match(/action="(https:\/\/drive\.google\.com\/[^"]+)"/i);
+            if (matchConfirm && matchConfirm[1]) {
+              const confirmUrl = matchConfirm[1].startsWith("http")
+                ? matchConfirm[1]
+                : `https://drive.google.com${matchConfirm[1]}`;
+              try {
+                const confirmRes = await fetch(confirmUrl, {
+                  headers: driveHeaders,
+                  redirect: "follow",
+                });
+                if (confirmRes.ok) {
+                  const confirmText = await confirmRes.text();
+                  const confirmParsed = JSON.parse(confirmText);
+                  if (confirmParsed && Array.isArray(confirmParsed.questions)) {
+                    examData = confirmParsed;
+                    break;
+                  }
+                }
+              } catch {}
+            }
+          }
         }
       } catch (err) {
         lastError = err;

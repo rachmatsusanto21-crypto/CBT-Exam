@@ -89,6 +89,68 @@ export function parseExamInfoFromDriveFileName(fileName: string): {
 }
 
 /**
+ * Extracts Google Drive File ID from various link formats or raw ID.
+ * Handles:
+ * - https://drive.google.com/file/d/FILE_ID/view?usp=sharing
+ * - https://drive.google.com/file/d/FILE_ID/edit
+ * - https://drive.google.com/open?id=FILE_ID
+ * - https://drive.google.com/uc?id=FILE_ID&export=download
+ * - https://docs.google.com/file/d/FILE_ID/...
+ * - https://drive.google.com/uc?export=download&id=FILE_ID
+ * - https://drive.usercontent.google.com/download?id=FILE_ID
+ * - Raw alphanumeric file ID (20-70 chars)
+ * - Identifies if a folder link was mistakenly pasted
+ */
+export function extractGoogleDriveFileId(input: string): {
+  fileId: string | null;
+  isFolder: boolean;
+  error?: string;
+} {
+  if (!input) {
+    return { fileId: null, isFolder: false, error: "Link atau ID Google Drive tidak boleh kosong." };
+  }
+  const trimmed = input.trim();
+
+  // Check if user accidentally pasted a Google Drive folder link
+  if (trimmed.includes("/folders/") || trimmed.includes("folder/")) {
+    return {
+      fileId: null,
+      isFolder: true,
+      error: "Tautan yang Anda tempel adalah link FOLDER Google Drive. Silakan buka file naskah soal (.json), klik Bagikan/Dapatkan Link, lalu tempelkan link FILE tersebut.",
+    };
+  }
+
+  // 1. Match /file/d/FILE_ID
+  const matchFileD = trimmed.match(/\/file\/d\/([a-zA-Z0-9_-]{20,70})/i);
+  if (matchFileD && matchFileD[1]) {
+    return { fileId: matchFileD[1], isFolder: false };
+  }
+
+  // 2. Match [?&]id=FILE_ID
+  const matchIdParam = trimmed.match(/[?&]id=([a-zA-Z0-9_-]{20,70})/i);
+  if (matchIdParam && matchIdParam[1]) {
+    return { fileId: matchIdParam[1], isFolder: false };
+  }
+
+  // 3. Match /d/FILE_ID
+  const matchD = trimmed.match(/\/d\/([a-zA-Z0-9_-]{20,70})/i);
+  if (matchD && matchD[1]) {
+    return { fileId: matchD[1], isFolder: false };
+  }
+
+  // 4. Raw file ID (alphanumeric, underscores, hyphens)
+  if (/^[a-zA-Z0-9_-]{20,70}$/.test(trimmed)) {
+    return { fileId: trimmed, isFolder: false };
+  }
+
+  return {
+    fileId: null,
+    isFolder: false,
+    error: "Format link Google Drive tidak dikenali. Pastikan link memiliki format https://drive.google.com/file/d/... atau ID file Google Drive yang valid.",
+  };
+}
+
+/**
  * Searches for or creates the dedicated backup folder 'SlideExam_CBT' on the user's Google Drive.
  * Strictly avoids creating any other folder names.
  */
@@ -475,7 +537,13 @@ export async function loadExamFromGoogleDrive(
 
   // Tier 2: Try server-side proxy (bypasses CORS, cookie, and Google Workspace restrictions)
   try {
-    const proxyRes = await fetch(`/api/gdrive/exam/${encodeURIComponent(fileId)}`);
+    const proxyHeaders: Record<string, string> = {};
+    if (accessTokenOrNull) {
+      proxyHeaders.Authorization = `Bearer ${accessTokenOrNull}`;
+    }
+    const proxyRes = await fetch(`/api/gdrive/exam/${encodeURIComponent(fileId)}`, {
+      headers: proxyHeaders,
+    });
     if (proxyRes.ok) {
       const data = await proxyRes.json();
       if (data.success && data.exam && Array.isArray(data.exam.questions)) {
@@ -555,7 +623,24 @@ export async function loadExamFromGoogleDrive(
 }
 
 /**
+ * Loads an exam directly using a pasted Google Drive link or file ID.
+ * Parses the link, validates that it's not a folder, and downloads the exam package.
+ */
+export async function loadExamFromGoogleDriveUrlOrId(
+  urlOrId: string,
+  accessTokenOrNull?: string | null
+): Promise<ExamPackage> {
+  const extracted = extractGoogleDriveFileId(urlOrId);
+  if (extracted.error || !extracted.fileId) {
+    throw new Error(extracted.error || "Gagal mengekstrak ID file Google Drive dari tautan yang diberikan.");
+  }
+
+  return await loadExamFromGoogleDrive(accessTokenOrNull || null, extracted.fileId);
+}
+
+/**
  * Searches and automatically loads an exam from Google Drive by exam code or file name.
+ * Also intelligently recognizes if the user pasted a direct Google Drive link or file ID!
  * Fulfills requirement: "ketika siswa membuka link maka app akan otomatis mencari nama soal yang sesuai"
  */
 export async function findAndLoadExamFromDriveByCode(
@@ -564,6 +649,27 @@ export async function findAndLoadExamFromDriveByCode(
 ): Promise<ExamPackage | null> {
   const cleanQuery = (codeOrQuery || "").trim();
   if (!cleanQuery) return null;
+
+  // Tier 0: Check if cleanQuery is a Google Drive URL or direct Google Drive File ID
+  if (
+    cleanQuery.includes("drive.google.com") ||
+    cleanQuery.includes("docs.google.com") ||
+    cleanQuery.includes("/file/d/") ||
+    cleanQuery.includes("id=") ||
+    /^[a-zA-Z0-9_-]{25,60}$/.test(cleanQuery)
+  ) {
+    const extracted = extractGoogleDriveFileId(cleanQuery);
+    if (extracted.fileId) {
+      try {
+        const loadedFromLink = await loadExamFromGoogleDrive(accessTokenOrNull || null, extracted.fileId);
+        if (loadedFromLink && Array.isArray(loadedFromLink.questions)) {
+          return loadedFromLink;
+        }
+      } catch (err) {
+        console.warn("Direct link loading in code search failed:", err);
+      }
+    }
+  }
 
   // Tier 1: Check localStorage cache
   try {

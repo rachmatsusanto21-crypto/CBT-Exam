@@ -22,7 +22,8 @@ import {
   AlertTriangle,
   FileUp,
   Search,
-  ArrowLeft
+  ArrowLeft,
+  Link2
 } from "lucide-react";
 import {
   ExamPackage,
@@ -61,7 +62,7 @@ import { getGeminiRequestHeaders } from "./utils/storage";
 import { normalizeToken, deduplicateStudentTokens } from "./utils/tokenValidator";
 import { decodeExamFromCurrentUrl } from "./utils/examShareEncoder";
 import { broadcastLiveSession, subscribeToLiveSessions } from "./utils/liveSync";
-import { loadExamFromGoogleDrive, findAndLoadExamFromDriveByCode } from "./utils/googleDrive";
+import { loadExamFromGoogleDrive, findAndLoadExamFromDriveByCode, extractGoogleDriveFileId } from "./utils/googleDrive";
 import {
   syncExamToFirestore,
   fetchExamFromFirestore,
@@ -145,7 +146,19 @@ export default function App() {
   const [requestedDriveId, setRequestedDriveId] = useState<string | null>(() => {
     if (typeof window === "undefined") return null;
     const params = new URLSearchParams(window.location.search);
-    return params.get("driveId") || params.get("gdriveId") || null;
+    const directId = params.get("driveId") || params.get("gdriveId") || params.get("fileId");
+    if (directId) return directId;
+    const linkParam = params.get("driveUrl") || params.get("link") || params.get("url") || params.get("gdrive");
+    if (linkParam) {
+      const parsed = extractGoogleDriveFileId(linkParam);
+      if (parsed.fileId) return parsed.fileId;
+    }
+    const codeParam = params.get("code") || params.get("examId");
+    if (codeParam && (codeParam.includes("drive.google.com") || codeParam.includes("/file/d/") || codeParam.length >= 25)) {
+      const parsed = extractGoogleDriveFileId(codeParam);
+      if (parsed.fileId) return parsed.fileId;
+    }
+    return null;
   });
 
   const [requestedExamCode, setRequestedExamCode] = useState<string | null>(() => {
@@ -255,8 +268,20 @@ export default function App() {
   };
 
   const executeRemoteExamFetch = async (targetCode?: string | null, targetDriveId?: string | null) => {
-    const code = (targetCode ?? requestedExamCode ?? "").trim();
-    const driveId = (targetDriveId ?? requestedDriveId ?? "").trim();
+    let code = (targetCode ?? requestedExamCode ?? "").trim();
+    let driveId = (targetDriveId ?? requestedDriveId ?? "").trim();
+
+    // Check if code input is actually a Google Drive link or file ID
+    if (code && !driveId) {
+      const extracted = extractGoogleDriveFileId(code);
+      if (extracted.fileId) {
+        driveId = extracted.fileId;
+        // Keep code only if it's not a raw link
+        if (code.includes("drive.google.com") || code.includes("/file/d/")) {
+          code = "";
+        }
+      }
+    }
 
     if (!code && !driveId) {
       setIsFetchingRemoteExam(false);
@@ -878,31 +903,59 @@ export default function App() {
               </div>
             </div>
 
-            {/* Input Manual Kode Soal */}
+            {/* Input Manual Kode Soal atau Link Google Drive */}
             <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 space-y-2.5">
-              <label className="text-xs font-semibold text-slate-300 block">
-                Punya Kode Soal Lain dari Guru?
+              <label className="text-xs font-semibold text-slate-300 flex items-center justify-between">
+                <span className="flex items-center gap-1.5">
+                  <Search className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Masukkan Kode Soal atau Link Google Drive</span>
+                </span>
+                <span className="text-[10px] text-slate-400 font-mono">Kode / URL</span>
               </label>
-              <div className="flex gap-2">
+              <div className="flex flex-col sm:flex-row gap-2">
                 <input
                   type="text"
                   value={manualStudentCode}
-                  onChange={(e) => setManualStudentCode(e.target.value.toUpperCase())}
-                  placeholder="Contoh: PP-01"
-                  className="flex-1 px-3 py-2 bg-slate-800/80 border border-slate-700 rounded-xl text-xs font-mono text-white placeholder:text-slate-500 uppercase focus:outline-none focus:border-indigo-500"
+                  onChange={(e) => setManualStudentCode(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && manualStudentCode.trim()) {
+                      const trimmed = manualStudentCode.trim();
+                      const extracted = extractGoogleDriveFileId(trimmed);
+                      if (extracted.fileId) {
+                        setRequestedDriveId(extracted.fileId);
+                        executeRemoteExamFetch(null, extracted.fileId);
+                      } else {
+                        setRequestedExamCode(trimmed.toUpperCase());
+                        executeRemoteExamFetch(trimmed.toUpperCase(), null);
+                      }
+                    }
+                  }}
+                  placeholder="Contoh: PP-01 atau https://drive.google.com/file/d/..."
+                  className="flex-1 px-3.5 py-2.5 bg-slate-800/80 border border-slate-700 rounded-xl text-xs font-mono text-white placeholder:text-slate-500 focus:outline-none focus:border-indigo-500"
                 />
                 <button
+                  type="button"
                   onClick={() => {
                     if (!manualStudentCode.trim()) return;
-                    setRequestedExamCode(manualStudentCode.trim());
-                    executeRemoteExamFetch(manualStudentCode.trim(), null);
+                    const trimmed = manualStudentCode.trim();
+                    const extracted = extractGoogleDriveFileId(trimmed);
+                    if (extracted.fileId) {
+                      setRequestedDriveId(extracted.fileId);
+                      executeRemoteExamFetch(null, extracted.fileId);
+                    } else {
+                      setRequestedExamCode(trimmed.toUpperCase());
+                      executeRemoteExamFetch(trimmed.toUpperCase(), null);
+                    }
                   }}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                  className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shrink-0 shadow-md shadow-indigo-950"
                 >
                   <Search className="w-3.5 h-3.5" />
-                  <span>Cari</span>
+                  <span>Muat Soal</span>
                 </button>
               </div>
+              <p className="text-[10px] text-slate-400">
+                💡 Anda dapat mengetik kode ujian (misal: <code>PP-01</code>) atau menempel link berbagi Google Drive dari guru.
+              </p>
             </div>
 
             {/* Unggah File Naskah (.json) */}

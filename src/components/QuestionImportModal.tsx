@@ -14,7 +14,9 @@ import {
   RefreshCw,
   Copy,
   Info,
-  Check
+  Check,
+  Cloud,
+  Link2
 } from "lucide-react";
 import { Question, QuestionType } from "../types";
 import {
@@ -23,6 +25,8 @@ import {
   downloadExcelQuestionTemplate,
   downloadDocQuestionTemplate
 } from "../utils/sheetExport";
+import { extractGoogleDriveFileId, loadExamFromGoogleDrive } from "../utils/googleDrive";
+import { getCachedAccessToken } from "../utils/googleAuth";
 
 interface QuestionImportModalProps {
   isOpen: boolean;
@@ -39,7 +43,7 @@ export const QuestionImportModal: React.FC<QuestionImportModalProps> = ({
   existingQuestionsCount,
   subject = "Mata Pelajaran",
 }) => {
-  const [activeTab, setActiveTab] = useState<"excel" | "docs">("excel");
+  const [activeTab, setActiveTab] = useState<"excel" | "docs" | "gdrive">("excel");
   const [importMode, setImportMode] = useState<"append" | "replace">("append");
 
   // Excel State
@@ -55,6 +59,17 @@ export const QuestionImportModal: React.FC<QuestionImportModalProps> = ({
   const [docsError, setDocsError] = useState<string | null>(null);
   const [docsParsedQuestions, setDocsParsedQuestions] = useState<Question[] | null>(null);
   const docsFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Google Drive Link State
+  const [gdriveLinkInput, setGdriveLinkInput] = useState("");
+  const [isProcessingGDrive, setIsProcessingGDrive] = useState(false);
+  const [gdriveError, setGdriveError] = useState<string | null>(null);
+  const [gdriveParsedQuestions, setGdriveParsedQuestions] = useState<Question[] | null>(null);
+  const [gdriveExamMetadata, setGdriveExamMetadata] = useState<{
+    title?: string;
+    code?: string;
+    subject?: string;
+  } | null>(null);
 
   if (!isOpen) return null;
 
@@ -117,6 +132,49 @@ export const QuestionImportModal: React.FC<QuestionImportModalProps> = ({
     }
   };
 
+  const handleFetchQuestionsFromGDrive = async () => {
+    const rawInput = gdriveLinkInput.trim();
+    if (!rawInput) {
+      setGdriveError("Silakan tempelkan link Google Drive atau ID file naskah soal.");
+      return;
+    }
+
+    setGdriveError(null);
+    setGdriveParsedQuestions(null);
+    setGdriveExamMetadata(null);
+    setIsProcessingGDrive(true);
+
+    try {
+      const extracted = extractGoogleDriveFileId(rawInput);
+      if (extracted.error || !extracted.fileId) {
+        setGdriveError(extracted.error || "Format tautan Google Drive tidak valid.");
+        setIsProcessingGDrive(false);
+        return;
+      }
+
+      const token = getCachedAccessToken();
+      const examPackage = await loadExamFromGoogleDrive(token || null, extracted.fileId);
+
+      if (!examPackage || !Array.isArray(examPackage.questions) || examPackage.questions.length === 0) {
+        throw new Error("File naskah Google Drive berhasil diunduh namun tidak memuat butir soal valid.");
+      }
+
+      setGdriveParsedQuestions(examPackage.questions);
+      setGdriveExamMetadata({
+        title: examPackage.title,
+        code: examPackage.code,
+        subject: examPackage.teacherProfile?.subject,
+      });
+    } catch (err: any) {
+      setGdriveError(
+        err?.message ||
+          "Gagal memuat naskah soal dari Google Drive. Pastikan link file valid dan izin disetel publik ('Siapa saja yang memiliki link')."
+      );
+    } finally {
+      setIsProcessingGDrive(false);
+    }
+  };
+
   const sampleTemplateText = `1. Perhatikan pernyataan berikut!
 Perangkat keras komputer yang berfungsi sebagai otak pemroses data utama adalah...
 A. RAM
@@ -138,7 +196,12 @@ Pembahasan: LAN mencakup gedung, MAN mencakup wilayah metropolitan, dan WAN menc
 Kunci: HTTPS, Hypertext Transfer Protocol Secure
 Pembahasan: HTTPS menggunakan enkripsi TLS/SSL.`;
 
-  const activeQuestions = activeTab === "excel" ? excelParsedQuestions : docsParsedQuestions;
+  const activeQuestions =
+    activeTab === "excel"
+      ? excelParsedQuestions
+      : activeTab === "docs"
+      ? docsParsedQuestions
+      : gdriveParsedQuestions;
 
   const handleExecuteImport = () => {
     if (!activeQuestions || activeQuestions.length === 0) return;
@@ -200,6 +263,17 @@ Pembahasan: HTTPS menggunakan enkripsi TLS/SSL.`;
               <FileText className="w-4 h-4 text-indigo-400" />
               <span>Dari Naskah Word / Google Docs (Teks Format)</span>
             </button>
+            <button
+              onClick={() => setActiveTab("gdrive")}
+              className={`flex items-center gap-2 px-4 py-2.5 rounded-t-xl text-xs font-bold transition-all cursor-pointer ${
+                activeTab === "gdrive"
+                  ? "bg-[#121214] text-cyan-400 border-t-2 border-cyan-500 shadow-sm"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/40"
+              }`}
+            >
+              <Cloud className="w-4 h-4 text-cyan-400" />
+              <span>Link Google Drive (.json)</span>
+            </button>
           </div>
 
           {/* Quick Template Download */}
@@ -213,7 +287,7 @@ Pembahasan: HTTPS menggunakan enkripsi TLS/SSL.`;
                 <Download className="w-3.5 h-3.5" />
                 <span>Unduh Template Excel (.xlsx)</span>
               </button>
-            ) : (
+            ) : activeTab === "docs" ? (
               <button
                 onClick={downloadDocQuestionTemplate}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 rounded-xl text-xs font-semibold transition-all cursor-pointer"
@@ -222,7 +296,7 @@ Pembahasan: HTTPS menggunakan enkripsi TLS/SSL.`;
                 <Download className="w-3.5 h-3.5" />
                 <span>Unduh Format Word (.doc)</span>
               </button>
-            )}
+            ) : null}
           </div>
         </div>
 
@@ -385,6 +459,109 @@ Kunci: Pasangan"
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* TAB 3: GDRIVE LINK INPUT */}
+          {activeTab === "gdrive" && (
+            <div className="space-y-4 animate-in fade-in">
+              <div className="p-5 bg-[#161618] border border-cyan-500/30 rounded-2xl space-y-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 rounded-xl">
+                    <Link2 className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                      <span>Tempel Link File Soal dari Google Drive</span>
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 font-bold border border-cyan-500/20">
+                        Format .json
+                      </span>
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      Ambil butir-butir soal langsung dari file naskah Google Drive untuk dimasukkan ke lembar kerja editor ini.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
+                  <div className="relative flex-1">
+                    <input
+                      type="text"
+                      value={gdriveLinkInput}
+                      onChange={(e) => {
+                        setGdriveLinkInput(e.target.value);
+                        if (gdriveError) setGdriveError(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          handleFetchQuestionsFromGDrive();
+                        }
+                      }}
+                      placeholder="https://drive.google.com/file/d/1A2b3c4d5e.../view?usp=sharing atau ID file"
+                      className="w-full px-3.5 py-2.5 bg-black/40 border border-slate-700 focus:border-cyan-500 rounded-xl text-xs text-white placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-cyan-500/50 font-mono transition-all pr-8"
+                    />
+                    {gdriveLinkInput && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setGdriveLinkInput("");
+                          setGdriveError(null);
+                        }}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-1 rounded transition-colors"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleFetchQuestionsFromGDrive}
+                    disabled={isProcessingGDrive || !gdriveLinkInput.trim()}
+                    className="px-5 py-2.5 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-md shadow-cyan-950 cursor-pointer shrink-0"
+                  >
+                    {isProcessingGDrive ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Mengunduh...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Cloud className="w-4 h-4" />
+                        <span>Ambil Soal dari Drive</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {gdriveError && (
+                  <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-300 text-xs flex items-start gap-2 animate-in fade-in">
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>{gdriveError}</span>
+                  </div>
+                )}
+
+                {gdriveExamMetadata && (
+                  <div className="p-3 bg-cyan-950/20 border border-cyan-500/30 rounded-xl flex items-center justify-between flex-wrap gap-2 text-xs">
+                    <div>
+                      <span className="text-slate-400">Naskah Terdeteksi: </span>
+                      <strong className="text-white">{gdriveExamMetadata.title}</strong>
+                      {gdriveExamMetadata.code && (
+                        <span className="ml-2 font-mono text-[10px] px-2 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-bold">
+                          {gdriveExamMetadata.code}
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-emerald-400 font-semibold">
+                      ✓ {gdriveParsedQuestions?.length || 0} butir soal siap diimpor
+                    </span>
+                  </div>
+                )}
+
+                <div className="text-[11px] text-slate-400 pt-1">
+                  💡 <strong>Tips:</strong> Buka file di Google Drive &rarr; klik <strong>Bagikan</strong> &rarr; pastikan setelan akses <strong>"Siapa saja yang memiliki link"</strong> &rarr; Salin Link lalu tempel di sini.
+                </div>
+              </div>
             </div>
           )}
 

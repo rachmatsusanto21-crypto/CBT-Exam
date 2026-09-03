@@ -19,7 +19,8 @@ import {
   Copy,
   LogOut,
   User as UserIcon,
-  HardDrive
+  HardDrive,
+  Link2
 } from "lucide-react";
 import { ExamPackage, StudentTokenItem } from "../types";
 import {
@@ -29,6 +30,7 @@ import {
   loadExamFromGoogleDrive,
   deleteExamFromGoogleDrive,
   getOrCreateExamsSubfolder,
+  extractGoogleDriveFileId,
 } from "../utils/googleDrive";
 import {
   googleSignIn,
@@ -80,6 +82,11 @@ export const GoogleDriveExamModal: React.FC<GoogleDriveExamModalProps> = ({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [autoSync, setAutoSync] = useState<boolean>(() => isDriveAutoSyncEnabled());
   const [driveSyncState, setDriveSyncState] = useState<DriveSyncState>({ status: "idle", lastSyncedAt: null });
+
+  // Paste Google Drive Link states
+  const [driveLinkInput, setDriveLinkInput] = useState("");
+  const [isLoadingFromLink, setIsLoadingFromLink] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
 
   // Sync listener
   useEffect(() => {
@@ -284,6 +291,97 @@ export const GoogleDriveExamModal: React.FC<GoogleDriveExamModalProps> = ({
     }
   };
 
+  // Load Exam directly from pasted Google Drive link or file ID
+  const handleLoadFromLink = async () => {
+    const rawInput = driveLinkInput.trim();
+    if (!rawInput) {
+      setLinkError("Silakan masukkan tautan (link) Google Drive atau ID file naskah soal.");
+      return;
+    }
+
+    setLinkError(null);
+    setIsLoadingFromLink(true);
+    setStatusMsg(null);
+
+    try {
+      const extracted = extractGoogleDriveFileId(rawInput);
+      if (extracted.error || !extracted.fileId) {
+        setLinkError(extracted.error || "Format tautan Google Drive tidak valid.");
+        setIsLoadingFromLink(false);
+        return;
+      }
+
+      // Load exam using resilient multi-tier loader
+      const loadedExam = await loadExamFromGoogleDrive(driveToken || null, extracted.fileId);
+      if (!loadedExam || !Array.isArray(loadedExam.questions) || loadedExam.questions.length === 0) {
+        throw new Error("File naskah soal berhasil diunduh namun tidak memuat butir soal yang valid.");
+      }
+
+      const updatedExam: ExamPackage = {
+        ...loadedExam,
+        gdriveFileId: extracted.fileId,
+        gdriveSyncedAt: new Date().toISOString(),
+      };
+
+      // Persist into local storage packages
+      const allExams = getExamPackages();
+      const existingIdx = allExams.findIndex(
+        (e) =>
+          e.id === updatedExam.id ||
+          (updatedExam.code && e.code === updatedExam.code) ||
+          e.gdriveFileId === extracted.fileId
+      );
+
+      if (existingIdx >= 0) {
+        allExams[existingIdx] = updatedExam;
+      } else {
+        allExams.unshift(updatedExam);
+      }
+      saveExamPackages(allExams);
+
+      // Notify parent & apply
+      onUpdateExam(updatedExam);
+      if (onSelectExam) {
+        onSelectExam(updatedExam);
+      }
+
+      // Share to server registry so students can find it immediately
+      try {
+        await fetch("/api/exams/share", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            exam: updatedExam,
+            token: driveToken || null,
+          }),
+        });
+      } catch {}
+
+      // Cache locally
+      try {
+        localStorage.setItem(`gdrive_cache_${extracted.fileId}`, JSON.stringify(updatedExam));
+        if (updatedExam.code) {
+          localStorage.setItem(`gdrive_code_${updatedExam.code.toUpperCase()}`, JSON.stringify(updatedExam));
+        }
+      } catch {}
+
+      setStatusMsg({
+        type: "success",
+        text: `Berhasil memuat naskah soal "${updatedExam.title}" (${updatedExam.questions.length} butir soal, Kode: ${updatedExam.code || "-"}) dari Google Drive!`,
+      });
+      setDriveLinkInput("");
+    } catch (err: any) {
+      const errMsg = err?.message || "Gagal memuat naskah soal dari tautan Google Drive tersebut. Pastikan izin file disetel publik ('Siapa saja yang memiliki link').";
+      setLinkError(errMsg);
+      setStatusMsg({
+        type: "error",
+        text: errMsg,
+      });
+    } finally {
+      setIsLoadingFromLink(false);
+    }
+  };
+
   const handleCopyLink = (item: GoogleDriveExamItem) => {
     const link = item.webViewLink || `https://drive.google.com/file/d/${item.id}/view`;
     navigator.clipboard.writeText(link);
@@ -414,6 +512,92 @@ export const GoogleDriveExamModal: React.FC<GoogleDriveExamModalProps> = ({
               <div className="flex-1 text-xs leading-relaxed font-medium">{statusMsg.text}</div>
             </div>
           )}
+
+          {/* Card: Tempel Link Naskah Soal dari Google Drive */}
+          <div className="p-5 bg-gradient-to-br from-[#1b1a29] via-[#161622] to-[#121218] border border-indigo-500/40 rounded-2xl shadow-lg space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shrink-0">
+                  <Link2 className="w-4 h-4 text-indigo-400" />
+                </div>
+                <div>
+                  <div className="font-bold text-white text-sm flex items-center gap-2">
+                    <span>Tempel Link Naskah Soal dari Google Drive</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-bold border border-indigo-500/30">
+                      Akses Cepat
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Jika kode soal belum terindeks otomatis, tempelkan link berbagi (share link) file naskah .json dari Google Drive di sini.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
+              <div className="relative flex-1">
+                <input
+                  type="text"
+                  value={driveLinkInput}
+                  onChange={(e) => {
+                    setDriveLinkInput(e.target.value);
+                    if (linkError) setLinkError(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      handleLoadFromLink();
+                    }
+                  }}
+                  placeholder="https://drive.google.com/file/d/1A2b3c4d5e.../view?usp=sharing atau ID file"
+                  className="w-full px-3.5 py-2.5 bg-black/40 border border-slate-700/80 focus:border-indigo-500 rounded-xl text-xs text-white placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500/50 font-mono transition-all pr-8"
+                />
+                {driveLinkInput && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDriveLinkInput("");
+                      setLinkError(null);
+                    }}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-1 rounded transition-colors"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={handleLoadFromLink}
+                disabled={isLoadingFromLink || !driveLinkInput.trim()}
+                className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-md shadow-indigo-950 cursor-pointer shrink-0"
+              >
+                {isLoadingFromLink ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Memuat Soal...</span>
+                  </>
+                ) : (
+                  <>
+                    <CloudDownload className="w-4 h-4" />
+                    <span>Muat Naskah Soal</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {linkError && (
+              <div className="flex items-center gap-2 text-xs text-rose-400 bg-rose-950/40 border border-rose-500/30 px-3 py-2 rounded-xl animate-in fade-in">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                <span>{linkError}</span>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between text-[11px] text-slate-400 pt-0.5">
+              <span>
+                💡 <strong>Petunjuk:</strong> Buka file naskah di Google Drive &rarr; klik <strong>Bagikan</strong> &rarr; pastikan setelan akses <strong>"Siapa saja yang memiliki link"</strong> &rarr; Salin Link lalu tempel di sini.
+              </span>
+            </div>
+          </div>
 
           {/* Account Connection Card */}
           <div className="p-4 bg-[#18181c] border border-slate-800 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
