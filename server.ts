@@ -277,9 +277,20 @@ app.get("/api/gdrive/exam/:fileId", async (req, res) => {
   }
 
   // Check if we already have it in memory/disk
-  const cached = gdriveExamsRegistry.get(`ID_${fileId}`);
+  const cached = gdriveExamsRegistry.get(`ID_${fileId}`) || gdriveExamsRegistry.get(fileId);
   if (cached?.exam && Array.isArray(cached.exam.questions)) {
     return res.json({ success: true, exam: cached.exam, source: "cache" });
+  }
+
+  // Also check if any exam in sharedExamsRegistry matches this fileId
+  let matchedFromShare: any = null;
+  sharedExamsRegistry.forEach((val) => {
+    if (val?.exam?.gdriveFileId === fileId || val?.gdriveFileId === fileId || val?.exam?.id === fileId) {
+      matchedFromShare = val.exam;
+    }
+  });
+  if (matchedFromShare && Array.isArray(matchedFromShare.questions)) {
+    return res.json({ success: true, exam: matchedFromShare, source: "sharedRegistry" });
   }
 
   try {

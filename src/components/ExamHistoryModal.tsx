@@ -41,6 +41,7 @@ import { saveExamToGoogleDrive, formatExamDriveFileName } from "../utils/googleD
 import { getCachedAccessToken, googleSignIn } from "../utils/googleAuth";
 import { generateDriveStudentUrl } from "../utils/examShareEncoder";
 import { saveExamPackages } from "../utils/storage";
+import { syncExamToFirestore } from "../utils/firestoreService";
 
 interface ExamHistoryModalProps {
   isOpen: boolean;
@@ -119,6 +120,11 @@ export const ExamHistoryModal: React.FC<ExamHistoryModalProps> = ({
       // Update storage
       const updatedAll = exams.map((e) => (e.id === updatedExam.id ? updatedExam : e));
       saveExamPackages(updatedAll);
+
+      // Explicitly dual-sync to Firestore for reliable multi-device student access
+      try {
+        await syncExamToFirestore(updatedExam, updatedExam.tokens);
+      } catch {}
 
       showFeedback(`✓ Naskah "${examItem.code}" tersimpan di Drive (Folder Backup_Data_Aplikasi) dengan nama: ${res.fileName}`);
     } catch (err: any) {

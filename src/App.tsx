@@ -19,7 +19,10 @@ import {
   Share2,
   ExternalLink,
   RefreshCw,
-  AlertTriangle
+  AlertTriangle,
+  FileUp,
+  Search,
+  ArrowLeft
 } from "lucide-react";
 import {
   ExamPackage,
@@ -220,6 +223,121 @@ export default function App() {
     );
   });
   const [remoteFetchError, setRemoteFetchError] = useState<string | null>(null);
+  const [manualStudentCode, setManualStudentCode] = useState<string>("");
+
+  const applyLoadedRemoteExam = (loadedExam: ExamPackage, token?: string, tokensList?: StudentTokenItem[]) => {
+    setExamsState((prev) => {
+      const idx = prev.findIndex(
+        (e) => e.id === loadedExam.id || e.code.toUpperCase() === loadedExam.code.toUpperCase()
+      );
+      let updated: ExamPackage[];
+      if (idx >= 0) {
+        updated = [...prev];
+        updated[idx] = loadedExam;
+      } else {
+        updated = [loadedExam, ...prev];
+      }
+      saveExamPackages(updated);
+      return updated;
+    });
+    setActiveExamIdState(loadedExam.id);
+    saveActiveExamId(loadedExam.id);
+    if (token) setUrlToken(token);
+    if (tokensList && tokensList.length > 0) {
+      setTokensState((prev) => {
+        const merged = deduplicateStudentTokens([...tokensList, ...prev]);
+        saveStudentTokens(merged);
+        return merged;
+      });
+    }
+    setIsFetchingRemoteExam(false);
+    setRemoteFetchError(null);
+  };
+
+  const executeRemoteExamFetch = async (targetCode?: string | null, targetDriveId?: string | null) => {
+    const code = (targetCode ?? requestedExamCode ?? "").trim();
+    const driveId = (targetDriveId ?? requestedDriveId ?? "").trim();
+
+    if (!code && !driveId) {
+      setIsFetchingRemoteExam(false);
+      return;
+    }
+
+    setIsFetchingRemoteExam(true);
+    setRemoteFetchError(null);
+
+    try {
+      // 1. Direct check in current state or localStorage
+      const allLocal = getExamPackages();
+      const localMatch = allLocal.find((e) =>
+        (code && (e.id === code || e.code.toUpperCase() === code.toUpperCase())) ||
+        (driveId && e.gdriveFileId === driveId)
+      );
+      if (localMatch && Array.isArray(localMatch.questions) && localMatch.questions.length > 0) {
+        applyLoadedRemoteExam(localMatch, localMatch.sessionToken);
+        return;
+      }
+
+      // 2. If driveId provided, load via multi-tier Google Drive loader
+      if (driveId) {
+        try {
+          const driveExam = await loadExamFromGoogleDrive(null, driveId);
+          if (driveExam && Array.isArray(driveExam.questions) && driveExam.questions.length > 0) {
+            applyLoadedRemoteExam(driveExam, driveExam.sessionToken);
+            return;
+          }
+        } catch (driveErr) {
+          console.warn("Direct Drive ID load attempt:", driveErr);
+        }
+      }
+
+      // 3. Query Firestore by exam code
+      if (code) {
+        const firestoreResult = await fetchExamFromFirestore(code);
+        if (firestoreResult.exam && Array.isArray(firestoreResult.exam.questions) && firestoreResult.exam.questions.length > 0) {
+          applyLoadedRemoteExam(firestoreResult.exam, firestoreResult.token, firestoreResult.tokens);
+          return;
+        }
+      }
+
+      // 4. Query Express backend registry
+      if (code) {
+        let res = await fetch(`/api/exams/by-code/${encodeURIComponent(code)}`);
+        if (!res.ok) {
+          res = await fetch(`/api/exams/share/${encodeURIComponent(code)}`);
+        }
+        if (!res.ok) {
+          res = await fetch(`/api/exams/${encodeURIComponent(code)}`);
+        }
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.exam && Array.isArray(data.exam.questions) && data.exam.questions.length > 0) {
+            applyLoadedRemoteExam(data.exam, data.token, data.tokens);
+            return;
+          }
+        }
+      }
+
+      // 5. Search Google Drive by Code / Filename (Backup_Data_Aplikasi)
+      if (code) {
+        const driveResult = await findAndLoadExamFromDriveByCode(code);
+        if (driveResult && Array.isArray(driveResult.questions) && driveResult.questions.length > 0) {
+          applyLoadedRemoteExam(driveResult, driveResult.sessionToken);
+          return;
+        }
+      }
+
+      setRemoteFetchError(
+        `Naskah soal dengan kode "${code || driveId}" tidak ditemukan di server atau Google Drive. Silakan periksa kembali kode soal atau minta guru membagikan file/link naskah.`
+      );
+    } catch (err: any) {
+      console.warn("Could not fetch remote exam:", err);
+      setRemoteFetchError("Gagal menghubungi server ujian. Pastikan perangkat Anda terhubung ke internet.");
+    } finally {
+      setIsFetchingRemoteExam(false);
+    }
+  };
 
   // If URL specified an exam code/ID or drive ID, attempt to fetch from Google Drive, Firestore, or Express registry
   useEffect(() => {
@@ -242,102 +360,34 @@ export default function App() {
       return;
     }
 
-    const fetchRemoteExam = async () => {
-      setIsFetchingRemoteExam(true);
-      setRemoteFetchError(null);
+    executeRemoteExamFetch(requestedExamCode, requestedDriveId);
+  }, [requestedExamCode, requestedDriveId]);
 
-      const applyLoadedExam = (loadedExam: ExamPackage, token?: string, tokensList?: StudentTokenItem[]) => {
-        setExamsState((prev) => {
-          const idx = prev.findIndex(
-            (e) => e.id === loadedExam.id || e.code.toUpperCase() === loadedExam.code.toUpperCase()
-          );
-          let updated: ExamPackage[];
-          if (idx >= 0) {
-            updated = [...prev];
-            updated[idx] = loadedExam;
-          } else {
-            updated = [loadedExam, ...prev];
-          }
-          saveExamPackages(updated);
-          return updated;
-        });
-        setActiveExamIdState(loadedExam.id);
-        saveActiveExamId(loadedExam.id);
-        if (token) setUrlToken(token);
-        if (tokensList && tokensList.length > 0) {
-          setTokensState((prev) => {
-            const merged = deduplicateStudentTokens([...tokensList, ...prev]);
-            saveStudentTokens(merged);
-            return merged;
-          });
-        }
-        setIsFetchingRemoteExam(false);
-      };
-
+  const handleStudentUploadExamJson = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
       try {
-        // 1. If driveId is provided in URL, prioritize Google Drive proxy loading
-        if (requestedDriveId) {
-          try {
-            const driveExam = await loadExamFromGoogleDrive(null, requestedDriveId);
-            if (driveExam && Array.isArray(driveExam.questions) && driveExam.questions.length > 0) {
-              applyLoadedExam(driveExam, driveExam.sessionToken);
-              return;
-            }
-          } catch (driveErr) {
-            console.warn("Direct Drive ID load attempt:", driveErr);
-          }
+        const text = e.target?.result as string;
+        const parsed = JSON.parse(text);
+        if (parsed && Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+          const validatedExam: ExamPackage = {
+            ...parsed,
+            id: parsed.id || `exam-${Date.now()}`,
+            code: parsed.code || "SOAL-CBT",
+            title: parsed.title || "Naskah Soal CBT",
+            updatedAt: new Date().toISOString(),
+          };
+          applyLoadedRemoteExam(validatedExam, validatedExam.sessionToken, parsed.tokens);
+          setRequestedExamCode(validatedExam.code);
+        } else {
+          setRemoteFetchError("File JSON yang dipilih bukan format naskah soal CBT yang valid.");
         }
-
-        // 2. Try Firestore First if exam code exists
-        if (requestedExamCode) {
-          const firestoreResult = await fetchExamFromFirestore(requestedExamCode);
-          if (firestoreResult.exam) {
-            applyLoadedExam(firestoreResult.exam, firestoreResult.token, firestoreResult.tokens);
-            return;
-          }
-        }
-
-        // 3. Fallback to Express backend share registry (which also queries gdriveExamsRegistry)
-        if (requestedExamCode) {
-          let res = await fetch(`/api/exams/by-code/${encodeURIComponent(requestedExamCode)}`);
-          if (!res.ok) {
-            res = await fetch(`/api/exams/share/${encodeURIComponent(requestedExamCode)}`);
-          }
-          if (!res.ok) {
-            res = await fetch(`/api/exams/${encodeURIComponent(requestedExamCode)}`);
-          }
-
-          if (res.ok) {
-            const data = await res.json();
-            if (data.success && data.exam) {
-              applyLoadedExam(data.exam, data.token, data.tokens);
-              return;
-            }
-          }
-        }
-
-        // 4. Fallback: Search Google Drive by Code / Filename (auto-lookup from Drive Backup_Data_Aplikasi)
-        if (requestedExamCode) {
-          const driveResult = await findAndLoadExamFromDriveByCode(requestedExamCode);
-          if (driveResult && Array.isArray(driveResult.questions) && driveResult.questions.length > 0) {
-            applyLoadedExam(driveResult, driveResult.sessionToken);
-            return;
-          }
-        }
-
-        setRemoteFetchError(
-          `Naskah soal dengan kode "${requestedExamCode || requestedDriveId}" tidak ditemukan di server atau Google Drive. Silakan periksa kembali kode atau minta guru membagikan link soal.`
-        );
-      } catch (err: any) {
-        console.warn("Could not fetch remote exam:", err);
-        setRemoteFetchError("Gagal menghubungi server ujian. Pastikan perangkat Anda terhubung ke internet.");
-      } finally {
-        setIsFetchingRemoteExam(false);
+      } catch {
+        setRemoteFetchError("Gagal membaca file JSON naskah soal. Pastikan file tidak rusak.");
       }
     };
-
-    fetchRemoteExam();
-  }, [requestedExamCode, requestedDriveId]);
+    reader.readAsText(file);
+  };
 
   // Check Gemini API Key Status
   const checkGeminiStatus = async () => {
@@ -783,8 +833,9 @@ export default function App() {
           (requestedExamCode && (e.id === requestedExamCode || e.code.toUpperCase() === requestedExamCode.toUpperCase())) ||
           (requestedDriveId && e.gdriveFileId === requestedDriveId)
         )
-      : activeExam;
+      : (exams.length > 0 && exams[0].id !== "exam-demo-01" ? exams[0] : null);
 
+    // 1. Loading State
     if (isFetchingRemoteExam || ((requestedExamCode || requestedDriveId) && !targetExam && !remoteFetchError)) {
       return (
         <div className="min-h-screen bg-[#09090b] text-slate-100 flex flex-col items-center justify-center p-4">
@@ -810,54 +861,91 @@ export default function App() {
       );
     }
 
-    if (remoteFetchError && !targetExam) {
+    // 2. Exam Not Found State: Show clear student recovery card (NEVER leak demo preview questions!)
+    if (!targetExam) {
       return (
         <div className="min-h-screen bg-[#09090b] text-slate-100 flex flex-col items-center justify-center p-4">
-          <div className="bg-[#121214] border border-red-500/30 rounded-3xl p-8 max-w-md w-full text-center space-y-6 shadow-2xl">
-            <div className="w-16 h-16 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center text-red-400 mx-auto">
-              <AlertTriangle className="w-8 h-8" />
+          <div className="bg-[#121214] border border-amber-500/30 rounded-3xl p-6 sm:p-8 max-w-lg w-full space-y-6 shadow-2xl">
+            <div className="flex items-center gap-3 border-b border-slate-800 pb-4">
+              <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 shrink-0">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-white">Naskah Soal Belum Ditemukan</h2>
+                <p className="text-xs text-slate-400">
+                  {remoteFetchError || `Naskah soal "${requestedExamCode || requestedDriveId || "Ujian"}" belum tersedia di server atau Google Drive.`}
+                </p>
+              </div>
             </div>
-            <div className="space-y-2">
-              <h2 className="text-lg font-bold text-white">Soal Ujian Belum Ditemukan</h2>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                {remoteFetchError}
-              </p>
-              <p className="text-[11px] text-cyan-400/90 leading-relaxed pt-1">
-                Pastikan guru telah mengunggah naskah ke Google Drive (subfolder <strong>Backup_Data_Aplikasi</strong>) dengan format nama <strong>kelas_mata pelajaran_kode soal.json</strong>.
+
+            {/* Input Manual Kode Soal */}
+            <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 space-y-2.5">
+              <label className="text-xs font-semibold text-slate-300 block">
+                Punya Kode Soal Lain dari Guru?
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={manualStudentCode}
+                  onChange={(e) => setManualStudentCode(e.target.value.toUpperCase())}
+                  placeholder="Contoh: PP-01"
+                  className="flex-1 px-3 py-2 bg-slate-800/80 border border-slate-700 rounded-xl text-xs font-mono text-white placeholder:text-slate-500 uppercase focus:outline-none focus:border-indigo-500"
+                />
+                <button
+                  onClick={() => {
+                    if (!manualStudentCode.trim()) return;
+                    setRequestedExamCode(manualStudentCode.trim());
+                    executeRemoteExamFetch(manualStudentCode.trim(), null);
+                  }}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Search className="w-3.5 h-3.5" />
+                  <span>Cari</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Unggah File Naskah (.json) */}
+            <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-xs font-bold text-slate-200">Buka File Naskah (.json) Langsung</h4>
+                  <p className="text-[11px] text-slate-400">Jika guru mengirimkan file soal via WhatsApp / Flashdisk</p>
+                </div>
+              </div>
+              <label className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 border border-dashed border-slate-600 rounded-xl text-xs font-semibold text-slate-300 flex items-center justify-center gap-2 cursor-pointer transition-all">
+                <FileUp className="w-4 h-4 text-cyan-400" />
+                <span>Pilih File Naskah (.json) dari Perangkat</span>
+                <input
+                  type="file"
+                  accept=".json"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handleStudentUploadExamJson(file);
+                  }}
+                />
+              </label>
+            </div>
+
+            {/* Info untuk Guru */}
+            <div className="p-3 rounded-xl bg-indigo-950/40 border border-indigo-500/20 text-[11px] text-slate-400 space-y-1">
+              <strong className="text-indigo-300 block">💡 Petunjuk untuk Guru:</strong>
+              <p>
+                Agar siswa tidak terhambat izin Google Drive akun belajar.id, guru disarankan membagikan <strong>"Link Paket Lengkap (Direct Link)"</strong> dari menu <strong>Bagikan Ujian</strong>. Link tersebut memuat seluruh data soal secara langsung tanpa membutuhkan akses Google Drive siswa.
               </p>
             </div>
-            <div className="flex flex-col gap-2 pt-2">
+
+            {/* Action Buttons */}
+            <div className="flex flex-col gap-2 pt-1">
               <button
                 onClick={() => {
-                  setRemoteFetchError(null);
-                  setIsFetchingRemoteExam(true);
-                  const searchCode = requestedExamCode || "";
-                  findAndLoadExamFromDriveByCode(searchCode)
-                    .then((foundDrive) => {
-                      if (foundDrive) {
-                        setExamsState((prev) => [foundDrive, ...prev.filter((x) => x.id !== foundDrive.id)]);
-                        setActiveExamIdState(foundDrive.id);
-                        saveActiveExamId(foundDrive.id);
-                        saveExamPackages([foundDrive, ...exams.filter((x) => x.id !== foundDrive.id)]);
-                        setIsFetchingRemoteExam(false);
-                        return;
-                      }
-                      return fetchExamFromFirestore(searchCode);
-                    })
-                    .then((res: any) => {
-                      if (res?.exam) {
-                        setExamsState((prev) => [res.exam!, ...prev.filter((x) => x.id !== res.exam.id)]);
-                        setActiveExamIdState(res.exam.id);
-                        saveActiveExamId(res.exam.id);
-                      }
-                      setIsFetchingRemoteExam(false);
-                    })
-                    .catch(() => setIsFetchingRemoteExam(false));
+                  executeRemoteExamFetch(requestedExamCode, requestedDriveId);
                 }}
-                className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold cursor-pointer transition-all flex items-center justify-center gap-2"
+                className="w-full py-2.5 bg-indigo-600/80 hover:bg-indigo-600 text-white rounded-xl text-xs font-bold cursor-pointer transition-all flex items-center justify-center gap-2"
               >
-                <RefreshCw className="w-4 h-4" />
-                <span>Cari Ulang di Google Drive & Server</span>
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Coba Cari Ulang di Google Drive & Server</span>
               </button>
               <button
                 onClick={() => {
@@ -868,9 +956,10 @@ export default function App() {
                   setRequestedExamCode(null);
                   setRequestedDriveId(null);
                 }}
-                className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer transition-all"
+                className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 rounded-xl text-xs font-medium cursor-pointer transition-all flex items-center justify-center gap-1.5"
               >
-                Buka Halaman Utama
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span>Beralih ke Halaman Utama / Mode Guru</span>
               </button>
             </div>
           </div>
@@ -878,15 +967,26 @@ export default function App() {
       );
     }
 
-    const examToRender = targetExam || activeExam;
+    // 3. Target Exam Found: Render isolated StudentSlideExam
+    const examToRender = targetExam;
+    const targetExamTokens = deduplicateStudentTokens(
+      tokens,
+      examToRender.code,
+      examToRender.teacherProfile?.gradeLevel
+    );
+    const targetExamSession = activeSession &&
+      (activeSession.examId === examToRender.id ||
+       (examToRender.code && activeSession.examCode?.trim().toUpperCase() === examToRender.code.trim().toUpperCase()))
+        ? activeSession
+        : null;
 
     return (
       <div className="min-h-screen bg-[#09090b] text-slate-100 flex flex-col justify-between selection:bg-indigo-600 selection:text-white">
         <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-6 lg:p-8">
           <StudentSlideExam
             exam={examToRender}
-            tokens={activeExamTokens}
-            currentSession={examActiveSession}
+            tokens={targetExamTokens}
+            currentSession={targetExamSession}
             onSaveSession={handleSaveStudentSession}
             onSubmitExam={handleSubmitStudentExam}
             onExit={() => {
@@ -914,7 +1014,7 @@ export default function App() {
         <footer className="bg-[#0c0c0e] border-t border-slate-800/80 py-3 px-4 text-center text-xs text-slate-500">
           <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
             <div className="text-[11px] text-slate-400">
-              {activeExam.schoolProfile.schoolName} • Slide CBT Siswa Mandiri
+              {examToRender.schoolProfile?.schoolName || schoolProfile.schoolName} • Slide CBT Siswa Mandiri
             </div>
             <div className="text-[11px] text-slate-500 font-mono flex items-center gap-2">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>

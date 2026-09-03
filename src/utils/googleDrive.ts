@@ -1,5 +1,6 @@
 import { AppStateBackup, ExamPackage } from "../types";
 import { getCachedAccessToken } from "./googleAuth";
+import { syncExamToFirestore, fetchExamFromFirestore } from "./firestoreService";
 
 export const GOOGLE_DRIVE_BACKUP_FOLDER_NAME = "SlideExam_CBT";
 export const GOOGLE_DRIVE_BACKUP_SUBFOLDER_NAME = "Backup_Data_Aplikasi";
@@ -341,9 +342,31 @@ export async function saveExamToGoogleDrive(
 
   const downloadUrl = `https://www.googleapis.com/drive/v3/files/${finalFileId}?alt=media`;
 
-  // Register in local server Drive index so student short links can resolve without Google sign-in
+  const examComplete: ExamPackage = {
+    ...examToSave,
+    gdriveFileId: finalFileId,
+    gdriveFileName: fileName,
+    gdriveWebViewLink: webViewLink,
+  };
+
+  // Cache in localStorage immediately for instant offline/reload resolution
   try {
-    fetch("/api/gdrive/register-exam", {
+    localStorage.setItem(`gdrive_cache_${finalFileId}`, JSON.stringify(examComplete));
+    if (exam.code) {
+      localStorage.setItem(`gdrive_code_${exam.code.toUpperCase()}`, JSON.stringify(examComplete));
+    }
+  } catch {}
+
+  // 1. Dual-sync to Firestore for reliable multi-device student access across any domain
+  try {
+    await syncExamToFirestore(examComplete, exam.tokens);
+  } catch (syncErr) {
+    console.warn("Firestore sync during Drive save:", syncErr);
+  }
+
+  // 2. Register in local server Drive index & share registry so student short links resolve without Google sign-in
+  try {
+    await fetch("/api/gdrive/register-exam", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -352,14 +375,23 @@ export async function saveExamToGoogleDrive(
         fileName,
         webViewLink,
         downloadUrl,
-        exam: {
-          ...examToSave,
-          gdriveFileId: finalFileId,
-          gdriveFileName: fileName,
-          gdriveWebViewLink: webViewLink,
-        },
+        exam: examComplete,
       }),
-    }).catch((e) => console.warn("Background Drive registration skipped:", e));
+    });
+  } catch (e) {
+    console.warn("Background Drive registration skipped:", e);
+  }
+
+  try {
+    await fetch("/api/exams/share", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        exam: examComplete,
+        token: exam.sessionToken,
+        tokens: exam.tokens || [],
+      }),
+    });
   } catch {}
 
   return {
@@ -420,30 +452,67 @@ export async function listExamsFromGoogleDrive(accessToken: string): Promise<Goo
 
 /**
  * Loads an ExamPackage from Google Drive by file ID.
- * First tries the backend proxy (/api/gdrive/exam/:fileId) which eliminates CORS & cookie issues.
+ * Resilient multi-tier strategy: Local cache -> Server proxy -> Firestore -> Direct fetch.
  */
 export async function loadExamFromGoogleDrive(
   accessTokenOrNull: string | null,
   fileId: string
 ): Promise<ExamPackage> {
-  // 1. Try server-side proxy first
+  if (!fileId) {
+    throw new Error("ID File Google Drive tidak valid.");
+  }
+
+  // Tier 1: Check browser local cache
+  try {
+    const cached = localStorage.getItem(`gdrive_cache_${fileId}`);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (parsed && Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+        return parsed;
+      }
+    }
+  } catch {}
+
+  // Tier 2: Try server-side proxy (bypasses CORS, cookie, and Google Workspace restrictions)
   try {
     const proxyRes = await fetch(`/api/gdrive/exam/${encodeURIComponent(fileId)}`);
     if (proxyRes.ok) {
       const data = await proxyRes.json();
       if (data.success && data.exam && Array.isArray(data.exam.questions)) {
-        return {
+        const result: ExamPackage = {
           ...data.exam,
           gdriveFileId: fileId,
           gdriveSyncedAt: data.exam.gdriveSyncedAt || new Date().toISOString(),
         };
+        try {
+          localStorage.setItem(`gdrive_cache_${fileId}`, JSON.stringify(result));
+          if (result.code) {
+            localStorage.setItem(`gdrive_code_${result.code.toUpperCase()}`, JSON.stringify(result));
+          }
+        } catch {}
+        return result;
       }
     }
   } catch (err) {
-    console.warn("Server proxy download failed, falling back to direct download:", err);
+    console.warn("Server proxy download failed, trying Firestore and direct:", err);
   }
 
-  // 2. Direct fetch with token or public Google Drive export
+  // Tier 3: Try Firestore lookup
+  try {
+    const firestoreResult = await fetchExamFromFirestore(fileId);
+    if (firestoreResult.exam && Array.isArray(firestoreResult.exam.questions)) {
+      const result: ExamPackage = {
+        ...firestoreResult.exam,
+        gdriveFileId: fileId,
+      };
+      try {
+        localStorage.setItem(`gdrive_cache_${fileId}`, JSON.stringify(result));
+      } catch {}
+      return result;
+    }
+  } catch {}
+
+  // Tier 4: Direct fetch with token or public Google Drive export
   const downloadUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
   const headers: Record<string, string> = {};
 
@@ -460,7 +529,7 @@ export async function loadExamFromGoogleDrive(
   }
 
   if (!res.ok) {
-    throw new Error(`Gagal memuat naskah soal dari Google Drive (Status ${res.status}). Pastikan file dapat diakses.`);
+    throw new Error(`Gagal memuat naskah soal dari Google Drive (Status ${res.status}). Pastikan file dapat diakses publik atau minta guru membagikan Link Paket Lengkap.`);
   }
 
   const json = await res.json();
@@ -474,6 +543,13 @@ export async function loadExamFromGoogleDrive(
     gdriveFileId: fileId,
     gdriveSyncedAt: json.gdriveSyncedAt || new Date().toISOString(),
   };
+
+  try {
+    localStorage.setItem(`gdrive_cache_${fileId}`, JSON.stringify(exam));
+    if (exam.code) {
+      localStorage.setItem(`gdrive_code_${exam.code.toUpperCase()}`, JSON.stringify(exam));
+    }
+  } catch {}
 
   return exam;
 }
@@ -489,7 +565,18 @@ export async function findAndLoadExamFromDriveByCode(
   const cleanQuery = (codeOrQuery || "").trim();
   if (!cleanQuery) return null;
 
-  // 1. Check server Google Drive registry search endpoint
+  // Tier 1: Check localStorage cache
+  try {
+    const cached = localStorage.getItem(`gdrive_code_${cleanQuery.toUpperCase()}`);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (parsed && Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+        return parsed;
+      }
+    }
+  } catch {}
+
+  // Tier 2: Check server Google Drive registry search endpoint
   try {
     const searchRes = await fetch(`/api/gdrive/search?q=${encodeURIComponent(cleanQuery)}`);
     if (searchRes.ok) {
@@ -507,7 +594,26 @@ export async function findAndLoadExamFromDriveByCode(
     console.warn("Server search failed:", err);
   }
 
-  // 2. If access token available, query Google Drive API directly
+  // Tier 3: Check Firestore by code
+  try {
+    const fsRes = await fetchExamFromFirestore(cleanQuery);
+    if (fsRes.exam && Array.isArray(fsRes.exam.questions)) {
+      return fsRes.exam;
+    }
+  } catch {}
+
+  // Tier 4: Check server /api/exams/by-code/:code
+  try {
+    const apiRes = await fetch(`/api/exams/by-code/${encodeURIComponent(cleanQuery)}`);
+    if (apiRes.ok) {
+      const d = await apiRes.json();
+      if (d.success && d.exam && Array.isArray(d.exam.questions)) {
+        return d.exam;
+      }
+    }
+  } catch {}
+
+  // Tier 5: If access token available, query Google Drive API directly
   const tokenToUse = accessTokenOrNull || getCachedAccessToken();
   if (tokenToUse) {
     try {
