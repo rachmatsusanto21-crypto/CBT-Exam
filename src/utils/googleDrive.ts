@@ -1,7 +1,9 @@
 import { AppStateBackup, ExamPackage } from "../types";
+import { getCachedAccessToken } from "./googleAuth";
 
 export const GOOGLE_DRIVE_BACKUP_FOLDER_NAME = "SlideExam_CBT";
-export const GOOGLE_DRIVE_EXAMS_FOLDER_NAME = "Naskah_Soal";
+export const GOOGLE_DRIVE_BACKUP_SUBFOLDER_NAME = "Backup_Data_Aplikasi";
+export const GOOGLE_DRIVE_EXAMS_FOLDER_NAME = "Naskah_Soal"; // legacy compatibility
 
 export interface GoogleDriveFileItem {
   id: string;
@@ -21,6 +23,68 @@ export interface GoogleDriveExamItem extends GoogleDriveFileItem {
   totalScore?: number;
   durationMinutes?: number;
   sessionToken?: string;
+}
+
+/**
+ * Generates standard Google Drive filename format:
+ * kelas_mata pelajaran_kode soal.json
+ * Contoh: "Kelas VI_Pendidikan Pancasila_PP-01.json"
+ */
+export function formatExamDriveFileName(exam: ExamPackage): string {
+  const cleanKelas = (exam.teacherProfile?.gradeLevel || "Kelas VI")
+    .trim()
+    .replace(/[/\\?%*:|"<>]/g, "")
+    .replace(/\s+/g, " ");
+
+  const cleanMapel = (exam.teacherProfile?.subject || exam.title || "Mata Pelajaran")
+    .trim()
+    .replace(/[/\\?%*:|"<>]/g, "")
+    .replace(/\s+/g, " ");
+
+  const cleanKode = (exam.code || "SOAL")
+    .trim()
+    .replace(/[/\\?%*:|"<>]/g, "")
+    .replace(/\s+/g, "")
+    .toUpperCase();
+
+  return `${cleanKelas}_${cleanMapel}_${cleanKode}.json`;
+}
+
+/**
+ * Parses grade, subject, and exam code from a Google Drive file name
+ */
+export function parseExamInfoFromDriveFileName(fileName: string): {
+  gradeLevel?: string;
+  subject?: string;
+  examCode?: string;
+  examTitle?: string;
+} {
+  const cleanName = fileName.replace(/\.json$/i, "").trim();
+
+  // Pattern 1: kelas_mata pelajaran_kode soal (e.g. Kelas VI_Pendidikan Pancasila_PP-01)
+  const parts = cleanName.split("_");
+  if (parts.length >= 3) {
+    const gradeLevel = parts[0].trim();
+    const subject = parts.slice(1, -1).join(" ").trim();
+    const examCode = parts[parts.length - 1].trim().toUpperCase();
+    return {
+      gradeLevel,
+      subject,
+      examCode,
+      examTitle: `${subject} (${examCode})`,
+    };
+  }
+
+  // Pattern 2: Legacy SOAL_[CODE]_[TITLE]
+  if (cleanName.startsWith("SOAL_")) {
+    const afterPrefix = cleanName.replace(/^SOAL_/i, "");
+    const legacyParts = afterPrefix.split("_");
+    const examCode = legacyParts[0] || "";
+    const examTitle = legacyParts.slice(1).join(" ") || afterPrefix;
+    return { examCode, examTitle };
+  }
+
+  return { examTitle: cleanName };
 }
 
 /**
@@ -72,11 +136,12 @@ export async function getOrCreateSlideExamFolder(accessToken: string): Promise<s
 }
 
 /**
- * Searches for or creates the 'Naskah_Soal' subfolder inside 'SlideExam_CBT'
+ * Searches for or creates the 'Backup_Data_Aplikasi' subfolder inside 'SlideExam_CBT'.
+ * This fulfills the user requirement: "masukkan ke dalam sub folder backup data aplikasi".
  */
-export async function getOrCreateExamsSubfolder(accessToken: string): Promise<string> {
+export async function getOrCreateBackupDataSubfolder(accessToken: string): Promise<string> {
   const rootFolderId = await getOrCreateSlideExamFolder(accessToken);
-  const query = `'${rootFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and name='${GOOGLE_DRIVE_EXAMS_FOLDER_NAME}' and trashed=false`;
+  const query = `'${rootFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and (name='${GOOGLE_DRIVE_BACKUP_SUBFOLDER_NAME}' or name='${GOOGLE_DRIVE_EXAMS_FOLDER_NAME}') and trashed=false`;
   const searchUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)`;
 
   const searchRes = await fetch(searchUrl, {
@@ -88,11 +153,14 @@ export async function getOrCreateExamsSubfolder(accessToken: string): Promise<st
   if (searchRes.ok) {
     const data = await searchRes.json();
     if (data.files && data.files.length > 0) {
+      // Prefer exact match for Backup_Data_Aplikasi if exists
+      const exactMatch = data.files.find((f: any) => f.name === GOOGLE_DRIVE_BACKUP_SUBFOLDER_NAME);
+      if (exactMatch) return exactMatch.id;
       return data.files[0].id;
     }
   }
 
-  // Create subfolder 'Naskah_Soal'
+  // Create subfolder 'Backup_Data_Aplikasi'
   const createUrl = "https://www.googleapis.com/drive/v3/files";
   const createRes = await fetch(createUrl, {
     method: "POST",
@@ -101,10 +169,10 @@ export async function getOrCreateExamsSubfolder(accessToken: string): Promise<st
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      name: GOOGLE_DRIVE_EXAMS_FOLDER_NAME,
+      name: GOOGLE_DRIVE_BACKUP_SUBFOLDER_NAME,
       parents: [rootFolderId],
       mimeType: "application/vnd.google-apps.folder",
-      description: "Koleksi Naskah Soal Ujian SlideExam CBT",
+      description: "Sub folder backup data aplikasi untuk naskah soal dan cadangan data SlideExam CBT",
     }),
   });
 
@@ -114,6 +182,13 @@ export async function getOrCreateExamsSubfolder(accessToken: string): Promise<st
 
   const created = await createRes.json();
   return created.id;
+}
+
+/**
+ * Legacy alias for backwards compatibility
+ */
+export async function getOrCreateExamsSubfolder(accessToken: string): Promise<string> {
+  return getOrCreateBackupDataSubfolder(accessToken);
 }
 
 /**
@@ -142,18 +217,19 @@ export async function makeFilePubliclyReadable(accessToken: string, fileId: stri
 
 /**
  * Saves or updates a single ExamPackage to Google Drive.
+ * Format nama file: kelas_mata pelajaran_kode soal.json
+ * Folder: sub folder backup data aplikasi (SlideExam_CBT/Backup_Data_Aplikasi)
  */
 export async function saveExamToGoogleDrive(
   accessToken: string,
   exam: ExamPackage
 ): Promise<{ fileId: string; fileName: string; webViewLink?: string; downloadUrl: string }> {
-  const folderId = await getOrCreateExamsSubfolder(accessToken);
-  const cleanTitle = (exam.title || "Naskah_Ujian").replace(/[^a-zA-Z0-9_\-\s]/g, "").trim().replace(/\s+/g, "_");
-  const cleanCode = (exam.code || "EXAM").replace(/[^a-zA-Z0-9_\-]/g, "").toUpperCase();
-  const fileName = `SOAL_${cleanCode}_${cleanTitle}.json`;
+  const folderId = await getOrCreateBackupDataSubfolder(accessToken);
+  const fileName = formatExamDriveFileName(exam);
 
   const examToSave: ExamPackage = {
     ...exam,
+    gdriveFileName: fileName,
     gdriveSyncedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -223,7 +299,7 @@ export async function saveExamToGoogleDrive(
   }
 
   if (!finalFileId) {
-    // Create new file
+    // Create new file in sub folder backup data aplikasi
     const metadata = {
       name: fileName,
       parents: [folderId],
@@ -260,10 +336,31 @@ export async function saveExamToGoogleDrive(
     webViewLink = created.webViewLink || `https://drive.google.com/file/d/${created.id}/view`;
   }
 
-  // Ensure public read permission for seamless student loading
+  // Ensure public read permission for seamless student loading without login
   await makeFilePubliclyReadable(accessToken, finalFileId);
 
   const downloadUrl = `https://www.googleapis.com/drive/v3/files/${finalFileId}?alt=media`;
+
+  // Register in local server Drive index so student short links can resolve without Google sign-in
+  try {
+    fetch("/api/gdrive/register-exam", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        code: exam.code,
+        fileId: finalFileId,
+        fileName,
+        webViewLink,
+        downloadUrl,
+        exam: {
+          ...examToSave,
+          gdriveFileId: finalFileId,
+          gdriveFileName: fileName,
+          gdriveWebViewLink: webViewLink,
+        },
+      }),
+    }).catch((e) => console.warn("Background Drive registration skipped:", e));
+  } catch {}
 
   return {
     fileId: finalFileId,
@@ -275,13 +372,14 @@ export async function saveExamToGoogleDrive(
 
 /**
  * Lists all individual exam packages from Google Drive.
+ * Searches across Backup_Data_Aplikasi, Naskah_Soal, and root folder.
  */
 export async function listExamsFromGoogleDrive(accessToken: string): Promise<GoogleDriveExamItem[]> {
   const rootFolderId = await getOrCreateSlideExamFolder(accessToken);
-  const examsFolderId = await getOrCreateExamsSubfolder(accessToken);
+  const backupFolderId = await getOrCreateBackupDataSubfolder(accessToken);
 
-  // Search in both folders to catch any previously saved files
-  const query = `('${examsFolderId}' in parents or '${rootFolderId}' in parents) and name contains 'SOAL_' and trashed=false and mimeType='application/json'`;
+  // Search across backup subfolder and root folder for .json files
+  const query = `('${backupFolderId}' in parents or '${rootFolderId}' in parents) and trashed=false and mimeType='application/json'`;
   const listUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
     query
   )}&orderBy=modifiedTime desc&fields=files(id,name,createdTime,modifiedTime,size,webViewLink,description)`;
@@ -300,33 +398,52 @@ export async function listExamsFromGoogleDrive(accessToken: string): Promise<Goo
   const data = await res.json();
   const rawFiles: any[] = data.files || [];
 
-  return rawFiles.map((f) => {
-    // Parse name: SOAL_[CODE]_[TITLE].json
-    const nameWithoutExt = f.name.replace(/\.json$/i, "").replace(/^SOAL_/i, "");
-    const parts = nameWithoutExt.split("_");
-    const examCode = parts[0] || "";
-    const examTitle = parts.slice(1).join(" ") || nameWithoutExt;
+  return rawFiles
+    .filter((f) => !f.name.startsWith("SlideExam_CBT_Backup_")) // exclude full app backups
+    .map((f) => {
+      const parsedInfo = parseExamInfoFromDriveFileName(f.name);
 
-    return {
-      id: f.id,
-      name: f.name,
-      createdTime: f.createdTime,
-      modifiedTime: f.modifiedTime,
-      size: f.size,
-      webViewLink: f.webViewLink,
-      examCode,
-      examTitle,
-    };
-  });
+      return {
+        id: f.id,
+        name: f.name,
+        createdTime: f.createdTime,
+        modifiedTime: f.modifiedTime,
+        size: f.size,
+        webViewLink: f.webViewLink,
+        examCode: parsedInfo.examCode || "",
+        examTitle: parsedInfo.examTitle || f.name,
+        subject: parsedInfo.subject,
+        gradeLevel: parsedInfo.gradeLevel,
+      };
+    });
 }
 
 /**
  * Loads an ExamPackage from Google Drive by file ID.
+ * First tries the backend proxy (/api/gdrive/exam/:fileId) which eliminates CORS & cookie issues.
  */
 export async function loadExamFromGoogleDrive(
   accessTokenOrNull: string | null,
   fileId: string
 ): Promise<ExamPackage> {
+  // 1. Try server-side proxy first
+  try {
+    const proxyRes = await fetch(`/api/gdrive/exam/${encodeURIComponent(fileId)}`);
+    if (proxyRes.ok) {
+      const data = await proxyRes.json();
+      if (data.success && data.exam && Array.isArray(data.exam.questions)) {
+        return {
+          ...data.exam,
+          gdriveFileId: fileId,
+          gdriveSyncedAt: data.exam.gdriveSyncedAt || new Date().toISOString(),
+        };
+      }
+    }
+  } catch (err) {
+    console.warn("Server proxy download failed, falling back to direct download:", err);
+  }
+
+  // 2. Direct fetch with token or public Google Drive export
   const downloadUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
   const headers: Record<string, string> = {};
 
@@ -359,6 +476,59 @@ export async function loadExamFromGoogleDrive(
   };
 
   return exam;
+}
+
+/**
+ * Searches and automatically loads an exam from Google Drive by exam code or file name.
+ * Fulfills requirement: "ketika siswa membuka link maka app akan otomatis mencari nama soal yang sesuai"
+ */
+export async function findAndLoadExamFromDriveByCode(
+  codeOrQuery: string,
+  accessTokenOrNull?: string | null
+): Promise<ExamPackage | null> {
+  const cleanQuery = (codeOrQuery || "").trim();
+  if (!cleanQuery) return null;
+
+  // 1. Check server Google Drive registry search endpoint
+  try {
+    const searchRes = await fetch(`/api/gdrive/search?q=${encodeURIComponent(cleanQuery)}`);
+    if (searchRes.ok) {
+      const searchData = await searchRes.json();
+      if (searchData.success && searchData.item) {
+        if (searchData.item.exam && Array.isArray(searchData.item.exam.questions)) {
+          return searchData.item.exam;
+        }
+        if (searchData.item.fileId) {
+          return await loadExamFromGoogleDrive(accessTokenOrNull || null, searchData.item.fileId);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("Server search failed:", err);
+  }
+
+  // 2. If access token available, query Google Drive API directly
+  const tokenToUse = accessTokenOrNull || getCachedAccessToken();
+  if (tokenToUse) {
+    try {
+      const backupFolderId = await getOrCreateBackupDataSubfolder(tokenToUse);
+      const q = `'${backupFolderId}' in parents and name contains '${cleanQuery}' and trashed=false and mimeType='application/json'`;
+      const searchUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)`;
+      const res = await fetch(searchUrl, {
+        headers: { Authorization: `Bearer ${tokenToUse}` },
+      });
+      if (res.ok) {
+        const d = await res.json();
+        if (d.files && d.files.length > 0) {
+          return await loadExamFromGoogleDrive(tokenToUse, d.files[0].id);
+        }
+      }
+    } catch (err) {
+      console.warn("Direct Drive API search failed:", err);
+    }
+  }
+
+  return null;
 }
 
 /**

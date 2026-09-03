@@ -83,6 +83,7 @@ export interface ExamPackage {
   shuffleOptions: boolean;
   tokens?: StudentTokenItem[];
   gdriveFileId?: string;
+  gdriveFileName?: string;
   gdriveWebViewLink?: string;
   gdriveDownloadLink?: string;
   gdriveSyncedAt?: string;

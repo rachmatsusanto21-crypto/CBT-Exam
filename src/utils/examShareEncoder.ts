@@ -271,6 +271,22 @@ export const generateShortStudentUrl = (
 };
 
 /**
+ * Generates short Google Drive link that forces loading exam directly from Google Drive
+ * Without long pkg URL parameter!
+ * Format: ?mode=student&code=PP-01&driveId=...
+ */
+export const generateDriveStudentUrl = (
+  baseUrl: string,
+  exam: ExamPackage,
+  token?: string
+): string => {
+  const cleanBase = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
+  const tokenQuery = token ? `&token=${encodeURIComponent(token)}` : "";
+  const driveParam = exam.gdriveFileId ? `&driveId=${encodeURIComponent(exam.gdriveFileId)}` : "";
+  return `${cleanBase}?mode=student&code=${encodeURIComponent(exam.code)}${driveParam}${tokenQuery}`;
+};
+
+/**
  * Decodes a SharedExamPayload from the current window URL (query parameters or hash).
  */
 export const decodeExamFromCurrentUrl = (): SharedExamPayload | null => {

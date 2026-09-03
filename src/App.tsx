@@ -58,6 +58,7 @@ import { getGeminiRequestHeaders } from "./utils/storage";
 import { normalizeToken, deduplicateStudentTokens } from "./utils/tokenValidator";
 import { decodeExamFromCurrentUrl } from "./utils/examShareEncoder";
 import { broadcastLiveSession, subscribeToLiveSessions } from "./utils/liveSync";
+import { loadExamFromGoogleDrive, findAndLoadExamFromDriveByCode } from "./utils/googleDrive";
 import {
   syncExamToFirestore,
   fetchExamFromFirestore,
@@ -85,7 +86,7 @@ export default function App() {
     });
   }, []);
 
-  // Direct Student Link Detection (Auto-detect mode=student, code, examId, pkg, or token)
+  // Direct Student Link Detection (Auto-detect mode=student, code, examId, driveId, pkg, or token)
   const [isDirectStudentMode, setIsDirectStudentMode] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
     const params = new URLSearchParams(window.location.search);
@@ -94,6 +95,8 @@ export default function App() {
       !!sharedPayload ||
       !!params.get("code") ||
       !!params.get("examId") ||
+      !!params.get("driveId") ||
+      !!params.get("gdriveId") ||
       !!params.get("pkg") ||
       !!params.get("examData") ||
       !!params.get("token");
@@ -136,6 +139,18 @@ export default function App() {
     return existing;
   });
 
+  const [requestedDriveId, setRequestedDriveId] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    const params = new URLSearchParams(window.location.search);
+    return params.get("driveId") || params.get("gdriveId") || null;
+  });
+
+  const [requestedExamCode, setRequestedExamCode] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    const params = new URLSearchParams(window.location.search);
+    return params.get("code") || params.get("examId") || null;
+  });
+
   const [activeExamId, setActiveExamIdState] = useState<string>(() => {
     if (sharedPayload?.exam) {
       saveActiveExamId(sharedPayload.exam.id);
@@ -143,9 +158,15 @@ export default function App() {
     }
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
+      const driveParam = params.get("driveId") || params.get("gdriveId");
       const examParam = params.get("examId") || params.get("code");
       const tokenParam = params.get("token");
       const all = getExamPackages();
+
+      if (driveParam) {
+        const found = all.find((e) => e.gdriveFileId === driveParam);
+        if (found) return found.id;
+      }
 
       if (examParam) {
         const found = all.find((e) => e.id === examParam || e.code.toUpperCase() === examParam.toUpperCase());
@@ -185,125 +206,138 @@ export default function App() {
   const [history, setHistoryState] = useState<StudentExamSession[]>(getExamHistory);
   const [activeSession, setActiveSessionState] = useState<StudentExamSession | null>(getActiveStudentSession);
 
-  const [requestedExamCode, setRequestedExamCode] = useState<string | null>(() => {
-    if (typeof window === "undefined") return null;
-    const params = new URLSearchParams(window.location.search);
-    return params.get("code") || params.get("examId") || null;
-  });
-
   const [isFetchingRemoteExam, setIsFetchingRemoteExam] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
     if (sharedPayload) return false;
     const params = new URLSearchParams(window.location.search);
     const code = params.get("code") || params.get("examId");
-    if (!code) return false;
+    const driveId = params.get("driveId") || params.get("gdriveId");
+    if (!code && !driveId) return false;
     const all = getExamPackages();
-    return !all.some((e) => e.id === code || e.code.toUpperCase() === code.toUpperCase());
+    return !all.some((e) =>
+      (code && (e.id === code || e.code.toUpperCase() === code.toUpperCase())) ||
+      (driveId && e.gdriveFileId === driveId)
+    );
   });
   const [remoteFetchError, setRemoteFetchError] = useState<string | null>(null);
 
-  // If URL specified an exam code/ID not in local storage, attempt to fetch from Firestore then server registry
+  // If URL specified an exam code/ID or drive ID, attempt to fetch from Google Drive, Firestore, or Express registry
   useEffect(() => {
-    if (!requestedExamCode) {
-      setIsFetchingRemoteExam(false);
-      return;
-    }
-    const isAlreadyLoaded = exams.some(
-      (e) => e.id === requestedExamCode || e.code.toUpperCase() === requestedExamCode.toUpperCase()
-    );
-    if (isAlreadyLoaded) {
+    if (!requestedExamCode && !requestedDriveId) {
       setIsFetchingRemoteExam(false);
       return;
     }
 
-    // Fetch from Firestore & backend share registry
+    const isAlreadyLoaded = exams.find((e) =>
+      (requestedExamCode && (e.id === requestedExamCode || e.code.toUpperCase() === requestedExamCode.toUpperCase())) ||
+      (requestedDriveId && e.gdriveFileId === requestedDriveId)
+    );
+
+    if (isAlreadyLoaded) {
+      if (activeExamId !== isAlreadyLoaded.id) {
+        setActiveExamIdState(isAlreadyLoaded.id);
+        saveActiveExamId(isAlreadyLoaded.id);
+      }
+      setIsFetchingRemoteExam(false);
+      return;
+    }
+
     const fetchRemoteExam = async () => {
       setIsFetchingRemoteExam(true);
       setRemoteFetchError(null);
-      try {
-        // 1. Try Firestore First
-        const firestoreResult = await fetchExamFromFirestore(requestedExamCode);
-        if (firestoreResult.exam) {
-          const loadedExam = firestoreResult.exam;
-          setExamsState((prev) => {
-            const idx = prev.findIndex(
-              (e) => e.id === loadedExam.id || e.code.toUpperCase() === loadedExam.code.toUpperCase()
-            );
-            let updated: ExamPackage[];
-            if (idx >= 0) {
-              updated = [...prev];
-              updated[idx] = loadedExam;
-            } else {
-              updated = [loadedExam, ...prev];
-            }
-            saveExamPackages(updated);
-            return updated;
-          });
-          setActiveExamIdState(loadedExam.id);
-          saveActiveExamId(loadedExam.id);
-          if (firestoreResult.token) setUrlToken(firestoreResult.token);
-          if (firestoreResult.tokens && firestoreResult.tokens.length > 0) {
-            setTokensState((prev) => {
-              const merged = deduplicateStudentTokens([...firestoreResult.tokens!, ...prev]);
-              saveStudentTokens(merged);
-              return merged;
-            });
+
+      const applyLoadedExam = (loadedExam: ExamPackage, token?: string, tokensList?: StudentTokenItem[]) => {
+        setExamsState((prev) => {
+          const idx = prev.findIndex(
+            (e) => e.id === loadedExam.id || e.code.toUpperCase() === loadedExam.code.toUpperCase()
+          );
+          let updated: ExamPackage[];
+          if (idx >= 0) {
+            updated = [...prev];
+            updated[idx] = loadedExam;
+          } else {
+            updated = [loadedExam, ...prev];
           }
-          setIsFetchingRemoteExam(false);
-          return;
+          saveExamPackages(updated);
+          return updated;
+        });
+        setActiveExamIdState(loadedExam.id);
+        saveActiveExamId(loadedExam.id);
+        if (token) setUrlToken(token);
+        if (tokensList && tokensList.length > 0) {
+          setTokensState((prev) => {
+            const merged = deduplicateStudentTokens([...tokensList, ...prev]);
+            saveStudentTokens(merged);
+            return merged;
+          });
         }
+        setIsFetchingRemoteExam(false);
+      };
 
-        // 2. Fallback to Express backend share registry
-        let res = await fetch(`/api/exams/by-code/${encodeURIComponent(requestedExamCode)}`);
-        if (!res.ok) {
-          res = await fetch(`/api/exams/share/${encodeURIComponent(requestedExamCode)}`);
-        }
-        if (!res.ok) {
-          res = await fetch(`/api/exams/${encodeURIComponent(requestedExamCode)}`);
-        }
-
-        if (res.ok) {
-          const data = await res.json();
-          if (data.success && data.exam) {
-            setExamsState((prev) => {
-              const idx = prev.findIndex(
-                (e) => e.id === data.exam.id || e.code.toUpperCase() === data.exam.code.toUpperCase()
-              );
-              let updated: ExamPackage[];
-              if (idx >= 0) {
-                updated = [...prev];
-                updated[idx] = data.exam;
-              } else {
-                updated = [data.exam, ...prev];
-              }
-              saveExamPackages(updated);
-              return updated;
-            });
-            setActiveExamIdState(data.exam.id);
-            saveActiveExamId(data.exam.id);
-            if (data.token) setUrlToken(data.token);
-            if (data.tokens && data.tokens.length > 0) {
-              setTokensState((prev) => {
-                const merged = deduplicateStudentTokens([...data.tokens, ...prev]);
-                saveStudentTokens(merged);
-                return merged;
-              });
+      try {
+        // 1. If driveId is provided in URL, prioritize Google Drive proxy loading
+        if (requestedDriveId) {
+          try {
+            const driveExam = await loadExamFromGoogleDrive(null, requestedDriveId);
+            if (driveExam && Array.isArray(driveExam.questions) && driveExam.questions.length > 0) {
+              applyLoadedExam(driveExam, driveExam.sessionToken);
+              return;
             }
-            setIsFetchingRemoteExam(false);
+          } catch (driveErr) {
+            console.warn("Direct Drive ID load attempt:", driveErr);
+          }
+        }
+
+        // 2. Try Firestore First if exam code exists
+        if (requestedExamCode) {
+          const firestoreResult = await fetchExamFromFirestore(requestedExamCode);
+          if (firestoreResult.exam) {
+            applyLoadedExam(firestoreResult.exam, firestoreResult.token, firestoreResult.tokens);
             return;
           }
         }
 
-        setRemoteFetchError(`Naskah soal dengan kode "${requestedExamCode}" tidak ditemukan di server. Silakan periksa kembali kode atau minta guru membagikan link soal.`);
-      } catch (err) {
-        console.warn("Could not fetch remote exam code:", err);
+        // 3. Fallback to Express backend share registry (which also queries gdriveExamsRegistry)
+        if (requestedExamCode) {
+          let res = await fetch(`/api/exams/by-code/${encodeURIComponent(requestedExamCode)}`);
+          if (!res.ok) {
+            res = await fetch(`/api/exams/share/${encodeURIComponent(requestedExamCode)}`);
+          }
+          if (!res.ok) {
+            res = await fetch(`/api/exams/${encodeURIComponent(requestedExamCode)}`);
+          }
+
+          if (res.ok) {
+            const data = await res.json();
+            if (data.success && data.exam) {
+              applyLoadedExam(data.exam, data.token, data.tokens);
+              return;
+            }
+          }
+        }
+
+        // 4. Fallback: Search Google Drive by Code / Filename (auto-lookup from Drive Backup_Data_Aplikasi)
+        if (requestedExamCode) {
+          const driveResult = await findAndLoadExamFromDriveByCode(requestedExamCode);
+          if (driveResult && Array.isArray(driveResult.questions) && driveResult.questions.length > 0) {
+            applyLoadedExam(driveResult, driveResult.sessionToken);
+            return;
+          }
+        }
+
+        setRemoteFetchError(
+          `Naskah soal dengan kode "${requestedExamCode || requestedDriveId}" tidak ditemukan di server atau Google Drive. Silakan periksa kembali kode atau minta guru membagikan link soal.`
+        );
+      } catch (err: any) {
+        console.warn("Could not fetch remote exam:", err);
         setRemoteFetchError("Gagal menghubungi server ujian. Pastikan perangkat Anda terhubung ke internet.");
       } finally {
         setIsFetchingRemoteExam(false);
       }
     };
+
     fetchRemoteExam();
-  }, [requestedExamCode]);
+  }, [requestedExamCode, requestedDriveId]);
 
   // Check Gemini API Key Status
   const checkGeminiStatus = async () => {
@@ -744,7 +778,14 @@ export default function App() {
   // STANDALONE DIRECT STUDENT LINK VIEW (NO TEACHER NAVIGATION / DISTRACTIONS)
   // =========================================================================
   if (isDirectStudentMode) {
-    if (isFetchingRemoteExam) {
+    const targetExam = (requestedExamCode || requestedDriveId)
+      ? exams.find((e) =>
+          (requestedExamCode && (e.id === requestedExamCode || e.code.toUpperCase() === requestedExamCode.toUpperCase())) ||
+          (requestedDriveId && e.gdriveFileId === requestedDriveId)
+        )
+      : activeExam;
+
+    if (isFetchingRemoteExam || ((requestedExamCode || requestedDriveId) && !targetExam && !remoteFetchError)) {
       return (
         <div className="min-h-screen bg-[#09090b] text-slate-100 flex flex-col items-center justify-center p-4">
           <div className="bg-[#121214] border border-slate-800 rounded-3xl p-8 max-w-md w-full text-center space-y-6 shadow-2xl">
@@ -754,22 +795,22 @@ export default function App() {
             <div className="space-y-2">
               <h2 className="text-xl font-black text-white tracking-tight">Memuat Naskah Soal Ujian</h2>
               <p className="text-sm text-slate-400">
-                Menghubungkan ke server CBT untuk mengunduh naskah kode:
+                Mencari dan mengunduh naskah dari Google Drive / Server CBT:
               </p>
               <div className="inline-block px-4 py-1.5 rounded-xl bg-indigo-950/60 border border-indigo-500/40 text-indigo-300 font-mono font-bold text-sm">
-                {requestedExamCode || "Paket Soal"}
+                {requestedExamCode || requestedDriveId || "Paket Soal"}
               </div>
             </div>
             <div className="flex items-center justify-center gap-2 text-xs text-slate-500">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-              Sinkronisasi data 2 arah...
+              <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping"></span>
+              Sinkronisasi Google Drive (Backup_Data_Aplikasi) & Server...
             </div>
           </div>
         </div>
       );
     }
 
-    if (remoteFetchError && !exams.some((e) => e.id === requestedExamCode || e.code.toUpperCase() === requestedExamCode?.toUpperCase())) {
+    if (remoteFetchError && !targetExam) {
       return (
         <div className="min-h-screen bg-[#09090b] text-slate-100 flex flex-col items-center justify-center p-4">
           <div className="bg-[#121214] border border-red-500/30 rounded-3xl p-8 max-w-md w-full text-center space-y-6 shadow-2xl">
@@ -777,9 +818,12 @@ export default function App() {
               <AlertTriangle className="w-8 h-8" />
             </div>
             <div className="space-y-2">
-              <h2 className="text-lg font-bold text-white">Soal Ujian Belum Tersedia</h2>
+              <h2 className="text-lg font-bold text-white">Soal Ujian Belum Ditemukan</h2>
               <p className="text-xs text-slate-400 leading-relaxed">
                 {remoteFetchError}
+              </p>
+              <p className="text-[11px] text-cyan-400/90 leading-relaxed pt-1">
+                Pastikan guru telah mengunggah naskah ke Google Drive (subfolder <strong>Backup_Data_Aplikasi</strong>) dengan format nama <strong>kelas_mata pelajaran_kode soal.json</strong>.
               </p>
             </div>
             <div className="flex flex-col gap-2 pt-2">
@@ -787,17 +831,33 @@ export default function App() {
                 onClick={() => {
                   setRemoteFetchError(null);
                   setIsFetchingRemoteExam(true);
-                  fetchExamFromFirestore(requestedExamCode || "").then((res) => {
-                    if (res.exam) {
-                      setExamsState((prev) => [res.exam!, ...prev]);
-                      setActiveExamIdState(res.exam.id);
-                    }
-                    setIsFetchingRemoteExam(false);
-                  });
+                  const searchCode = requestedExamCode || "";
+                  findAndLoadExamFromDriveByCode(searchCode)
+                    .then((foundDrive) => {
+                      if (foundDrive) {
+                        setExamsState((prev) => [foundDrive, ...prev.filter((x) => x.id !== foundDrive.id)]);
+                        setActiveExamIdState(foundDrive.id);
+                        saveActiveExamId(foundDrive.id);
+                        saveExamPackages([foundDrive, ...exams.filter((x) => x.id !== foundDrive.id)]);
+                        setIsFetchingRemoteExam(false);
+                        return;
+                      }
+                      return fetchExamFromFirestore(searchCode);
+                    })
+                    .then((res: any) => {
+                      if (res?.exam) {
+                        setExamsState((prev) => [res.exam!, ...prev.filter((x) => x.id !== res.exam.id)]);
+                        setActiveExamIdState(res.exam.id);
+                        saveActiveExamId(res.exam.id);
+                      }
+                      setIsFetchingRemoteExam(false);
+                    })
+                    .catch(() => setIsFetchingRemoteExam(false));
                 }}
-                className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold cursor-pointer transition-all"
+                className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold cursor-pointer transition-all flex items-center justify-center gap-2"
               >
-                Coba Hubungkan Kembali
+                <RefreshCw className="w-4 h-4" />
+                <span>Cari Ulang di Google Drive & Server</span>
               </button>
               <button
                 onClick={() => {
@@ -806,6 +866,7 @@ export default function App() {
                   }
                   setIsDirectStudentMode(false);
                   setRequestedExamCode(null);
+                  setRequestedDriveId(null);
                 }}
                 className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer transition-all"
               >
@@ -817,11 +878,13 @@ export default function App() {
       );
     }
 
+    const examToRender = targetExam || activeExam;
+
     return (
       <div className="min-h-screen bg-[#09090b] text-slate-100 flex flex-col justify-between selection:bg-indigo-600 selection:text-white">
         <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-6 lg:p-8">
           <StudentSlideExam
-            exam={activeExam}
+            exam={examToRender}
             tokens={activeExamTokens}
             currentSession={examActiveSession}
             onSaveSession={handleSaveStudentSession}
@@ -833,12 +896,17 @@ export default function App() {
               }
               setIsDirectStudentMode(false);
               setRequestedExamCode(null);
+              setRequestedDriveId(null);
+            }}
+            schoolProfile={schoolProfile}
+            onNavigateToMonitoring={() => {
+              setIsDirectStudentMode(false);
               setActiveTab("monitoring");
             }}
             initialToken={urlToken}
             isDirectLink={true}
             allExams={exams}
-            onSwitchExam={(targetExam) => handleSelectExamId(targetExam.id)}
+            onSwitchExam={(target) => handleSelectExamId(target.id)}
             requestedExamCode={requestedExamCode}
           />
         </main>

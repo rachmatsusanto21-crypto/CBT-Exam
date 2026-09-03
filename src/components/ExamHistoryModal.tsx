@@ -22,7 +22,12 @@ import {
   HelpCircle,
   CheckSquare,
   Filter,
-  Share2
+  Share2,
+  Cloud,
+  CloudUpload,
+  Check,
+  ExternalLink,
+  RefreshCw
 } from "lucide-react";
 import { ExamPackage, Question, QuestionType, SchoolProfile } from "../types";
 import {
@@ -32,6 +37,10 @@ import {
   calculateBloomAndersonSummary
 } from "../utils/sheetExport";
 import { DirectStudentShareModal } from "./DirectStudentShareModal";
+import { saveExamToGoogleDrive, formatExamDriveFileName } from "../utils/googleDrive";
+import { getCachedAccessToken, googleSignIn } from "../utils/googleAuth";
+import { generateDriveStudentUrl } from "../utils/examShareEncoder";
+import { saveExamPackages } from "../utils/storage";
 
 interface ExamHistoryModalProps {
   isOpen: boolean;
@@ -66,12 +75,120 @@ export const ExamHistoryModal: React.FC<ExamHistoryModalProps> = ({
   const [questionSearch, setQuestionSearch] = useState("");
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [shareExamTarget, setShareExamTarget] = useState<ExamPackage | null>(null);
+  const [uploadingExamId, setUploadingExamId] = useState<string | null>(null);
+  const [isBatchUploading, setIsBatchUploading] = useState(false);
+  const [copiedDriveExamId, setCopiedDriveExamId] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
   const showFeedback = (msg: string) => {
     setSuccessMsg(msg);
-    setTimeout(() => setSuccessMsg(null), 3500);
+    setTimeout(() => setSuccessMsg(null), 4000);
+  };
+
+  const handleUploadSingleExamToDrive = async (examItem: ExamPackage) => {
+    setUploadingExamId(examItem.id);
+    try {
+      let tokenToUse = getCachedAccessToken();
+      if (!tokenToUse) {
+        const signinRes = await googleSignIn();
+        if (signinRes?.accessToken) {
+          tokenToUse = signinRes.accessToken;
+        }
+      }
+      if (!tokenToUse) {
+        showFeedback("⚠️ Izin akses Google Drive diperlukan untuk mengunggah naskah.");
+        return;
+      }
+
+      const res = await saveExamToGoogleDrive(tokenToUse, examItem);
+      const updatedExam: ExamPackage = {
+        ...examItem,
+        gdriveFileId: res.fileId,
+        gdriveFileName: res.fileName,
+        gdriveWebViewLink: res.webViewLink,
+        gdriveDownloadLink: res.downloadUrl,
+        gdriveSyncedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      if (onUpdateExam) {
+        onUpdateExam(updatedExam);
+      }
+
+      // Update storage
+      const updatedAll = exams.map((e) => (e.id === updatedExam.id ? updatedExam : e));
+      saveExamPackages(updatedAll);
+
+      showFeedback(`✓ Naskah "${examItem.code}" tersimpan di Drive (Folder Backup_Data_Aplikasi) dengan nama: ${res.fileName}`);
+    } catch (err: any) {
+      console.warn("Upload to Google Drive error:", err);
+      showFeedback(`❌ Gagal mengunggah naskah "${examItem.code}": ${err?.message || "Terjadi kesalahan"}`);
+    } finally {
+      setUploadingExamId(null);
+    }
+  };
+
+  const handleCopyDriveLink = (examItem: ExamPackage) => {
+    const currentUrl = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
+    const baseUrl = currentUrl.endsWith("/") ? currentUrl.slice(0, -1) : currentUrl;
+    const driveUrl = generateDriveStudentUrl(baseUrl, examItem, examItem.sessionToken);
+    navigator.clipboard.writeText(driveUrl);
+    setCopiedDriveExamId(examItem.id);
+    showFeedback(`✓ Link Google Drive untuk naskah "${examItem.code}" tersalin! Siswa otomatis me-load dari Drive.`);
+    setTimeout(() => setCopiedDriveExamId(null), 3000);
+  };
+
+  const handleBatchUploadToDrive = async () => {
+    if (exams.length === 0) return;
+    setIsBatchUploading(true);
+    try {
+      let tokenToUse = getCachedAccessToken();
+      if (!tokenToUse) {
+        const signinRes = await googleSignIn();
+        if (signinRes?.accessToken) {
+          tokenToUse = signinRes.accessToken;
+        }
+      }
+      if (!tokenToUse) {
+        showFeedback("⚠️ Izin akses Google Drive diperlukan.");
+        return;
+      }
+
+      let successCount = 0;
+      let currentExamsList = [...exams];
+
+      for (let i = 0; i < currentExamsList.length; i++) {
+        const item = currentExamsList[i];
+        try {
+          showFeedback(`Mengunggah (${i + 1}/${currentExamsList.length}) ke subfolder Backup_Data_Aplikasi: ${item.code}...`);
+          const res = await saveExamToGoogleDrive(tokenToUse, item);
+          const updated: ExamPackage = {
+            ...item,
+            gdriveFileId: res.fileId,
+            gdriveFileName: res.fileName,
+            gdriveWebViewLink: res.webViewLink,
+            gdriveDownloadLink: res.downloadUrl,
+            gdriveSyncedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          currentExamsList[i] = updated;
+          if (onUpdateExam) {
+            onUpdateExam(updated);
+          }
+          successCount++;
+        } catch (subErr) {
+          console.warn("Failed item upload:", item.code, subErr);
+        }
+      }
+
+      saveExamPackages(currentExamsList);
+      showFeedback(`✓ Selesai! ${successCount} dari ${currentExamsList.length} naskah berhasil dicadangkan ke Google Drive (Backup_Data_Aplikasi)!`);
+    } catch (err: any) {
+      showFeedback(`❌ Batch upload gagal: ${err?.message || "Terjadi kesalahan"}`);
+    } finally {
+      setIsBatchUploading(false);
+    }
   };
 
   // Calculate total questions across all exams in bank
@@ -254,7 +371,29 @@ export const ExamHistoryModal: React.FC<ExamHistoryModalProps> = ({
             )}
           </div>
 
-          <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+          <div className="flex items-center gap-2 w-full sm:w-auto shrink-0 flex-wrap">
+            {exams.length > 0 && (
+              <button
+                type="button"
+                disabled={isBatchUploading}
+                onClick={handleBatchUploadToDrive}
+                className="px-3.5 py-2.5 bg-cyan-950/70 hover:bg-cyan-900/80 text-cyan-300 border border-cyan-500/30 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-sm disabled:opacity-50"
+                title="Unggah seluruh naskah di riwayat ke Google Drive (Subfolder: SlideExam_CBT/Backup_Data_Aplikasi) dengan format nama: kelas_mata pelajaran_kode soal"
+              >
+                {isBatchUploading ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+                    <span>Mencadangkan ke Drive...</span>
+                  </>
+                ) : (
+                  <>
+                    <CloudUpload className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Unggah Semua ke Drive</span>
+                  </>
+                )}
+              </button>
+            )}
+
             {onClearAllExams && exams.length > 0 && (
               <button
                 type="button"
@@ -401,6 +540,42 @@ export const ExamHistoryModal: React.FC<ExamHistoryModalProps> = ({
                             })}
                           </span>
                         </div>
+
+                        {/* Google Drive Status & Filename Format */}
+                        <div className="flex items-center gap-2 text-[11px] pt-1 flex-wrap">
+                          {examItem.gdriveFileId ? (
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="px-2 py-0.5 rounded-md bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 flex items-center gap-1 font-mono text-[10px]">
+                                <Cloud className="w-3 h-3 text-cyan-400" />
+                                <span>Drive: {examItem.gdriveFileName || formatExamDriveFileName(examItem)}</span>
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => handleCopyDriveLink(examItem)}
+                                className="text-cyan-400 hover:text-cyan-300 font-semibold flex items-center gap-1 cursor-pointer bg-cyan-950/40 hover:bg-cyan-900/50 px-2 py-0.5 rounded-md border border-cyan-500/20 text-[10px] transition-colors"
+                                title="Salin Link Siswa yang langsung me-load dari Google Drive"
+                              >
+                                {copiedDriveExamId === examItem.id ? (
+                                  <>
+                                    <Check className="w-3 h-3 text-emerald-400" />
+                                    <span className="text-emerald-300 font-bold">Link Drive Tersalin!</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="w-3 h-3" />
+                                    <span>Salin Link Siswa Drive</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1.5 text-slate-400 text-[10px]">
+                              <span>Format File:</span>
+                              <span className="font-mono text-cyan-400/90">{formatExamDriveFileName(examItem)}</span>
+                              <span className="text-slate-500">(Subfolder: Backup_Data_Aplikasi)</span>
+                            </div>
+                          )}
+                        </div>
                       </div>
 
                       {/* Action Buttons Column */}
@@ -421,6 +596,31 @@ export const ExamHistoryModal: React.FC<ExamHistoryModalProps> = ({
                         >
                           <Play className="w-3.5 h-3.5" />
                           <span>Terapkan ke CBT</span>
+                        </button>
+
+                        {/* Upload / Sync to Google Drive */}
+                        <button
+                          type="button"
+                          disabled={uploadingExamId === examItem.id || isBatchUploading}
+                          onClick={() => handleUploadSingleExamToDrive(examItem)}
+                          className={`px-3 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shadow-sm disabled:opacity-50 ${
+                            examItem.gdriveFileId
+                              ? "bg-cyan-950/70 hover:bg-cyan-900/80 text-cyan-300 border border-cyan-500/30"
+                              : "bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/20"
+                          }`}
+                          title={`Unggah ke Google Drive (Subfolder Backup_Data_Aplikasi) dengan nama: ${formatExamDriveFileName(examItem)}`}
+                        >
+                          {uploadingExamId === examItem.id ? (
+                            <>
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin text-cyan-400" />
+                              <span>Mengunggah...</span>
+                            </>
+                          ) : (
+                            <>
+                              <CloudUpload className="w-3.5 h-3.5 text-cyan-400" />
+                              <span>{examItem.gdriveFileId ? "Perbarui di Drive" : "Unggah ke Drive"}</span>
+                            </>
+                          )}
                         </button>
 
                         {/* Edit in AI Generator */}

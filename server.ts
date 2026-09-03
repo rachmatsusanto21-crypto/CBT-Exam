@@ -124,6 +124,7 @@ if (!fs.existsSync(DATA_DIR)) {
 
 const EXAMS_FILE = path.join(DATA_DIR, "exams_store.json");
 const SESSIONS_FILE = path.join(DATA_DIR, "sessions_store.json");
+const GDRIVE_INDEX_FILE = path.join(DATA_DIR, "gdrive_index.json");
 
 function loadExamsFromDisk(): Map<string, any> {
   const map = new Map<string, any>();
@@ -145,6 +146,29 @@ function saveExamsToDisk(map: Map<string, any>) {
       obj[k] = v;
     });
     fs.writeFileSync(EXAMS_FILE, JSON.stringify(obj), "utf-8");
+  } catch {}
+}
+
+function loadGDriveIndexFromDisk(): Map<string, any> {
+  const map = new Map<string, any>();
+  try {
+    if (fs.existsSync(GDRIVE_INDEX_FILE)) {
+      const data = JSON.parse(fs.readFileSync(GDRIVE_INDEX_FILE, "utf-8"));
+      if (typeof data === "object" && data !== null) {
+        Object.entries(data).forEach(([k, v]) => map.set(k, v));
+      }
+    }
+  } catch {}
+  return map;
+}
+
+function saveGDriveIndexToDisk(map: Map<string, any>) {
+  try {
+    const obj: Record<string, any> = {};
+    map.forEach((v, k) => {
+      obj[k] = v;
+    });
+    fs.writeFileSync(GDRIVE_INDEX_FILE, JSON.stringify(obj), "utf-8");
   } catch {}
 }
 
@@ -174,6 +198,9 @@ function saveSessionsToDisk(map: Map<string, any>) {
 // Persistent exam package registry for short-link resolution across devices
 const sharedExamsRegistry = loadExamsFromDisk();
 
+// Persistent Google Drive exams registry for direct cloud file matching
+const gdriveExamsRegistry = loadGDriveIndexFromDisk();
+
 // Persistent Student Sessions Registry for live monitoring & grading
 const studentSessionsRegistry = loadSessionsFromDisk();
 
@@ -182,9 +209,209 @@ app.get("/api/health", (req, res) => {
   res.json({
     status: "ok",
     examsCount: sharedExamsRegistry.size,
+    gdriveCount: gdriveExamsRegistry.size,
     sessionsCount: studentSessionsRegistry.size,
     timestamp: new Date().toISOString(),
   });
+});
+
+// Register an exam uploaded to Google Drive
+app.post("/api/gdrive/register-exam", (req, res) => {
+  try {
+    const { code, fileId, fileName, webViewLink, downloadUrl, exam } = req.body;
+    if (!fileId) {
+      return res.status(400).json({ success: false, message: "File ID is required" });
+    }
+
+    const cleanCode = (code || exam?.code || "").trim().toUpperCase();
+    const cleanFileName = (fileName || "").trim();
+
+    const entry = {
+      code: cleanCode,
+      fileId,
+      fileName: cleanFileName,
+      webViewLink,
+      downloadUrl,
+      exam: exam || null,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (cleanCode) {
+      gdriveExamsRegistry.set(cleanCode, entry);
+    }
+    if (fileId) {
+      gdriveExamsRegistry.set(`ID_${fileId}`, entry);
+    }
+    if (cleanFileName) {
+      gdriveExamsRegistry.set(`FN_${cleanFileName.toUpperCase()}`, entry);
+    }
+
+    saveGDriveIndexToDisk(gdriveExamsRegistry);
+
+    // Also populate sharedExamsRegistry if exam payload is provided
+    if (exam && exam.id) {
+      const examRecord = {
+        exam,
+        token: exam.sessionToken,
+        tokens: exam.tokens || [],
+        gdriveFileId: fileId,
+        gdriveFileName: cleanFileName,
+        updatedAt: new Date().toISOString(),
+      };
+      sharedExamsRegistry.set(exam.id, examRecord);
+      if (cleanCode) sharedExamsRegistry.set(cleanCode, examRecord);
+      saveExamsToDisk(sharedExamsRegistry);
+    }
+
+    res.json({ success: true, entry });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || "Failed to register Drive file" });
+  }
+});
+
+// Proxy download exam directly from Google Drive without CORS or cookie issues
+app.get("/api/gdrive/exam/:fileId", async (req, res) => {
+  const fileId = req.params.fileId;
+  if (!fileId) {
+    return res.status(400).json({ success: false, message: "Missing Google Drive file ID" });
+  }
+
+  // Check if we already have it in memory/disk
+  const cached = gdriveExamsRegistry.get(`ID_${fileId}`);
+  if (cached?.exam && Array.isArray(cached.exam.questions)) {
+    return res.json({ success: true, exam: cached.exam, source: "cache" });
+  }
+
+  try {
+    // Try multiple endpoints for resilient Google Drive fetching
+    const urls = [
+      `https://drive.google.com/uc?id=${encodeURIComponent(fileId)}&export=download`,
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`,
+    ];
+
+    let examData: any = null;
+    let lastError: any = null;
+
+    for (const url of urls) {
+      try {
+        const driveRes = await fetch(url, {
+          redirect: "follow",
+          headers: {
+            "User-Agent": "Mozilla/5.0 (compatible; SlideExamCBT/1.0)",
+          },
+        });
+
+        if (driveRes.ok) {
+          const text = await driveRes.text();
+          try {
+            const parsed = JSON.parse(text);
+            if (parsed && Array.isArray(parsed.questions)) {
+              examData = parsed;
+              break;
+            }
+          } catch {}
+        }
+      } catch (err) {
+        lastError = err;
+      }
+    }
+
+    if (!examData) {
+      // Fallback: check if any exam in sharedExamsRegistry has this gdriveFileId
+      let matchedFromShare: any = null;
+      sharedExamsRegistry.forEach((val) => {
+        if (val?.exam?.gdriveFileId === fileId || val?.gdriveFileId === fileId) {
+          matchedFromShare = val.exam;
+        }
+      });
+      if (matchedFromShare) {
+        return res.json({ success: true, exam: matchedFromShare, source: "sharedRegistry" });
+      }
+
+      return res.status(404).json({
+        success: false,
+        message: `Gagal mengunduh file Google Drive dengan ID "${fileId}". Pastikan izin file disetel publik ('Siapa saja yang memiliki link').`,
+      });
+    }
+
+    // Attach drive properties
+    const completeExam = {
+      ...examData,
+      gdriveFileId: fileId,
+      gdriveSyncedAt: new Date().toISOString(),
+    };
+
+    // Cache it
+    if (completeExam.code) {
+      gdriveExamsRegistry.set(completeExam.code.toUpperCase(), {
+        code: completeExam.code.toUpperCase(),
+        fileId,
+        exam: completeExam,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+    gdriveExamsRegistry.set(`ID_${fileId}`, {
+      code: completeExam.code,
+      fileId,
+      exam: completeExam,
+      updatedAt: new Date().toISOString(),
+    });
+    saveGDriveIndexToDisk(gdriveExamsRegistry);
+
+    res.json({ success: true, exam: completeExam, source: "drive" });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || "Failed to fetch from Google Drive" });
+  }
+});
+
+// Search Drive Exam Registry by code, file name, or general keyword
+app.get("/api/gdrive/search", (req, res) => {
+  const query = String(req.query.q || req.query.code || "").trim().toUpperCase();
+  if (!query) {
+    return res.status(400).json({ success: false, message: "Parameter 'q' atau 'code' diperlukan." });
+  }
+
+  // 1. Direct code match
+  let direct = gdriveExamsRegistry.get(query);
+  if (direct) {
+    return res.json({ success: true, item: direct });
+  }
+
+  // 2. Scan entries for matching code or filename
+  const matches: any[] = [];
+  gdriveExamsRegistry.forEach((entry, key) => {
+    if (key.startsWith("ID_")) return; // skip redundant ID duplicates in list
+    const entryCode = (entry.code || "").toUpperCase();
+    const entryName = (entry.fileName || "").toUpperCase();
+
+    if (
+      entryCode === query ||
+      entryName.includes(query) ||
+      (query.length >= 3 && entryCode.includes(query))
+    ) {
+      matches.push(entry);
+    }
+  });
+
+  if (matches.length > 0) {
+    return res.json({ success: true, item: matches[0], matches });
+  }
+
+  // 3. Fallback: check sharedExamsRegistry
+  const sharedRecord = sharedExamsRegistry.get(query);
+  if (sharedRecord) {
+    return res.json({
+      success: true,
+      item: {
+        code: query,
+        exam: sharedRecord.exam,
+        fileId: sharedRecord.exam?.gdriveFileId || sharedRecord.gdriveFileId,
+        fileName: sharedRecord.exam?.gdriveFileName,
+      },
+    });
+  }
+
+  res.status(404).json({ success: false, message: `Naskah soal dengan kueri "${query}" tidak ditemukan di indeks Google Drive.` });
 });
 
 // Save or sync shared exam package to server
@@ -242,7 +469,21 @@ app.get("/api/exams", (req, res) => {
 const handleGetExamByCode = (req: any, res: any) => {
   const code = (req.params.code || req.params.codeOrId || "").trim();
   const upperCode = code.toUpperCase();
-  const record = sharedExamsRegistry.get(code) || sharedExamsRegistry.get(upperCode);
+  let record = sharedExamsRegistry.get(code) || sharedExamsRegistry.get(upperCode);
+
+  if (!record) {
+    // Check if gdriveExamsRegistry has this code or filename
+    const driveEntry = gdriveExamsRegistry.get(code) || gdriveExamsRegistry.get(upperCode);
+    if (driveEntry && driveEntry.exam) {
+      record = {
+        exam: driveEntry.exam,
+        token: driveEntry.exam.sessionToken,
+        tokens: driveEntry.exam.tokens || [],
+        gdriveFileId: driveEntry.fileId,
+        gdriveFileName: driveEntry.fileName,
+      };
+    }
+  }
 
   if (!record) {
     return res.status(404).json({ success: false, message: `Exam with code '${code}' not found on server.` });

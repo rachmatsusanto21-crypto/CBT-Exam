@@ -16,14 +16,24 @@ import {
   Maximize2,
   Zap,
   Info,
-  CloudCheck
+  CloudCheck,
+  Cloud,
+  CloudUpload,
+  RefreshCw,
+  FolderOpen
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { ExamPackage, StudentTokenItem } from "../types";
-import { generateStudentShareUrl, generateShortStudentUrl } from "../utils/examShareEncoder";
-import { getStudentTokens } from "../utils/storage";
+import {
+  generateStudentShareUrl,
+  generateShortStudentUrl,
+  generateDriveStudentUrl
+} from "../utils/examShareEncoder";
+import { getStudentTokens, saveExamPackages, getExamPackages } from "../utils/storage";
 import { deduplicateStudentTokens } from "../utils/tokenValidator";
 import { syncExamToFirestore } from "../utils/firestoreService";
+import { saveExamToGoogleDrive, formatExamDriveFileName } from "../utils/googleDrive";
+import { getCachedAccessToken, googleSignIn } from "../utils/googleAuth";
 
 interface DirectStudentShareModalProps {
   isOpen: boolean;
@@ -49,9 +59,14 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
   const [copiedShortLink, setCopiedShortLink] = useState(false);
   const [copiedTemplate, setCopiedTemplate] = useState(false);
   const [includeTokenInLink, setIncludeTokenInLink] = useState(true);
-  const [linkMode, setLinkMode] = useState<"full_package" | "short">("full_package");
-  const [qrMode, setQrMode] = useState<"short" | "full_package">("short");
+  const [linkMode, setLinkMode] = useState<"gdrive" | "short" | "full_package">(
+    exam.gdriveFileId ? "gdrive" : "short"
+  );
+  const [qrMode, setQrMode] = useState<"gdrive" | "short" | "full_package">("short");
   const [showEnlargedQr, setShowEnlargedQr] = useState(false);
+  const [isUploadingToDrive, setIsUploadingToDrive] = useState(false);
+  const [driveUploadError, setDriveUploadError] = useState<string | null>(null);
+  const [driveUploadSuccess, setDriveUploadSuccess] = useState<string | null>(null);
   const qrRef = useRef<SVGSVGElement | null>(null);
 
   const [cloudSynced, setCloudSynced] = useState(false);
@@ -130,19 +145,89 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
   );
   const fullPackageActiveLink = includeTokenInLink && currentToken ? fullPackageLinkWithToken : fullPackageLinkWithoutToken;
 
-  // 2. Short clean link (ideal for QR codes, projectors, or school intranet)
+  // 2. Short clean link (code only)
   const shortLinkWithToken = generateShortStudentUrl(baseUrl, currentExam, currentToken);
   const shortLinkWithoutToken = generateShortStudentUrl(baseUrl, currentExam, undefined);
   const shortActiveLink = includeTokenInLink && currentToken ? shortLinkWithToken : shortLinkWithoutToken;
 
+  // 3. Short Google Drive link (forces direct Google Drive loading)
+  const driveLinkWithToken = generateDriveStudentUrl(baseUrl, currentExam, currentToken);
+  const driveLinkWithoutToken = generateDriveStudentUrl(baseUrl, currentExam, undefined);
+  const driveActiveLink = includeTokenInLink && currentToken ? driveLinkWithToken : driveLinkWithoutToken;
+
   // Active link selected in the main input box
-  const activeSelectedLink = linkMode === "full_package" ? fullPackageActiveLink : shortActiveLink;
+  const activeSelectedLink =
+    linkMode === "gdrive"
+      ? driveActiveLink
+      : linkMode === "full_package"
+      ? fullPackageActiveLink
+      : shortActiveLink;
 
   // QR Code payload to render (Safety cap: QR standard max capacity is ~1500 chars for reliable scanning)
   const isFullPackageTooLongForQr = fullPackageActiveLink.length > 1400;
-  const qrCodeTargetUrl = (qrMode === "full_package" && !isFullPackageTooLongForQr)
-    ? fullPackageActiveLink
-    : shortActiveLink;
+  const qrCodeTargetUrl =
+    qrMode === "gdrive" || linkMode === "gdrive"
+      ? driveActiveLink
+      : qrMode === "full_package" && !isFullPackageTooLongForQr
+      ? fullPackageActiveLink
+      : shortActiveLink;
+
+  // Handle uploading current exam to Google Drive
+  const handleUploadCurrentExamToDrive = async () => {
+    setIsUploadingToDrive(true);
+    setDriveUploadError(null);
+    setDriveUploadSuccess(null);
+    try {
+      let tokenToUse = getCachedAccessToken();
+      if (!tokenToUse) {
+        const signinRes = await googleSignIn();
+        if (signinRes?.accessToken) {
+          tokenToUse = signinRes.accessToken;
+        }
+      }
+      if (!tokenToUse) {
+        throw new Error("Izin otentikasi Google Drive diperlukan untuk mengunggah naskah soal.");
+      }
+
+      const res = await saveExamToGoogleDrive(tokenToUse, currentExam);
+      const updatedExam: ExamPackage = {
+        ...currentExam,
+        gdriveFileId: res.fileId,
+        gdriveFileName: res.fileName,
+        gdriveWebViewLink: res.webViewLink,
+        gdriveDownloadLink: res.downloadUrl,
+        gdriveSyncedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      // Persist in local storage
+      const all = getExamPackages();
+      const idx = all.findIndex((e) => e.id === updatedExam.id);
+      let updatedAll: ExamPackage[];
+      if (idx >= 0) {
+        updatedAll = [...all];
+        updatedAll[idx] = updatedExam;
+      } else {
+        updatedAll = [updatedExam, ...all];
+      }
+      saveExamPackages(updatedAll);
+
+      // Notify parent
+      if (onSelectExam) {
+        onSelectExam(updatedExam);
+      }
+
+      setDriveUploadSuccess(`✓ Naskah berhasil disimpan di Google Drive (Backup_Data_Aplikasi) dengan nama: ${res.fileName}`);
+      setLinkMode("gdrive");
+      setQrMode("gdrive");
+      setTimeout(() => setDriveUploadSuccess(null), 5000);
+    } catch (err: any) {
+      console.warn("Upload to Drive error:", err);
+      setDriveUploadError(err?.message || "Gagal mengunggah naskah soal ke Google Drive.");
+    } finally {
+      setIsUploadingToDrive(false);
+    }
+  };
 
   const handleCopyLink = (textToCopy: string, isShort: boolean = false) => {
     navigator.clipboard.writeText(textToCopy);
@@ -155,11 +240,16 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
     }
   };
 
+  const effectiveShareLink = linkMode === "gdrive" ? driveActiveLink : linkMode === "short" ? shortActiveLink : fullPackageActiveLink;
   const shareMessageText = `📋 *LINK UJIAN CBT SISWA - ${currentExam.title.toUpperCase()}*\n\n` +
     `👤 Mata Pelajaran: *${currentExam.teacherProfile?.subject || "Umum"}* (${currentExam.teacherProfile?.gradeLevel || "Umum"})\n` +
     `⏱️ Durasi: *${currentExam.durationMinutes || 60} Menit* (${currentExam.questions?.length || 0} Butir Soal)\n` +
+    `📁 Kode Soal: *${currentExam.code}*` + (currentExam.gdriveFileName ? ` (File: ${currentExam.gdriveFileName})\n` : "\n") +
     (includeTokenInLink && currentToken ? `🔑 Token Masuk: *${currentToken}*\n\n` : "\n") +
-    `👉 *Klik Link Ujian Berikut untuk Mulai:*\n${fullPackageActiveLink}\n\n` +
+    `👉 *Klik Link Ujian Berikut untuk Mulai:*\n${effectiveShareLink}\n\n` +
+    (linkMode === "gdrive"
+      ? `_Catatan: Soal otomatis dimuat dari Google Drive (Subfolder Backup_Data_Aplikasi) saat link dibuka._\n\n`
+      : "") +
     `_Petunjuk: Buka link di HP/Laptop, pilih nama siswa, masukkan token jika diminta, lalu kerjakan soal dengan teliti._`;
 
   const handleCopyWhatsAppTemplate = () => {
@@ -313,33 +403,134 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
               )}
             </div>
 
-            <div className="grid grid-cols-2 gap-2 p-1 bg-[#161618] rounded-xl border border-slate-800">
+            <div className="grid grid-cols-3 gap-1.5 sm:gap-2 p-1 bg-[#161618] rounded-xl border border-slate-800">
               <button
                 type="button"
-                onClick={() => setLinkMode("full_package")}
-                className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-                  linkMode === "full_package"
-                    ? "bg-indigo-600 text-white shadow-md shadow-indigo-950"
+                onClick={() => {
+                  setLinkMode("gdrive");
+                  setQrMode("gdrive");
+                }}
+                className={`py-2 px-2 rounded-lg text-[11px] sm:text-xs font-bold flex items-center justify-center gap-1 sm:gap-1.5 transition-all cursor-pointer ${
+                  linkMode === "gdrive"
+                    ? "bg-cyan-600 text-white shadow-md shadow-cyan-950"
                     : "text-slate-400 hover:text-slate-200"
                 }`}
               >
-                <PackageCheck className="w-3.5 h-3.5 shrink-0" />
-                <span className="truncate">Link Lengkap + Soal (Chat/WA)</span>
+                <Cloud className="w-3.5 h-3.5 shrink-0 text-cyan-300" />
+                <span className="truncate">Google Drive (Pendek)</span>
               </button>
 
               <button
                 type="button"
-                onClick={() => setLinkMode("short")}
-                className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                onClick={() => {
+                  setLinkMode("short");
+                  setQrMode("short");
+                }}
+                className={`py-2 px-2 rounded-lg text-[11px] sm:text-xs font-bold flex items-center justify-center gap-1 sm:gap-1.5 transition-all cursor-pointer ${
                   linkMode === "short"
                     ? "bg-indigo-600 text-white shadow-md shadow-indigo-950"
                     : "text-slate-400 hover:text-slate-200"
                 }`}
               >
                 <Zap className="w-3.5 h-3.5 shrink-0 text-amber-400" />
-                <span className="truncate">Link Ringkas (Pendek)</span>
+                <span className="truncate">Kode Soal (Pendek)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setLinkMode("full_package");
+                  setQrMode("short");
+                }}
+                className={`py-2 px-2 rounded-lg text-[11px] sm:text-xs font-bold flex items-center justify-center gap-1 sm:gap-1.5 transition-all cursor-pointer ${
+                  linkMode === "full_package"
+                    ? "bg-indigo-600 text-white shadow-md shadow-indigo-950"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                <PackageCheck className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
+                <span className="truncate">Lengkap (+Data Soal)</span>
               </button>
             </div>
+
+            {/* Google Drive Status & Upload Card */}
+            {linkMode === "gdrive" && (
+              <div className="p-3 bg-cyan-950/30 border border-cyan-500/30 rounded-xl space-y-2 text-xs">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-1.5 font-bold text-cyan-300">
+                    <Cloud className="w-4 h-4 text-cyan-400" />
+                    <span>Mode Google Drive (Subfolder: Backup_Data_Aplikasi)</span>
+                  </div>
+                  {currentExam.gdriveFileId ? (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-semibold flex items-center gap-1">
+                      <Check className="w-3 h-3 text-emerald-400" />
+                      <span>Tersimpan di Drive</span>
+                    </span>
+                  ) : (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-semibold">
+                      Belum Diunggah
+                    </span>
+                  )}
+                </div>
+
+                <div className="text-[11px] text-slate-300 space-y-1">
+                  <div>
+                    <span className="text-slate-400">Format Nama File: </span>
+                    <span className="font-mono text-cyan-200 font-semibold">
+                      {currentExam.gdriveFileName || formatExamDriveFileName(currentExam)}
+                    </span>
+                  </div>
+                  <p className="text-slate-400 leading-relaxed">
+                    Link ini berukuran pendek (~60 karakter) tanpa parameter pkg panjang, dan memaksa aplikasi untuk otomatis mencari & me-load naskah soal langsung dari Google Drive saat siswa membuka link.
+                  </p>
+                </div>
+
+                {driveUploadSuccess && (
+                  <div className="p-2 rounded-lg bg-emerald-950/60 border border-emerald-500/40 text-emerald-300 text-[11px]">
+                    {driveUploadSuccess}
+                  </div>
+                )}
+
+                {driveUploadError && (
+                  <div className="p-2 rounded-lg bg-red-950/60 border border-red-500/40 text-red-300 text-[11px]">
+                    {driveUploadError}
+                  </div>
+                )}
+
+                <div className="pt-1 flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={isUploadingToDrive}
+                    onClick={handleUploadCurrentExamToDrive}
+                    className="px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-[11px] flex items-center gap-1.5 cursor-pointer disabled:opacity-50 transition-all shadow-sm shadow-cyan-950"
+                  >
+                    {isUploadingToDrive ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        <span>Mengunggah ke Drive...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CloudUpload className="w-3.5 h-3.5" />
+                        <span>{currentExam.gdriveFileId ? "Perbarui / Unggah Ulang ke Drive" : "Unggah ke Google Drive Sekarang"}</span>
+                      </>
+                    )}
+                  </button>
+
+                  {currentExam.gdriveWebViewLink && (
+                    <a
+                      href={currentExam.gdriveWebViewLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[11px] text-cyan-400 hover:underline flex items-center gap-1"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      <span>Buka File di Drive</span>
+                    </a>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Direct Link Input Box */}
             <div className="flex items-center gap-2 pt-1">
@@ -351,7 +542,7 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
               />
               <button
                 type="button"
-                onClick={() => handleCopyLink(activeSelectedLink, linkMode === "short")}
+                onClick={() => handleCopyLink(activeSelectedLink, linkMode !== "full_package")}
                 className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer shrink-0 ${
                   copiedLink || copiedShortLink
                     ? "bg-emerald-600 text-white shadow-md shadow-emerald-950"
@@ -372,7 +563,12 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
               </button>
             </div>
 
-            {linkMode === "full_package" ? (
+            {linkMode === "gdrive" ? (
+              <p className="text-[11px] text-cyan-300/90 flex items-center gap-1.5 font-medium">
+                <Cloud className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                <span>Link Google Drive pendek & bersih. Siswa yang membuka link otomatis me-load naskah dari folder Backup_Data_Aplikasi.</span>
+              </p>
+            ) : linkMode === "full_package" ? (
               <p className="text-[11px] text-emerald-400/95 flex items-center gap-1.5 font-medium">
                 <PackageCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                 <span>Link ini telah mengompresi {currentExam.questions?.length || 0} butir soal, siap dibuka di WhatsApp/HP siswa tanpa perlu sinkronisasi manual.</span>
