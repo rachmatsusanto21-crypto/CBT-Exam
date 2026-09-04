@@ -44,6 +44,9 @@ import {
   getCachedAccessToken,
   getFirebaseConfigData,
   requestGoogleTokenViaGIS,
+  onGoogleAuthExpired,
+  isAuthExpiredError,
+  formatGoogleAuthErrorMessage,
 } from "../utils/googleAuth";
 import {
   isDriveAutoSyncEnabled,
@@ -107,7 +110,15 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
         setDriveToken("");
       }
     );
-    return () => unsubscribe();
+    const unsubExpired = onGoogleAuthExpired(() => {
+      setCurrentUser(null);
+      setDriveToken("");
+      setDriveError("Sesi login Google Drive telah kedaluwarsa. Silakan hubungkan ulang akun Google Anda untuk memperbarui izin.");
+    });
+    return () => {
+      unsubscribe();
+      unsubExpired();
+    };
   }, []);
 
   // Refresh Google Drive file list if token available
@@ -121,7 +132,11 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
       const files = await listBackupsFromGoogleDrive(token);
       setDriveFiles(files);
     } catch (err: any) {
-      setDriveError(err?.message || "Gagal menyinkronkan dengan Google Drive. Sesi mungkin telah berakhir.");
+      if (isAuthExpiredError(err)) {
+        setCurrentUser(null);
+        setDriveToken("");
+      }
+      setDriveError(formatGoogleAuthErrorMessage(err) || "Gagal menyinkronkan dengan Google Drive. Sesi mungkin telah berakhir.");
     } finally {
       setIsLoadingFileList(false);
     }
@@ -219,7 +234,11 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
       setLastSyncTime(new Date().toLocaleTimeString("id-ID"));
       await fetchDriveBackups(driveToken);
     } catch (err: any) {
-      setDriveError(err?.message || "Gagal mengunggah backup ke Google Drive. Silakan hubungkan ulang akun Anda.");
+      if (isAuthExpiredError(err)) {
+        setCurrentUser(null);
+        setDriveToken("");
+      }
+      setDriveError(formatGoogleAuthErrorMessage(err) || "Gagal mengunggah backup ke Google Drive. Silakan hubungkan ulang akun Anda.");
     } finally {
       setIsSyncingDrive(false);
     }
@@ -243,7 +262,11 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
           setDriveError("Format isi file backup Google Drive tidak sesuai standar SlideExam.");
         }
       } catch (err: any) {
-        setDriveError(err?.message || "Gagal memulihkan file dari Google Drive.");
+        if (isAuthExpiredError(err)) {
+          setCurrentUser(null);
+          setDriveToken("");
+        }
+        setDriveError(formatGoogleAuthErrorMessage(err) || "Gagal memulihkan file dari Google Drive.");
       } finally {
         setIsSyncingDrive(false);
       }

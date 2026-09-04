@@ -39,6 +39,9 @@ import {
   getCachedAccessToken,
   getFirebaseConfigData,
   requestGoogleTokenViaGIS,
+  onGoogleAuthExpired,
+  isAuthExpiredError,
+  formatGoogleAuthErrorMessage,
 } from "../utils/googleAuth";
 import { User } from "firebase/auth";
 
@@ -108,7 +111,18 @@ export const GoogleDriveExamModal: React.FC<GoogleDriveExamModalProps> = ({
         setDriveToken("");
       }
     );
-    return () => unsubscribe();
+    const unsubExpired = onGoogleAuthExpired(() => {
+      setCurrentUser(null);
+      setDriveToken("");
+      setStatusMsg({
+        type: "error",
+        text: "Sesi login Google Drive telah kedaluwarsa. Silakan hubungkan ulang akun Google Anda untuk melanjutkan.",
+      });
+    });
+    return () => {
+      unsubscribe();
+      unsubExpired();
+    };
   }, []);
 
   // Fetch Drive Exam List
@@ -120,9 +134,13 @@ export const GoogleDriveExamModal: React.FC<GoogleDriveExamModalProps> = ({
       setDriveExams(list);
     } catch (err: any) {
       console.warn("Drive exams fetch error:", err);
+      if (isAuthExpiredError(err)) {
+        setCurrentUser(null);
+        setDriveToken("");
+      }
       setStatusMsg({
         type: "error",
-        text: err?.message || "Gagal memuat naskah soal dari Google Drive.",
+        text: formatGoogleAuthErrorMessage(err) || "Gagal memuat naskah soal dari Google Drive.",
       });
     } finally {
       setIsLoadingList(false);
@@ -230,9 +248,13 @@ export const GoogleDriveExamModal: React.FC<GoogleDriveExamModalProps> = ({
       });
       await fetchDriveExams(driveToken);
     } catch (err: any) {
+      if (isAuthExpiredError(err)) {
+        setCurrentUser(null);
+        setDriveToken("");
+      }
       setStatusMsg({
         type: "error",
-        text: err?.message || "Gagal menyimpan naskah ke Google Drive.",
+        text: formatGoogleAuthErrorMessage(err) || "Gagal menyimpan naskah ke Google Drive.",
       });
     } finally {
       setIsSaving(false);
@@ -258,9 +280,13 @@ export const GoogleDriveExamModal: React.FC<GoogleDriveExamModalProps> = ({
         text: `Naskah Soal "${loadedExam.title}" (${loadedExam.questions.length} butir) berhasil dimuat dari Google Drive!`,
       });
     } catch (err: any) {
+      if (isAuthExpiredError(err)) {
+        setCurrentUser(null);
+        setDriveToken("");
+      }
       setStatusMsg({
         type: "error",
-        text: err?.message || "Gagal memuat naskah soal dari Google Drive.",
+        text: formatGoogleAuthErrorMessage(err) || "Gagal memuat naskah soal dari Google Drive.",
       });
     } finally {
       setLoadingFileId(null);
@@ -282,9 +308,13 @@ export const GoogleDriveExamModal: React.FC<GoogleDriveExamModalProps> = ({
       });
       setDriveExams((prev) => prev.filter((ex) => ex.id !== item.id));
     } catch (err: any) {
+      if (isAuthExpiredError(err)) {
+        setCurrentUser(null);
+        setDriveToken("");
+      }
       setStatusMsg({
         type: "error",
-        text: err?.message || "Gagal menghapus file dari Google Drive.",
+        text: formatGoogleAuthErrorMessage(err) || "Gagal menghapus file dari Google Drive.",
       });
     } finally {
       setDeletingFileId(null);

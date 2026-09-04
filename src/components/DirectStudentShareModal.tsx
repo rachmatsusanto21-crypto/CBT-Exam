@@ -33,7 +33,13 @@ import { getStudentTokens, saveExamPackages, getExamPackages } from "../utils/st
 import { deduplicateStudentTokens } from "../utils/tokenValidator";
 import { syncExamToFirestore } from "../utils/firestoreService";
 import { saveExamToGoogleDrive, formatExamDriveFileName } from "../utils/googleDrive";
-import { getCachedAccessToken, googleSignIn } from "../utils/googleAuth";
+import {
+  getCachedAccessToken,
+  googleSignIn,
+  isAuthExpiredError,
+  formatGoogleAuthErrorMessage,
+  clearAuthSession,
+} from "../utils/googleAuth";
 
 interface DirectStudentShareModalProps {
   isOpen: boolean;
@@ -189,7 +195,24 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
         throw new Error("Izin otentikasi Google Drive diperlukan untuk mengunggah naskah soal.");
       }
 
-      const res = await saveExamToGoogleDrive(tokenToUse, currentExam);
+      let res;
+      try {
+        res = await saveExamToGoogleDrive(tokenToUse, currentExam);
+      } catch (uploadErr: any) {
+        if (isAuthExpiredError(uploadErr)) {
+          clearAuthSession();
+          const reauthRes = await googleSignIn();
+          if (reauthRes?.accessToken) {
+            tokenToUse = reauthRes.accessToken;
+            res = await saveExamToGoogleDrive(tokenToUse, currentExam);
+          } else {
+            throw uploadErr;
+          }
+        } else {
+          throw uploadErr;
+        }
+      }
+
       const updatedExam: ExamPackage = {
         ...currentExam,
         gdriveFileId: res.fileId,
@@ -223,7 +246,7 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
       setTimeout(() => setDriveUploadSuccess(null), 5000);
     } catch (err: any) {
       console.warn("Upload to Drive error:", err);
-      setDriveUploadError(err?.message || "Gagal mengunggah naskah soal ke Google Drive.");
+      setDriveUploadError(formatGoogleAuthErrorMessage(err) || "Gagal mengunggah naskah soal ke Google Drive.");
     } finally {
       setIsUploadingToDrive(false);
     }

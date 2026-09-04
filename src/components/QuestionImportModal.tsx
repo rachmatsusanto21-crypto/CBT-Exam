@@ -26,7 +26,7 @@ import {
   downloadDocQuestionTemplate
 } from "../utils/sheetExport";
 import { extractGoogleDriveFileId, loadExamFromGoogleDrive } from "../utils/googleDrive";
-import { getCachedAccessToken } from "../utils/googleAuth";
+import { getCachedAccessToken, formatGoogleAuthErrorMessage } from "../utils/googleAuth";
 
 interface QuestionImportModalProps {
   isOpen: boolean;
@@ -167,7 +167,7 @@ export const QuestionImportModal: React.FC<QuestionImportModalProps> = ({
       });
     } catch (err: any) {
       setGdriveError(
-        err?.message ||
+        formatGoogleAuthErrorMessage(err) ||
           "Gagal memuat naskah soal dari Google Drive. Pastikan link file valid dan izin disetel publik ('Siapa saja yang memiliki link')."
       );
     } finally {

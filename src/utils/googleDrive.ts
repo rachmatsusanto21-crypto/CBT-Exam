@@ -1,10 +1,71 @@
 import { AppStateBackup, ExamPackage } from "../types";
-import { getCachedAccessToken } from "./googleAuth";
+import {
+  getCachedAccessToken,
+  clearAuthSession,
+  notifyAuthExpired,
+  isAuthExpiredError,
+  formatGoogleAuthErrorMessage,
+} from "./googleAuth";
 import { syncExamToFirestore, fetchExamFromFirestore } from "./firestoreService";
 
 export const GOOGLE_DRIVE_BACKUP_FOLDER_NAME = "SlideExam_CBT";
 export const GOOGLE_DRIVE_BACKUP_SUBFOLDER_NAME = "Backup_Data_Aplikasi";
 export const GOOGLE_DRIVE_EXAMS_FOLDER_NAME = "Naskah_Soal"; // legacy compatibility
+
+export class GoogleDriveAuthError extends Error {
+  code = "AUTH_EXPIRED";
+  constructor(
+    message = "Sesi login Google Drive telah berakhir atau token akses kedaluwarsa. Silakan hubungkan ulang akun Google Anda untuk memperbarui izin akses."
+  ) {
+    super(message);
+    this.name = "GoogleDriveAuthError";
+  }
+}
+
+/**
+ * Parses a failed Response from Google Drive API into a user-friendly Error.
+ * Automatically clears expired sessions and dispatches auth-expired events.
+ */
+export async function parseGoogleDriveError(res: Response, fallbackMsg: string): Promise<Error> {
+  let rawMsg = "";
+  try {
+    const data = await res.json();
+    rawMsg = data?.error?.message || data?.message || "";
+  } catch {
+    try {
+      rawMsg = await res.text();
+    } catch {}
+  }
+
+  if (
+    res.status === 401 ||
+    rawMsg.toLowerCase().includes("invalid authentication credentials") ||
+    rawMsg.toLowerCase().includes("oauth 2 access token") ||
+    rawMsg.toLowerCase().includes("unauthenticated") ||
+    rawMsg.toLowerCase().includes("invalid_token") ||
+    rawMsg.toLowerCase().includes("login cookie")
+  ) {
+    notifyAuthExpired();
+    return new GoogleDriveAuthError(
+      "Sesi login Google Drive Anda telah berakhir (token kedaluwarsa). Silakan klik 'Hubungkan Akun Google' untuk masuk kembali dan memperbarui izin akses."
+    );
+  }
+
+  if (res.status === 403) {
+    if (rawMsg.toLowerCase().includes("quota") || rawMsg.toLowerCase().includes("rate")) {
+      return new Error("Batas kuota akses Google Drive tercapai sementara. Silakan tunggu beberapa saat lagi.");
+    }
+    return new Error(
+      "Akses ditolak oleh Google Drive. Pastikan akun memiliki izin atau bagikan file dengan akses 'Siapa saja yang memiliki link'."
+    );
+  }
+
+  if (res.status === 404) {
+    return new Error("File atau folder tidak ditemukan di Google Drive.");
+  }
+
+  return new Error(rawMsg || fallbackMsg);
+}
 
 export interface GoogleDriveFileItem {
   id: string;
@@ -165,8 +226,10 @@ export async function getOrCreateSlideExamFolder(accessToken: string): Promise<s
   });
 
   if (!searchRes.ok) {
-    const errData = await searchRes.json().catch(() => ({}));
-    throw new Error(errData?.error?.message || `Gagal mencari folder ${GOOGLE_DRIVE_BACKUP_FOLDER_NAME} di Google Drive.`);
+    throw await parseGoogleDriveError(
+      searchRes,
+      `Gagal mencari folder ${GOOGLE_DRIVE_BACKUP_FOLDER_NAME} di Google Drive.`
+    );
   }
 
   const data = await searchRes.json();
@@ -190,8 +253,10 @@ export async function getOrCreateSlideExamFolder(accessToken: string): Promise<s
   });
 
   if (!createRes.ok) {
-    const errData = await createRes.json().catch(() => ({}));
-    throw new Error(errData?.error?.message || `Gagal membuat folder ${GOOGLE_DRIVE_BACKUP_FOLDER_NAME} di Google Drive.`);
+    throw await parseGoogleDriveError(
+      createRes,
+      `Gagal membuat folder ${GOOGLE_DRIVE_BACKUP_FOLDER_NAME} di Google Drive.`
+    );
   }
 
   const created = await createRes.json();
@@ -213,14 +278,19 @@ export async function getOrCreateBackupDataSubfolder(accessToken: string): Promi
     },
   });
 
-  if (searchRes.ok) {
-    const data = await searchRes.json();
-    if (data.files && data.files.length > 0) {
-      // Prefer exact match for Backup_Data_Aplikasi if exists
-      const exactMatch = data.files.find((f: any) => f.name === GOOGLE_DRIVE_BACKUP_SUBFOLDER_NAME);
-      if (exactMatch) return exactMatch.id;
-      return data.files[0].id;
-    }
+  if (!searchRes.ok) {
+    throw await parseGoogleDriveError(
+      searchRes,
+      `Gagal mencari sub folder ${GOOGLE_DRIVE_BACKUP_SUBFOLDER_NAME} di Google Drive.`
+    );
+  }
+
+  const data = await searchRes.json();
+  if (data.files && data.files.length > 0) {
+    // Prefer exact match for Backup_Data_Aplikasi if exists
+    const exactMatch = data.files.find((f: any) => f.name === GOOGLE_DRIVE_BACKUP_SUBFOLDER_NAME);
+    if (exactMatch) return exactMatch.id;
+    return data.files[0].id;
   }
 
   // Create subfolder 'Backup_Data_Aplikasi'
@@ -390,8 +460,7 @@ export async function saveExamToGoogleDrive(
     });
 
     if (!res.ok) {
-      const errData = await res.json().catch(() => ({}));
-      throw new Error(errData?.error?.message || "Gagal menyimpan naskah soal ke Google Drive.");
+      throw await parseGoogleDriveError(res, "Gagal menyimpan naskah soal ke Google Drive.");
     }
 
     const created = await res.json();
@@ -485,8 +554,7 @@ export async function listExamsFromGoogleDrive(accessToken: string): Promise<Goo
   });
 
   if (!res.ok) {
-    const errData = await res.json().catch(() => ({}));
-    throw new Error(errData?.error?.message || "Gagal memuat daftar naskah soal dari Google Drive.");
+    throw await parseGoogleDriveError(res, "Gagal memuat daftar naskah soal dari Google Drive.");
   }
 
   const data = await res.json();
@@ -541,9 +609,13 @@ export async function loadExamFromGoogleDrive(
     if (accessTokenOrNull) {
       proxyHeaders.Authorization = `Bearer ${accessTokenOrNull}`;
     }
-    const proxyRes = await fetch(`/api/gdrive/exam/${encodeURIComponent(fileId)}`, {
+    let proxyRes = await fetch(`/api/gdrive/exam/${encodeURIComponent(fileId)}`, {
       headers: proxyHeaders,
     });
+    // If failed with token, retry proxy without token (public link access)
+    if (!proxyRes.ok && accessTokenOrNull) {
+      proxyRes = await fetch(`/api/gdrive/exam/${encodeURIComponent(fileId)}`);
+    }
     if (proxyRes.ok) {
       const data = await proxyRes.json();
       if (data.success && data.exam && Array.isArray(data.exam.questions)) {
@@ -580,30 +652,41 @@ export async function loadExamFromGoogleDrive(
     }
   } catch {}
 
-  // Tier 4: Direct fetch with token or public Google Drive export
-  const downloadUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
-  const headers: Record<string, string> = {};
-
+  // Tier 4: Direct fetch with token (if valid) or fallback to public proxy
+  let json: any = null;
   if (accessTokenOrNull) {
-    headers.Authorization = `Bearer ${accessTokenOrNull}`;
+    try {
+      const downloadUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
+      const res = await fetch(downloadUrl, {
+        headers: { Authorization: `Bearer ${accessTokenOrNull}` },
+      });
+      if (res.ok) {
+        json = await res.json();
+      } else if (res.status === 401) {
+        notifyAuthExpired();
+      }
+    } catch (e) {
+      console.warn("Direct Drive API fetch error:", e);
+    }
   }
 
-  let res = await fetch(downloadUrl, { headers });
-
-  // If unauthorized or no token, attempt public Google Drive download endpoint
-  if (!res.ok && !accessTokenOrNull) {
-    const publicUrl = `https://drive.google.com/uc?id=${fileId}&export=download`;
-    res = await fetch(publicUrl);
+  // If not retrieved yet, try server proxy without token one more time
+  if (!json || !Array.isArray(json.questions)) {
+    try {
+      const fallbackProxy = await fetch(`/api/gdrive/exam/${encodeURIComponent(fileId)}`);
+      if (fallbackProxy.ok) {
+        const proxyData = await fallbackProxy.json();
+        if (proxyData.success && proxyData.exam && Array.isArray(proxyData.exam.questions)) {
+          json = proxyData.exam;
+        }
+      }
+    } catch {}
   }
-
-  if (!res.ok) {
-    throw new Error(`Gagal memuat naskah soal dari Google Drive (Status ${res.status}). Pastikan file dapat diakses publik atau minta guru membagikan Link Paket Lengkap.`);
-  }
-
-  const json = await res.json();
 
   if (!json || !Array.isArray(json.questions)) {
-    throw new Error("Format file di Google Drive tidak valid sebagai paket naskah soal SlideExam.");
+    throw new Error(
+      "Gagal memuat naskah soal dari Google Drive. Pastikan file dibagikan dengan akses 'Siapa saja yang memiliki link' atau minta guru membagikan naskah kembali."
+    );
   }
 
   const exam: ExamPackage = {
@@ -756,8 +839,7 @@ export async function deleteExamFromGoogleDrive(accessToken: string, fileId: str
   });
 
   if (!res.ok && res.status !== 404) {
-    const errData = await res.json().catch(() => ({}));
-    throw new Error(errData?.error?.message || "Gagal menghapus naskah soal dari Google Drive.");
+    throw await parseGoogleDriveError(res, "Gagal menghapus naskah soal dari Google Drive.");
   }
 }
 
@@ -805,8 +887,7 @@ export async function uploadBackupToGoogleDrive(
   });
 
   if (!res.ok) {
-    const errData = await res.json().catch(() => ({}));
-    throw new Error(errData?.error?.message || "Gagal mengunggah file backup ke Google Drive.");
+    throw await parseGoogleDriveError(res, "Gagal mengunggah file backup ke Google Drive.");
   }
 
   const uploadedFile = await res.json();
@@ -828,8 +909,7 @@ export async function listBackupsFromGoogleDrive(accessToken: string): Promise<G
   });
 
   if (!res.ok) {
-    const errData = await res.json().catch(() => ({}));
-    throw new Error(errData?.error?.message || "Gagal memuat daftar backup dari folder SlideExam_CBT.");
+    throw await parseGoogleDriveError(res, "Gagal memuat daftar backup dari folder SlideExam_CBT.");
   }
 
   const data = await res.json();
@@ -851,7 +931,7 @@ export async function downloadBackupFromGoogleDrive(
   });
 
   if (!res.ok) {
-    throw new Error("Gagal mengunduh file backup dari Google Drive.");
+    throw await parseGoogleDriveError(res, "Gagal mengunduh file backup dari Google Drive.");
   }
 
   const json = await res.json();

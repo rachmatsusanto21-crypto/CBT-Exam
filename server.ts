@@ -294,69 +294,99 @@ app.get("/api/gdrive/exam/:fileId", async (req, res) => {
   }
 
   try {
-    const driveHeaders: Record<string, string> = {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    };
-    if (req.headers.authorization) {
-      driveHeaders["Authorization"] = req.headers.authorization;
-    }
-
-    // Try multiple endpoints for resilient Google Drive fetching
-    const urls = [
-      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`,
-      `https://drive.usercontent.google.com/download?id=${encodeURIComponent(fileId)}&export=download&confirm=t`,
-      `https://drive.google.com/uc?id=${encodeURIComponent(fileId)}&export=download&confirm=t`,
-      `https://drive.google.com/uc?id=${encodeURIComponent(fileId)}&export=download`,
-      `https://docs.google.com/uc?export=download&id=${encodeURIComponent(fileId)}`,
-    ];
+    const userAgent =
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+    let driveAuthHeader = req.headers.authorization || "";
 
     let examData: any = null;
     let lastError: any = null;
 
-    for (const url of urls) {
+    // 1. If auth token provided, try the official Drive API v3 endpoint first
+    if (driveAuthHeader) {
       try {
-        const driveRes = await fetch(url, {
-          redirect: "follow",
-          headers: driveHeaders,
-        });
-
-        if (driveRes.ok) {
-          const text = await driveRes.text();
-          try {
-            const parsed = JSON.parse(text);
-            if (parsed && (Array.isArray(parsed.questions) || Array.isArray(parsed.items))) {
-              examData = parsed;
-              break;
-            }
-          } catch {
-            // Check if Google Drive returned a virus scan confirmation page with a link
-            const matchConfirm =
-              text.match(/href="(\/uc\?export=download[^"]+)"/i) ||
-              text.match(/href="(https:\/\/drive\.google\.com\/uc\?export=download[^"]+)"/i) ||
-              text.match(/action="(https:\/\/drive\.google\.com\/[^"]+)"/i);
-            if (matchConfirm && matchConfirm[1]) {
-              const confirmUrl = matchConfirm[1].startsWith("http")
-                ? matchConfirm[1]
-                : `https://drive.google.com${matchConfirm[1]}`;
-              try {
-                const confirmRes = await fetch(confirmUrl, {
-                  headers: driveHeaders,
-                  redirect: "follow",
-                });
-                if (confirmRes.ok) {
-                  const confirmText = await confirmRes.text();
-                  const confirmParsed = JSON.parse(confirmText);
-                  if (confirmParsed && Array.isArray(confirmParsed.questions)) {
-                    examData = confirmParsed;
-                    break;
-                  }
-                }
-              } catch {}
-            }
+        const apiRes = await fetch(
+          `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`,
+          {
+            headers: {
+              Authorization: driveAuthHeader,
+              "User-Agent": userAgent,
+            },
           }
+        );
+        if (apiRes.ok) {
+          const apiJson = await apiRes.json();
+          if (apiJson && (Array.isArray(apiJson.questions) || Array.isArray(apiJson.items))) {
+            examData = apiJson;
+          }
+        } else if (apiRes.status === 401) {
+          console.warn(
+            `[Server Drive Proxy] Provided auth token for file ${fileId} was invalid or expired (401). Falling back to public link fetch.`
+          );
+          // Expired or invalid token - discard it so it does not poison public requests
+          driveAuthHeader = "";
         }
       } catch (err) {
         lastError = err;
+      }
+    }
+
+    // 2. If not found or no valid token, try public Google Drive web download endpoints
+    if (!examData) {
+      const publicUrls = [
+        `https://drive.usercontent.google.com/download?id=${encodeURIComponent(fileId)}&export=download&confirm=t`,
+        `https://drive.google.com/uc?id=${encodeURIComponent(fileId)}&export=download&confirm=t`,
+        `https://drive.google.com/uc?id=${encodeURIComponent(fileId)}&export=download`,
+        `https://docs.google.com/uc?export=download&id=${encodeURIComponent(fileId)}`,
+      ];
+
+      for (const url of publicUrls) {
+        try {
+          const driveRes = await fetch(url, {
+            redirect: "follow",
+            headers: {
+              "User-Agent": userAgent,
+              Accept: "application/json, text/plain, */*",
+            },
+          });
+
+          if (driveRes.ok) {
+            const text = await driveRes.text();
+            try {
+              const parsed = JSON.parse(text);
+              if (parsed && (Array.isArray(parsed.questions) || Array.isArray(parsed.items))) {
+                examData = parsed;
+                break;
+              }
+            } catch {
+              // Check if Google Drive returned a virus scan confirmation page with a link
+              const matchConfirm =
+                text.match(/href="(\/uc\?export=download[^"]+)"/i) ||
+                text.match(/href="(https:\/\/drive\.google\.com\/uc\?export=download[^"]+)"/i) ||
+                text.match(/action="(https:\/\/drive\.google\.com\/[^"]+)"/i);
+              if (matchConfirm && matchConfirm[1]) {
+                const confirmUrl = matchConfirm[1].startsWith("http")
+                  ? matchConfirm[1]
+                  : `https://drive.google.com${matchConfirm[1]}`;
+                try {
+                  const confirmRes = await fetch(confirmUrl, {
+                    headers: { "User-Agent": userAgent },
+                    redirect: "follow",
+                  });
+                  if (confirmRes.ok) {
+                    const confirmText = await confirmRes.text();
+                    const confirmParsed = JSON.parse(confirmText);
+                    if (confirmParsed && Array.isArray(confirmParsed.questions)) {
+                      examData = confirmParsed;
+                      break;
+                    }
+                  }
+                } catch {}
+              }
+            }
+          }
+        } catch (err) {
+          lastError = err;
+        }
       }
     }
 

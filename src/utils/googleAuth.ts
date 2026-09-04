@@ -27,6 +27,81 @@ provider.setCustomParameters({
 const AUTH_STORAGE_KEY = "slideexam_gdrive_auth_session";
 
 let isSigningIn = false;
+
+type AuthExpiredListener = () => void;
+const authExpiredListeners = new Set<AuthExpiredListener>();
+
+export const onGoogleAuthExpired = (cb: AuthExpiredListener) => {
+  authExpiredListeners.add(cb);
+  return () => {
+    authExpiredListeners.delete(cb);
+  };
+};
+
+export const clearAuthSession = () => {
+  cachedAccessToken = null;
+  cachedUser = null;
+  try {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem(AUTH_STORAGE_KEY);
+    }
+  } catch (e) {
+    console.warn("Failed clearing auth session", e);
+  }
+};
+
+export const notifyAuthExpired = () => {
+  clearAuthSession();
+  authExpiredListeners.forEach((cb) => {
+    try {
+      cb();
+    } catch {}
+  });
+  if (typeof window !== "undefined") {
+    try {
+      window.dispatchEvent(new CustomEvent("google-drive-auth-expired"));
+    } catch {}
+  }
+};
+
+export const isAuthExpiredError = (error: any): boolean => {
+  if (!error) return false;
+  const msg = (
+    typeof error === "string" ? error : error?.message || error?.error?.message || ""
+  ).toLowerCase();
+  const status = error?.status || error?.code || error?.statusCode || 0;
+  return (
+    status === 401 ||
+    status === "UNAUTHENTICATED" ||
+    msg.includes("invalid authentication credentials") ||
+    msg.includes("unauthenticated") ||
+    msg.includes("oauth 2 access token") ||
+    msg.includes("login cookie") ||
+    msg.includes("token expired") ||
+    msg.includes("token_expired") ||
+    msg.includes("invalid_token") ||
+    msg.includes("auth_expired") ||
+    msg.includes("unauthorized")
+  );
+};
+
+export const formatGoogleAuthErrorMessage = (error: any): string => {
+  if (isAuthExpiredError(error)) {
+    return "Sesi login Google Drive telah kedaluwarsa. Silakan hubungkan ulang akun Google Anda untuk memperbarui izin akses.";
+  }
+  const msg = error?.message || String(error);
+  if (msg.includes("popup-closed-by-user")) {
+    return "Jendela login Google ditutup sebelum selesai. Silakan coba lagi.";
+  }
+  if (msg.includes("popup-blocked")) {
+    return "Jendela pop-up diblokir oleh browser. Harap izinkan pop-up untuk situs ini.";
+  }
+  if (msg.includes("unauthorized-domain")) {
+    return "Domain ini belum diotorisasi di Firebase. Sistem beralih ke Google Identity Services.";
+  }
+  return msg;
+};
+
 let cachedAccessToken: string | null = (() => {
   try {
     if (typeof window !== "undefined") {
@@ -35,6 +110,9 @@ let cachedAccessToken: string | null = (() => {
         const parsed = JSON.parse(saved);
         if (parsed.token && parsed.expiresAt && Date.now() < parsed.expiresAt) {
           return parsed.token;
+        } else if (parsed.expiresAt && Date.now() >= parsed.expiresAt) {
+          // Token expired, clear it
+          localStorage.removeItem(AUTH_STORAGE_KEY);
         }
       }
     }
@@ -50,7 +128,9 @@ let cachedUser: any | null = (() => {
       const saved = localStorage.getItem(AUTH_STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
-        return parsed.user || null;
+        if (parsed.token && parsed.expiresAt && Date.now() < parsed.expiresAt) {
+          return parsed.user || null;
+        }
       }
     }
   } catch (e) {
@@ -64,8 +144,8 @@ const saveAuthSession = (user: any, token: string) => {
     cachedAccessToken = token;
     cachedUser = user;
     if (typeof window !== "undefined") {
-      // 55 minutes validity before refresh
-      const expiresAt = Date.now() + 55 * 60 * 1000;
+      // 50 minutes validity before refresh (Google tokens expire in 60 minutes)
+      const expiresAt = Date.now() + 50 * 60 * 1000;
       localStorage.setItem(
         AUTH_STORAGE_KEY,
         JSON.stringify({ user, token, expiresAt })
@@ -73,18 +153,6 @@ const saveAuthSession = (user: any, token: string) => {
     }
   } catch (e) {
     console.warn("Failed saving auth session", e);
-  }
-};
-
-const clearAuthSession = () => {
-  cachedAccessToken = null;
-  cachedUser = null;
-  try {
-    if (typeof window !== "undefined") {
-      localStorage.removeItem(AUTH_STORAGE_KEY);
-    }
-  } catch (e) {
-    console.warn("Failed clearing auth session", e);
   }
 };
 
@@ -208,34 +276,44 @@ export const googleSignIn = async (): Promise<{ user: User | any; accessToken: s
     try {
       const result = await signInWithPopup(auth, provider);
       const credential = GoogleAuthProvider.credentialFromResult(result);
-      if (!credential?.accessToken) {
-        throw new Error('Gagal mendapatkan token akses Google Drive. Pastikan izin telah diberikan.');
+      if (credential?.accessToken) {
+        saveAuthSession(result.user, credential.accessToken);
+        return {
+          user: result.user,
+          accessToken: credential.accessToken,
+        };
       }
-      saveAuthSession(result.user, credential.accessToken);
-      return {
-        user: result.user,
-        accessToken: credential.accessToken,
-      };
+      // If Firebase popup succeeded but accessToken was not returned, fallback to GIS
+      if (firebaseConfig.oAuthClientId) {
+        const gisResult = await requestGoogleTokenViaGIS(firebaseConfig.oAuthClientId, false);
+        return gisResult;
+      }
+      throw new Error('Gagal mendapatkan token akses Google Drive. Pastikan izin telah diberikan.');
     } catch (popupErr: any) {
       const errCode = popupErr?.code || '';
       const errMsg = popupErr?.message || '';
       const isUnauth =
         errCode === 'auth/unauthorized-domain' ||
         errMsg.includes('auth/unauthorized-domain') ||
-        errMsg.includes('unauthorized-domain');
+        errMsg.includes('unauthorized-domain') ||
+        errCode === 'auth/popup-blocked' ||
+        errMsg.includes('popup-blocked');
 
-      if ((isUnauth || !errCode) && firebaseConfig.oAuthClientId) {
+      if (firebaseConfig.oAuthClientId) {
         try {
           return await requestGoogleTokenViaGIS(firebaseConfig.oAuthClientId, false);
         } catch (gisErr: any) {
-          const currentHost = typeof window !== 'undefined' ? window.location.hostname : 'domain aplikasi';
-          const enhancedError = new Error(
-            `Firebase: Error (auth/unauthorized-domain). Domain '${currentHost}' belum terdaftar di Firebase Authorized Domains.`
-          );
-          (enhancedError as any).code = 'auth/unauthorized-domain';
-          (enhancedError as any).currentHost = currentHost;
-          (enhancedError as any).projectId = firebaseConfig.projectId;
-          throw enhancedError;
+          if (isUnauth) {
+            const currentHost = typeof window !== 'undefined' ? window.location.hostname : 'domain aplikasi';
+            const enhancedError = new Error(
+              `Domain '${currentHost}' belum terdaftar di Firebase Authorized Domains atau izin GIS ditolak.`
+            );
+            (enhancedError as any).code = 'auth/unauthorized-domain';
+            (enhancedError as any).currentHost = currentHost;
+            (enhancedError as any).projectId = firebaseConfig.projectId;
+            throw enhancedError;
+          }
+          throw gisErr;
         }
       }
       throw popupErr;
@@ -257,6 +335,22 @@ export const googleSignOut = async (): Promise<void> => {
 };
 
 export const getCachedAccessToken = (): string | null => {
+  // Re-verify expiration
+  try {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem(AUTH_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.token && parsed.expiresAt && Date.now() < parsed.expiresAt) {
+          cachedAccessToken = parsed.token;
+          return parsed.token;
+        } else if (parsed.expiresAt && Date.now() >= parsed.expiresAt) {
+          clearAuthSession();
+          return null;
+        }
+      }
+    }
+  } catch {}
   return cachedAccessToken;
 };
 
@@ -264,11 +358,12 @@ export const getCachedUser = (): any | null => {
   return cachedUser;
 };
 
-export const getValidDriveToken = async (): Promise<string | null> => {
-  if (cachedAccessToken) return cachedAccessToken;
+export const getValidDriveToken = async (interactive = false): Promise<string | null> => {
+  const current = getCachedAccessToken();
+  if (current) return current;
   if (firebaseConfig.oAuthClientId) {
     try {
-      const res = await requestGoogleTokenViaGIS(firebaseConfig.oAuthClientId, true);
+      const res = await requestGoogleTokenViaGIS(firebaseConfig.oAuthClientId, !interactive);
       return res.accessToken;
     } catch {
       return null;
