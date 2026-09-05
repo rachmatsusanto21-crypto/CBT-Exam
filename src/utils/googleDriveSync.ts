@@ -59,12 +59,12 @@ export function getDriveSyncState(): DriveSyncState {
 
 export function isDriveAutoSyncEnabled(): boolean {
   try {
-    if (typeof window === "undefined") return true;
+    if (typeof window === "undefined") return false;
     const val = localStorage.getItem(AUTO_SYNC_STORAGE_KEY);
-    // Enabled by default if unset
-    return val === null ? true : val === "true";
+    // Explicit opt-in only: defaults to false so changes in the app do not trigger unsolicited Google Drive saves
+    return val === "true";
   } catch {
-    return true;
+    return false;
   }
 }
 

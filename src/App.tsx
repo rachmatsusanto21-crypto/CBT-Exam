@@ -1006,7 +1006,7 @@ export default function App() {
             <div className="p-3 rounded-xl bg-indigo-950/40 border border-indigo-500/20 text-[11px] text-slate-400 space-y-1">
               <strong className="text-indigo-300 block">💡 Petunjuk untuk Guru:</strong>
               <p>
-                Agar siswa tidak terhambat izin Google Drive akun belajar.id, guru disarankan membagikan <strong>"Link Paket Lengkap (Direct Link)"</strong> dari menu <strong>Bagikan Ujian</strong>. Link tersebut memuat seluruh data soal secara langsung tanpa membutuhkan akses Google Drive siswa.
+                Jika naskah soal belum muncul otomatis di perangkat siswa, Anda dapat membagikan <strong>"Link Google Drive (Alternatif)"</strong> dari menu <strong>Bagikan Ujian</strong>. Siswa dapat langsung menempelkan link Google Drive tersebut di kolom pencarian di atas untuk mulai ujian.
               </p>
             </div>
 

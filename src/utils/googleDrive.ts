@@ -211,110 +211,209 @@ export function extractGoogleDriveFileId(input: string): {
   };
 }
 
+const ROOT_FOLDER_CACHE_KEY = "slideexam_gdrive_root_folder_id";
+const BACKUP_SUBFOLDER_CACHE_KEY = "slideexam_gdrive_backup_subfolder_id";
+
+let cachedRootFolderId: string | null = null;
+let rootFolderPromise: Promise<string> | null = null;
+
+let cachedBackupSubfolderId: string | null = null;
+let backupSubfolderPromise: Promise<string> | null = null;
+
 /**
- * Searches for or creates the dedicated backup folder 'SlideExam_CBT' on the user's Google Drive.
- * Strictly avoids creating any other folder names.
+ * Searches for or reuses the dedicated backup folder on the user's Google Drive.
+ * Caches folder ID in memory and localStorage to strictly prevent creating duplicate folders on changes.
  */
 export async function getOrCreateSlideExamFolder(accessToken: string): Promise<string> {
-  const query = `mimeType='application/vnd.google-apps.folder' and name='${GOOGLE_DRIVE_BACKUP_FOLDER_NAME}' and trashed=false`;
-  const searchUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)`;
-
-  const searchRes = await fetch(searchUrl, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
-  });
-
-  if (!searchRes.ok) {
-    throw await parseGoogleDriveError(
-      searchRes,
-      `Gagal mencari folder ${GOOGLE_DRIVE_BACKUP_FOLDER_NAME} di Google Drive.`
-    );
+  if (rootFolderPromise) {
+    return rootFolderPromise;
   }
 
-  const data = await searchRes.json();
-  if (data.files && data.files.length > 0) {
-    return data.files[0].id;
-  }
+  rootFolderPromise = (async () => {
+    try {
+      // 1. Check in-memory or localStorage cache first
+      let storedId = cachedRootFolderId;
+      if (!storedId && typeof window !== "undefined") {
+        storedId = localStorage.getItem(ROOT_FOLDER_CACHE_KEY);
+      }
 
-  // Create folder strictly named 'SlideExam_CBT'
-  const createUrl = "https://www.googleapis.com/drive/v3/files";
-  const createRes = await fetch(createUrl, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      name: GOOGLE_DRIVE_BACKUP_FOLDER_NAME,
-      mimeType: "application/vnd.google-apps.folder",
-      description: "Folder Arsip dan Cadangan Data Naskah Soal & CBT SlideExam",
-    }),
-  });
+      if (storedId) {
+        try {
+          const verifyRes = await fetch(
+            `https://www.googleapis.com/drive/v3/files/${storedId}?fields=id,name,trashed&supportsAllDrives=true`,
+            { headers: { Authorization: `Bearer ${accessToken}` } }
+          );
+          if (verifyRes.ok) {
+            const fileData = await verifyRes.json();
+            if (fileData && fileData.id && !fileData.trashed) {
+              cachedRootFolderId = fileData.id;
+              if (typeof window !== "undefined") {
+                localStorage.setItem(ROOT_FOLDER_CACHE_KEY, fileData.id);
+              }
+              return fileData.id;
+            }
+          }
+        } catch {
+          // Verification failed, proceed to search
+        }
+      }
 
-  if (!createRes.ok) {
-    throw await parseGoogleDriveError(
-      createRes,
-      `Gagal membuat folder ${GOOGLE_DRIVE_BACKUP_FOLDER_NAME} di Google Drive.`
-    );
-  }
+      // 2. Search for existing folder named 'SlideExam_CBT' or containing 'SlideExam'
+      const query = `mimeType='application/vnd.google-apps.folder' and (name='${GOOGLE_DRIVE_BACKUP_FOLDER_NAME}' or name contains 'SlideExam') and trashed=false`;
+      const searchUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
+        query
+      )}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true`;
 
-  const created = await createRes.json();
-  return created.id;
+      const searchRes = await fetch(searchUrl, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+
+      if (searchRes.ok) {
+        const data = await searchRes.json();
+        if (data.files && data.files.length > 0) {
+          const exact = data.files.find((f: any) => f.name === GOOGLE_DRIVE_BACKUP_FOLDER_NAME);
+          const foundId = exact ? exact.id : data.files[0].id;
+          cachedRootFolderId = foundId;
+          if (typeof window !== "undefined") {
+            localStorage.setItem(ROOT_FOLDER_CACHE_KEY, foundId);
+          }
+          return foundId;
+        }
+      }
+
+      // 3. Create folder only if truly none exists
+      const createUrl = "https://www.googleapis.com/drive/v3/files?supportsAllDrives=true";
+      const createRes = await fetch(createUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: GOOGLE_DRIVE_BACKUP_FOLDER_NAME,
+          mimeType: "application/vnd.google-apps.folder",
+          description: "Folder Arsip dan Cadangan Data Naskah Soal & CBT SlideExam",
+        }),
+      });
+
+      if (!createRes.ok) {
+        throw await parseGoogleDriveError(
+          createRes,
+          `Gagal membuat folder ${GOOGLE_DRIVE_BACKUP_FOLDER_NAME} di Google Drive.`
+        );
+      }
+
+      const created = await createRes.json();
+      cachedRootFolderId = created.id;
+      if (typeof window !== "undefined") {
+        localStorage.setItem(ROOT_FOLDER_CACHE_KEY, created.id);
+      }
+      return created.id;
+    } finally {
+      rootFolderPromise = null;
+    }
+  })();
+
+  return rootFolderPromise;
 }
 
 /**
- * Searches for or creates the 'Backup_Data_Aplikasi' subfolder inside 'SlideExam_CBT'.
- * This fulfills the user requirement: "masukkan ke dalam sub folder backup data aplikasi".
+ * Searches for or reuses the 'Backup_Data_Aplikasi' subfolder inside the root folder.
+ * Caches folder ID to prevent duplicate subfolder creation.
  */
 export async function getOrCreateBackupDataSubfolder(accessToken: string): Promise<string> {
-  const rootFolderId = await getOrCreateSlideExamFolder(accessToken);
-  const query = `'${rootFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and (name='${GOOGLE_DRIVE_BACKUP_SUBFOLDER_NAME}' or name='${GOOGLE_DRIVE_EXAMS_FOLDER_NAME}') and trashed=false`;
-  const searchUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name)`;
-
-  const searchRes = await fetch(searchUrl, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
-  });
-
-  if (!searchRes.ok) {
-    throw await parseGoogleDriveError(
-      searchRes,
-      `Gagal mencari sub folder ${GOOGLE_DRIVE_BACKUP_SUBFOLDER_NAME} di Google Drive.`
-    );
+  if (backupSubfolderPromise) {
+    return backupSubfolderPromise;
   }
 
-  const data = await searchRes.json();
-  if (data.files && data.files.length > 0) {
-    // Prefer exact match for Backup_Data_Aplikasi if exists
-    const exactMatch = data.files.find((f: any) => f.name === GOOGLE_DRIVE_BACKUP_SUBFOLDER_NAME);
-    if (exactMatch) return exactMatch.id;
-    return data.files[0].id;
-  }
+  backupSubfolderPromise = (async () => {
+    try {
+      // 1. Check in-memory or localStorage cache first
+      let storedSubId = cachedBackupSubfolderId;
+      if (!storedSubId && typeof window !== "undefined") {
+        storedSubId = localStorage.getItem(BACKUP_SUBFOLDER_CACHE_KEY);
+      }
 
-  // Create subfolder 'Backup_Data_Aplikasi'
-  const createUrl = "https://www.googleapis.com/drive/v3/files";
-  const createRes = await fetch(createUrl, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      name: GOOGLE_DRIVE_BACKUP_SUBFOLDER_NAME,
-      parents: [rootFolderId],
-      mimeType: "application/vnd.google-apps.folder",
-      description: "Sub folder backup data aplikasi untuk naskah soal dan cadangan data SlideExam CBT",
-    }),
-  });
+      if (storedSubId) {
+        try {
+          const verifyRes = await fetch(
+            `https://www.googleapis.com/drive/v3/files/${storedSubId}?fields=id,name,trashed&supportsAllDrives=true`,
+            { headers: { Authorization: `Bearer ${accessToken}` } }
+          );
+          if (verifyRes.ok) {
+            const fileData = await verifyRes.json();
+            if (fileData && fileData.id && !fileData.trashed) {
+              cachedBackupSubfolderId = fileData.id;
+              if (typeof window !== "undefined") {
+                localStorage.setItem(BACKUP_SUBFOLDER_CACHE_KEY, fileData.id);
+              }
+              return fileData.id;
+            }
+          }
+        } catch {}
+      }
 
-  if (!createRes.ok) {
-    return rootFolderId; // fallback to root if subfolder creation fails
-  }
+      const rootFolderId = await getOrCreateSlideExamFolder(accessToken);
 
-  const created = await createRes.json();
-  return created.id;
+      // 2. Search for existing subfolder inside root folder
+      const query = `'${rootFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and (name='${GOOGLE_DRIVE_BACKUP_SUBFOLDER_NAME}' or name='${GOOGLE_DRIVE_EXAMS_FOLDER_NAME}' or name contains 'Backup') and trashed=false`;
+      const searchUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
+        query
+      )}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+
+      const searchRes = await fetch(searchUrl, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+
+      if (searchRes.ok) {
+        const data = await searchRes.json();
+        if (data.files && data.files.length > 0) {
+          const exactMatch = data.files.find((f: any) => f.name === GOOGLE_DRIVE_BACKUP_SUBFOLDER_NAME);
+          const foundId = exactMatch ? exactMatch.id : data.files[0].id;
+          cachedBackupSubfolderId = foundId;
+          if (typeof window !== "undefined") {
+            localStorage.setItem(BACKUP_SUBFOLDER_CACHE_KEY, foundId);
+          }
+          return foundId;
+        }
+      }
+
+      // 3. Create subfolder 'Backup_Data_Aplikasi'
+      const createUrl = "https://www.googleapis.com/drive/v3/files?supportsAllDrives=true";
+      const createRes = await fetch(createUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: GOOGLE_DRIVE_BACKUP_SUBFOLDER_NAME,
+          parents: [rootFolderId],
+          mimeType: "application/vnd.google-apps.folder",
+          description: "Sub folder backup data aplikasi untuk naskah soal dan cadangan data SlideExam CBT",
+        }),
+      });
+
+      if (!createRes.ok) {
+        return rootFolderId; // fallback to root if subfolder creation fails
+      }
+
+      const created = await createRes.json();
+      cachedBackupSubfolderId = created.id;
+      if (typeof window !== "undefined") {
+        localStorage.setItem(BACKUP_SUBFOLDER_CACHE_KEY, created.id);
+      }
+      return created.id;
+    } finally {
+      backupSubfolderPromise = null;
+    }
+  })();
+
+  return backupSubfolderPromise;
 }
 
 /**
@@ -329,7 +428,7 @@ export async function getOrCreateExamsSubfolder(accessToken: string): Promise<st
  */
 export async function makeFilePubliclyReadable(accessToken: string, fileId: string): Promise<boolean> {
   try {
-    const permUrl = `https://www.googleapis.com/drive/v3/files/${fileId}/permissions`;
+    const permUrl = `https://www.googleapis.com/drive/v3/files/${fileId}/permissions?supportsAllDrives=true`;
     const res = await fetch(permUrl, {
       method: "POST",
       headers: {
@@ -507,6 +606,7 @@ export async function saveExamToGoogleDrive(
         webViewLink,
         downloadUrl,
         exam: examComplete,
+        accessToken,
       }),
     });
   } catch (e) {

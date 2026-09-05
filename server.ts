@@ -201,6 +201,9 @@ const sharedExamsRegistry = loadExamsFromDisk();
 // Persistent Google Drive exams registry for direct cloud file matching
 const gdriveExamsRegistry = loadGDriveIndexFromDisk();
 
+// Cached last known Google Drive access token for proxying student requests
+let lastKnownDriveToken = "";
+
 // Persistent Student Sessions Registry for live monitoring & grading
 const studentSessionsRegistry = loadSessionsFromDisk();
 
@@ -218,20 +221,24 @@ app.get("/api/health", (req, res) => {
 // Register an exam uploaded to Google Drive
 app.post("/api/gdrive/register-exam", (req, res) => {
   try {
-    const { code, fileId, fileName, webViewLink, downloadUrl, exam } = req.body;
-    if (!fileId) {
-      return res.status(400).json({ success: false, message: "File ID is required" });
+    const { code, fileId, fileName, webViewLink, downloadUrl, exam, accessToken } = req.body;
+    if (!fileId && !code) {
+      return res.status(400).json({ success: false, message: "File ID or code is required" });
+    }
+
+    if (accessToken && typeof accessToken === "string") {
+      lastKnownDriveToken = accessToken;
     }
 
     const cleanCode = (code || exam?.code || "").trim().toUpperCase();
-    const cleanFileName = (fileName || "").trim();
+    const cleanFileName = (fileName || exam?.title || "").trim();
 
     const entry = {
       code: cleanCode,
-      fileId,
+      fileId: fileId || "",
       fileName: cleanFileName,
-      webViewLink,
-      downloadUrl,
+      webViewLink: webViewLink || (fileId ? `https://drive.google.com/file/d/${fileId}/view` : ""),
+      downloadUrl: downloadUrl || (fileId ? `https://drive.google.com/uc?id=${fileId}&export=download` : ""),
       exam: exam || null,
       updatedAt: new Date().toISOString(),
     };
@@ -241,6 +248,7 @@ app.post("/api/gdrive/register-exam", (req, res) => {
     }
     if (fileId) {
       gdriveExamsRegistry.set(`ID_${fileId}`, entry);
+      gdriveExamsRegistry.set(fileId, entry);
     }
     if (cleanFileName) {
       gdriveExamsRegistry.set(`FN_${cleanFileName.toUpperCase()}`, entry);
@@ -249,17 +257,18 @@ app.post("/api/gdrive/register-exam", (req, res) => {
     saveGDriveIndexToDisk(gdriveExamsRegistry);
 
     // Also populate sharedExamsRegistry if exam payload is provided
-    if (exam && exam.id) {
+    if (exam && (exam.id || cleanCode)) {
       const examRecord = {
         exam,
         token: exam.sessionToken,
         tokens: exam.tokens || [],
-        gdriveFileId: fileId,
+        gdriveFileId: fileId || exam.gdriveFileId || "",
         gdriveFileName: cleanFileName,
         updatedAt: new Date().toISOString(),
       };
-      sharedExamsRegistry.set(exam.id, examRecord);
+      if (exam.id) sharedExamsRegistry.set(exam.id, examRecord);
       if (cleanCode) sharedExamsRegistry.set(cleanCode, examRecord);
+      if (fileId) sharedExamsRegistry.set(`DRIVE_${fileId}`, examRecord);
       saveExamsToDisk(sharedExamsRegistry);
     }
 
@@ -271,41 +280,62 @@ app.post("/api/gdrive/register-exam", (req, res) => {
 
 // Proxy download exam directly from Google Drive without CORS or cookie issues
 app.get("/api/gdrive/exam/:fileId", async (req, res) => {
-  const fileId = req.params.fileId;
+  const fileId = (req.params.fileId || "").trim();
   if (!fileId) {
     return res.status(400).json({ success: false, message: "Missing Google Drive file ID" });
   }
 
-  // Check if we already have it in memory/disk
-  const cached = gdriveExamsRegistry.get(`ID_${fileId}`) || gdriveExamsRegistry.get(fileId);
-  if (cached?.exam && Array.isArray(cached.exam.questions)) {
+  // 1. Check if we already have it in memory/disk
+  let cached = gdriveExamsRegistry.get(`ID_${fileId}`) || gdriveExamsRegistry.get(fileId);
+  if (!cached) {
+    for (const [_, entry] of gdriveExamsRegistry.entries()) {
+      if (
+        entry?.fileId === fileId ||
+        (entry?.code && entry.code.toUpperCase() === fileId.toUpperCase()) ||
+        (entry?.fileName && entry.fileName.toUpperCase() === fileId.toUpperCase())
+      ) {
+        cached = entry;
+        break;
+      }
+    }
+  }
+  if (cached?.exam && Array.isArray(cached.exam.questions) && cached.exam.questions.length > 0) {
     return res.json({ success: true, exam: cached.exam, source: "cache" });
   }
 
-  // Also check if any exam in sharedExamsRegistry matches this fileId
+  // 2. Also check if any exam in sharedExamsRegistry matches this fileId or code
   let matchedFromShare: any = null;
-  sharedExamsRegistry.forEach((val) => {
-    if (val?.exam?.gdriveFileId === fileId || val?.gdriveFileId === fileId || val?.exam?.id === fileId) {
+  for (const [_, val] of sharedExamsRegistry.entries()) {
+    if (
+      val?.exam?.gdriveFileId === fileId ||
+      val?.gdriveFileId === fileId ||
+      val?.exam?.id === fileId ||
+      (val?.exam?.code && val.exam.code.toUpperCase() === fileId.toUpperCase())
+    ) {
       matchedFromShare = val.exam;
+      break;
     }
-  });
-  if (matchedFromShare && Array.isArray(matchedFromShare.questions)) {
+  }
+  if (matchedFromShare && Array.isArray(matchedFromShare.questions) && matchedFromShare.questions.length > 0) {
     return res.json({ success: true, exam: matchedFromShare, source: "sharedRegistry" });
   }
 
   try {
     const userAgent =
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-    let driveAuthHeader = req.headers.authorization || "";
+    let driveAuthHeader = req.headers.authorization || (req.query.token ? `Bearer ${req.query.token}` : "");
+    if (!driveAuthHeader && lastKnownDriveToken) {
+      driveAuthHeader = `Bearer ${lastKnownDriveToken}`;
+    }
 
     let examData: any = null;
     let lastError: any = null;
 
-    // 1. If auth token provided, try the official Drive API v3 endpoint first
+    // 1. If auth token provided or cached, try official Drive API v3 endpoint first
     if (driveAuthHeader) {
       try {
         const apiRes = await fetch(
-          `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media`,
+          `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`,
           {
             headers: {
               Authorization: driveAuthHeader,
@@ -320,9 +350,8 @@ app.get("/api/gdrive/exam/:fileId", async (req, res) => {
           }
         } else if (apiRes.status === 401) {
           console.warn(
-            `[Server Drive Proxy] Provided auth token for file ${fileId} was invalid or expired (401). Falling back to public link fetch.`
+            `[Server Drive Proxy] Auth token for file ${fileId} expired (401). Falling back to public endpoints.`
           );
-          // Expired or invalid token - discard it so it does not poison public requests
           driveAuthHeader = "";
         }
       } catch (err) {
@@ -392,19 +421,19 @@ app.get("/api/gdrive/exam/:fileId", async (req, res) => {
 
     if (!examData) {
       // Fallback: check if any exam in sharedExamsRegistry has this gdriveFileId
-      let matchedFromShare: any = null;
+      let fallbackShare: any = null;
       sharedExamsRegistry.forEach((val) => {
         if (val?.exam?.gdriveFileId === fileId || val?.gdriveFileId === fileId) {
-          matchedFromShare = val.exam;
+          fallbackShare = val.exam;
         }
       });
-      if (matchedFromShare) {
-        return res.json({ success: true, exam: matchedFromShare, source: "sharedRegistry" });
+      if (fallbackShare) {
+        return res.json({ success: true, exam: fallbackShare, source: "sharedRegistry" });
       }
 
       return res.status(404).json({
         success: false,
-        message: `Gagal mengunduh file Google Drive dengan ID "${fileId}". Pastikan izin file disetel publik ('Siapa saja yang memiliki link').`,
+        message: `Gagal mengunduh file Google Drive dengan ID "${fileId}". Pastikan file dibagikan dengan akses 'Siapa saja yang memiliki link' atau gunakan alternatif link Google Drive.`,
       });
     }
 
@@ -416,20 +445,20 @@ app.get("/api/gdrive/exam/:fileId", async (req, res) => {
     };
 
     // Cache it
-    if (completeExam.code) {
-      gdriveExamsRegistry.set(completeExam.code.toUpperCase(), {
-        code: completeExam.code.toUpperCase(),
-        fileId,
-        exam: completeExam,
-        updatedAt: new Date().toISOString(),
-      });
-    }
-    gdriveExamsRegistry.set(`ID_${fileId}`, {
-      code: completeExam.code,
+    const newEntry = {
+      code: completeExam.code ? completeExam.code.toUpperCase() : "",
       fileId,
+      fileName: completeExam.title || `Exam_${fileId}`,
+      webViewLink: `https://drive.google.com/file/d/${fileId}/view`,
+      downloadUrl: `https://drive.google.com/uc?id=${fileId}&export=download`,
       exam: completeExam,
       updatedAt: new Date().toISOString(),
-    });
+    };
+    gdriveExamsRegistry.set(`ID_${fileId}`, newEntry);
+    gdriveExamsRegistry.set(fileId, newEntry);
+    if (newEntry.code) {
+      gdriveExamsRegistry.set(newEntry.code, newEntry);
+    }
     saveGDriveIndexToDisk(gdriveExamsRegistry);
 
     res.json({ success: true, exam: completeExam, source: "drive" });
@@ -546,8 +575,26 @@ const handleGetExamByCode = (req: any, res: any) => {
   let record = sharedExamsRegistry.get(code) || sharedExamsRegistry.get(upperCode);
 
   if (!record) {
-    // Check if gdriveExamsRegistry has this code or filename
-    const driveEntry = gdriveExamsRegistry.get(code) || gdriveExamsRegistry.get(upperCode);
+    // Check if gdriveExamsRegistry has this code, ID, or filename
+    let driveEntry =
+      gdriveExamsRegistry.get(code) ||
+      gdriveExamsRegistry.get(upperCode) ||
+      gdriveExamsRegistry.get(`ID_${code}`) ||
+      gdriveExamsRegistry.get(`ID_${upperCode}`);
+
+    if (!driveEntry) {
+      for (const [_, entry] of gdriveExamsRegistry.entries()) {
+        if (
+          entry?.fileId === code ||
+          (entry?.code && entry.code.toUpperCase() === upperCode) ||
+          (entry?.fileName && entry.fileName.toUpperCase() === upperCode)
+        ) {
+          driveEntry = entry;
+          break;
+        }
+      }
+    }
+
     if (driveEntry && driveEntry.exam) {
       record = {
         exam: driveEntry.exam,
@@ -559,8 +606,23 @@ const handleGetExamByCode = (req: any, res: any) => {
     }
   }
 
+  // Also scan sharedExamsRegistry values by exam.code, exam.gdriveFileId, or exam.id
   if (!record) {
-    return res.status(404).json({ success: false, message: `Exam with code '${code}' not found on server.` });
+    for (const [_, val] of sharedExamsRegistry.entries()) {
+      if (
+        (val?.exam?.code && val.exam.code.toUpperCase() === upperCode) ||
+        val?.exam?.gdriveFileId === code ||
+        val?.gdriveFileId === code ||
+        val?.exam?.id === code
+      ) {
+        record = val;
+        break;
+      }
+    }
+  }
+
+  if (!record) {
+    return res.status(404).json({ success: false, message: `Naskah soal dengan kode atau ID '${code}' belum ditemukan di server.` });
   }
 
   res.json({ success: true, ...record });
