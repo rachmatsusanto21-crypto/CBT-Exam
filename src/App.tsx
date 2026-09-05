@@ -23,7 +23,8 @@ import {
   FileUp,
   Search,
   ArrowLeft,
-  Link2
+  Link2,
+  FlaskConical
 } from "lucide-react";
 import {
   ExamPackage,
@@ -114,9 +115,13 @@ export default function App() {
     return params.get("token") || "";
   });
 
-  // Navigation & View State
-  const [activeTab, setActiveTab] = useState<NavigationTab>("student_exam");
-  const [isTeacherTrial, setIsTeacherTrial] = useState(false);
+  // Navigation & View State (Default to Teacher Monitoring, Student mode is isolated in dedicated tab)
+  const [activeTab, setActiveTab] = useState<NavigationTab>("monitoring");
+  const [isTeacherTrial, setIsTeacherTrial] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    const params = new URLSearchParams(window.location.search);
+    return params.get("trial") === "true" || params.get("mode") === "trial";
+  });
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isGeminiModalOpen, setIsGeminiModalOpen] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
@@ -536,14 +541,31 @@ export default function App() {
     return matchId || matchCode ? activeSession : null;
   }, [activeSession, activeExam]);
 
-  // Dynamically update document title based on active exam
+  // Dynamically update document title based on mode (Student Exam vs Teacher Dashboard)
   useEffect(() => {
-    if (activeExam?.title) {
-      document.title = `${activeExam.title} - SlideExam CBT`;
+    if (isDirectStudentMode) {
+      const code = requestedExamCode || activeExam?.code || "";
+      if (isTeacherTrial) {
+        document.title = code ? `[Uji Coba Guru] ${code} - Slide CBT` : "[Uji Coba Guru] Slide CBT";
+      } else {
+        document.title = code ? `Lembar Ujian Siswa (${code}) - CBT` : "Lembar Ujian Siswa - Slide CBT";
+      }
+    } else if (activeExam?.title) {
+      document.title = `${activeExam.title} - SlideExam CBT Guru & Monitoring`;
     } else {
-      document.title = "SlideExam CBT - Ujian Interaktif & Analisis AI";
+      document.title = "SlideExam CBT - Guru & Monitoring";
     }
-  }, [activeExam]);
+  }, [isDirectStudentMode, isTeacherTrial, activeExam?.title, activeExam?.code, requestedExamCode]);
+
+  // Automatic redirect if activeTab ever switches to student_exam: open in isolated new tab and keep teacher dashboard on monitoring
+  useEffect(() => {
+    if (activeTab === "student_exam") {
+      const examCode = activeExam?.code || "";
+      const url = `${window.location.origin}${window.location.pathname}?mode=student&code=${encodeURIComponent(examCode)}${isTeacherTrial ? "&trial=true" : ""}`;
+      window.open(url, "_blank");
+      setActiveTab("monitoring");
+    }
+  }, [activeTab, activeExam?.code, isTeacherTrial]);
 
   // Automatically broadcast and sync active exam to server & Firestore for 2-way multi-device discovery
   useEffect(() => {
@@ -838,9 +860,8 @@ export default function App() {
     setActiveSessionState(getActiveStudentSession());
   };
 
-  // Navigation Items
+  // Navigation Items (Teacher Mode: Pure Management & AI Tools)
   const navTabs = [
-    { id: "student_exam" as NavigationTab, label: "Mode Siswa (Slide CBT)", icon: Play },
     { id: "monitoring" as NavigationTab, label: "Live Monitoring Guru", icon: Monitor },
     { id: "ai_generator" as NavigationTab, label: "Editor Soal & AI Gemini", icon: Sparkles },
     { id: "item_analysis" as NavigationTab, label: "Analisis Butir & Nilai", icon: BarChart3 },
@@ -1003,16 +1024,14 @@ export default function App() {
               <button
                 onClick={() => {
                   if (typeof window !== "undefined") {
-                    window.history.replaceState({}, "", window.location.pathname);
+                    window.close();
                   }
-                  setIsDirectStudentMode(false);
-                  setRequestedExamCode(null);
-                  setRequestedDriveId(null);
                 }}
                 className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 rounded-xl text-xs font-medium cursor-pointer transition-all flex items-center justify-center gap-1.5"
+                title="Tutup tab pengerjaan ujian ini"
               >
-                <ArrowLeft className="w-3.5 h-3.5" />
-                <span>Beralih ke Halaman Utama / Mode Guru</span>
+                <X className="w-3.5 h-3.5" />
+                <span>Tutup Halaman Ujian</span>
               </button>
             </div>
           </div>
@@ -1043,21 +1062,14 @@ export default function App() {
             onSaveSession={handleSaveStudentSession}
             onSubmitExam={handleSubmitStudentExam}
             onExit={() => {
-              // Switch back to normal admin mode and clean query parameters
               if (typeof window !== "undefined") {
-                window.history.replaceState({}, "", window.location.pathname);
+                window.close();
               }
-              setIsDirectStudentMode(false);
-              setRequestedExamCode(null);
-              setRequestedDriveId(null);
             }}
             schoolProfile={schoolProfile}
-            onNavigateToMonitoring={() => {
-              setIsDirectStudentMode(false);
-              setActiveTab("monitoring");
-            }}
             initialToken={urlToken}
             isDirectLink={true}
+            isTeacherTrial={isTeacherTrial}
             allExams={exams}
             onSwitchExam={(target) => handleSelectExamId(target.id)}
             requestedExamCode={requestedExamCode}
@@ -1133,6 +1145,20 @@ export default function App() {
               <span className="hidden md:inline">Bagikan Link Siswa</span>
             </button>
 
+            {/* Buka Mode Siswa di Tab Baru (Terisolasi Sepenuhnya dari Guru) */}
+            <button
+              onClick={() => {
+                const url = `${window.location.origin}${window.location.pathname}?mode=student&code=${encodeURIComponent(activeExam.code)}`;
+                window.open(url, "_blank");
+              }}
+              className="p-2 sm:px-3 sm:py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-md shadow-indigo-950 shrink-0"
+              title="Buka Mode Siswa di Tab Baru (Terpisah Sepenuhnya dari Mode Guru)"
+            >
+              <Play className="w-3.5 h-3.5 fill-white" />
+              <span className="hidden md:inline">Mode Siswa (Tab Baru)</span>
+              <ExternalLink className="w-3 h-3 text-indigo-200" />
+            </button>
+
             <button
               onClick={handleCreateNewExam}
               className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors cursor-pointer shrink-0"
@@ -1169,7 +1195,7 @@ export default function App() {
         </div>
 
         {/* Desktop Navigation Tabs */}
-        <div className="hidden md:flex border-t border-slate-800/80 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto overflow-x-auto scrollbar-none">
+        <div className="hidden md:flex items-center justify-between border-t border-slate-800/80 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto overflow-x-auto scrollbar-none">
           <nav className="flex space-x-1 py-1.5 min-w-max">
             {navTabs.map((tab) => {
               const Icon = tab.icon;
@@ -1190,6 +1216,20 @@ export default function App() {
               );
             })}
           </nav>
+
+          {/* Quick Sandbox Trial Launcher in New Tab */}
+          <button
+            onClick={() => {
+              const url = `${window.location.origin}${window.location.pathname}?mode=student&code=${encodeURIComponent(activeExam.code)}&trial=true`;
+              window.open(url, "_blank");
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-amber-300 bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/20 transition-all cursor-pointer ml-3 shrink-0"
+            title="Simulasi Pengerjaan Guru di Tab Terpisah (Hasil tidak masuk rekap nilai siswa)"
+          >
+            <FlaskConical className="w-3.5 h-3.5 text-amber-400" />
+            <span>Simulasi Guru (Tab Baru)</span>
+            <ExternalLink className="w-3 h-3 text-amber-400" />
+          </button>
         </div>
 
         {/* Mobile Navigation Drawer */}
@@ -1215,6 +1255,35 @@ export default function App() {
                   </button>
                 );
               })}
+            </div>
+
+            {/* Quick Isolated Mode Buttons for Mobile */}
+            <div className="pt-2 border-t border-slate-800/80 space-y-2">
+              <button
+                onClick={() => {
+                  const url = `${window.location.origin}${window.location.pathname}?mode=student&code=${encodeURIComponent(activeExam.code)}`;
+                  window.open(url, "_blank");
+                  setIsMobileMenuOpen(false);
+                }}
+                className="w-full py-2.5 px-3.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 cursor-pointer shadow-md"
+              >
+                <Play className="w-3.5 h-3.5 fill-white" />
+                <span>Buka Mode Siswa (Tab Baru)</span>
+                <ExternalLink className="w-3.5 h-3.5" />
+              </button>
+
+              <button
+                onClick={() => {
+                  const url = `${window.location.origin}${window.location.pathname}?mode=student&code=${encodeURIComponent(activeExam.code)}&trial=true`;
+                  window.open(url, "_blank");
+                  setIsMobileMenuOpen(false);
+                }}
+                className="w-full py-2 px-3.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <FlaskConical className="w-3.5 h-3.5 text-amber-400" />
+                <span>Simulasi Guru (Tab Baru)</span>
+                <ExternalLink className="w-3.5 h-3.5 text-amber-400" />
+              </button>
             </div>
           </div>
         )}
@@ -1258,27 +1327,35 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
-        {/* TAB 1: Mode Ujian Siswa (Slide Presentation CBT) */}
+        {/* TAB 1: Mode Ujian Siswa (Auto-redirect ke Tab Terpisah) */}
         {activeTab === "student_exam" && (
-          <StudentSlideExam
-            exam={activeExam}
-            tokens={activeExamTokens}
-            currentSession={examActiveSession}
-            onSaveSession={handleSaveStudentSession}
-            onSubmitExam={handleSubmitStudentExam}
-            isTeacherTrial={isTeacherTrial}
-            allExams={exams}
-            onSwitchExam={(targetExam) => handleSelectExamId(targetExam.id)}
-            requestedExamCode={requestedExamCode}
-            onExit={() => {
-              if (isTeacherTrial) {
-                setIsTeacherTrial(false);
-                setActiveTab("ai_generator");
-              } else {
-                setActiveTab("monitoring");
-              }
-            }}
-          />
+          <div className="p-8 text-center bg-[#161618] border border-slate-800 rounded-2xl max-w-md mx-auto space-y-4 my-12 shadow-xl">
+            <div className="w-12 h-12 rounded-2xl bg-indigo-600/20 text-indigo-400 flex items-center justify-center mx-auto border border-indigo-500/30">
+              <Play className="w-6 h-6 fill-indigo-400" />
+            </div>
+            <h3 className="font-bold text-white text-base">Mode Siswa Telah Diisolasi di Tab Baru</h3>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Mode pengerjaan siswa terpisah sepenuhnya dari dashboard guru demi keamanan ujian dan integritas kunci jawaban.
+            </p>
+            <div className="flex flex-col gap-2 pt-2">
+              <button
+                onClick={() => {
+                  const url = `${window.location.origin}${window.location.pathname}?mode=student&code=${encodeURIComponent(activeExam.code)}`;
+                  window.open(url, "_blank");
+                }}
+                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer flex items-center justify-center gap-2"
+              >
+                <span>Buka Ulang Tab Siswa</span>
+                <ExternalLink className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => setActiveTab("monitoring")}
+                className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-medium cursor-pointer transition-all"
+              >
+                Kembali ke Live Monitoring Guru
+              </button>
+            </div>
+          </div>
         )}
 
         {/* TAB 2: Live Monitoring & Real-Time Grading Dashboard */}
@@ -1301,12 +1378,12 @@ export default function App() {
             activeExam={activeExam}
             onUpdateExam={handleUpdateActiveExam}
             onPreviewSlides={() => {
-              setIsTeacherTrial(false);
-              setActiveTab("student_exam");
+              const url = `${window.location.origin}${window.location.pathname}?mode=student&code=${encodeURIComponent(activeExam.code)}`;
+              window.open(url, "_blank");
             }}
             onStartTeacherTrial={() => {
-              setIsTeacherTrial(true);
-              setActiveTab("student_exam");
+              const url = `${window.location.origin}${window.location.pathname}?mode=student&code=${encodeURIComponent(activeExam.code)}&trial=true`;
+              window.open(url, "_blank");
             }}
             onOpenGeminiModal={() => setIsGeminiModalOpen(true)}
             activeToken={activeExam.sessionToken}

@@ -257,16 +257,20 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
           <button
             onClick={() => {
               if (isTeacherTrial) {
+                if (typeof window !== "undefined") {
+                  window.close();
+                }
                 onExit();
-              } else if (isDirectLink) {
-                setShowFinishedAlert(true);
               } else {
-                onExit();
+                setShowFinishedAlert(true);
+                if (typeof window !== "undefined") {
+                  window.close();
+                }
               }
             }}
             className="flex items-center gap-2 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold cursor-pointer transition-all shadow-md shadow-indigo-950"
           >
-            <span>{isTeacherTrial ? "Selesai & Kembali ke Editor" : isDirectLink ? "Ujian Telah Selesai" : "Selesai & Keluar"}</span>
+            <span>{isTeacherTrial ? "Selesai & Tutup Tab Simulasi" : "Ujian Telah Selesai (Tutup Tab)"}</span>
             <CheckCircle className="w-4 h-4" />
           </button>
         </div>
@@ -275,19 +279,33 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
         {showFinishedAlert && (
           <div className="mt-4 p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl text-left flex items-start gap-3 animate-in fade-in">
             <CheckCircle className="w-5 h-5 text-emerald-400 mt-0.5 shrink-0" />
-            <div className="space-y-1 text-xs">
+            <div className="space-y-1.5 text-xs">
               <div className="font-bold text-emerald-300">
-                Pengerjaan Anda telah tersimpan secara resmi!
+                Pengerjaan Ujian Telah Tersimpan Secara Resmi!
               </div>
               <p className="text-slate-300 leading-relaxed">
-                Jawaban dan skor akhir Anda telah terkirim ke rekapitulasi penilaian guru. Anda dapat meninjau pembahasan butir soal di bawah ini atau menutup jendela browser dengan aman.
+                Jawaban dan perolehan skor Anda telah berhasil dicatat ke sistem penilaian guru. Anda dapat meninjau pembahasan butir soal di bawah ini atau langsung menutup tab ini.
               </p>
-              <button
-                onClick={() => setShowFinishedAlert(false)}
-                className="mt-1 text-[11px] text-emerald-400 font-bold hover:underline cursor-pointer"
-              >
-                Tutup pemberitahuan
-              </button>
+              <div className="pt-1 flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (typeof window !== "undefined") {
+                      window.close();
+                    }
+                  }}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer"
+                >
+                  Tutup Tab Ini Sekarang
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowFinishedAlert(false)}
+                  className="text-[11px] text-emerald-400 font-bold hover:underline cursor-pointer"
+                >
+                  Lihat Pembahasan di Bawah
+                </button>
+              </div>
             </div>
           </div>
         )}

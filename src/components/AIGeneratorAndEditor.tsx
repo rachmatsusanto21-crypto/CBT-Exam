@@ -45,7 +45,8 @@ import {
   CalendarDays,
   Bookmark,
   FlaskConical,
-  Cloud
+  Cloud,
+  ExternalLink
 } from "lucide-react";
 import { ExamPackage, Question, QuestionOption, QuestionType, MatchingPair, SchoolProfile } from "../types";
 import { generateQuestionsWithGemini, generateImageWithAi } from "../utils/geminiApi";
@@ -882,28 +883,30 @@ export const AIGeneratorAndEditor: React.FC<AIGeneratorAndEditorProps> = ({
             )}
           </button>
 
-          {/* Teacher Sandbox Trial Button */}
+          {/* Teacher Sandbox Trial Button in New Tab */}
           {onStartTeacherTrial && (
             <button
               id="teacher-trial-cbt-btn"
               onClick={onStartTeacherTrial}
               className="flex items-center gap-1.5 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl font-bold text-xs transition-all shadow-lg shadow-amber-950 cursor-pointer"
-              title="Uji Coba Pengerjaan CBT bagi Guru (Hasil & analisis butir tidak dimasukkan ke sistem pengolahan nilai siswa)"
+              title="Uji Coba Pengerjaan CBT bagi Guru di Tab Baru (Hasil & analisis butir tidak dimasukkan ke sistem pengolahan nilai siswa)"
             >
               <FlaskConical className="w-4 h-4" />
-              <span>Uji Coba CBT Guru</span>
+              <span>Uji Coba CBT Guru (Tab Baru)</span>
+              <ExternalLink className="w-3 h-3 text-amber-200" />
             </button>
           )}
 
-          {/* Apply & Preview Slides CBT */}
+          {/* Apply & Preview Slides CBT in New Tab */}
           <button
             id="preview-slides-btn"
             onClick={onPreviewSlides}
             className="flex items-center gap-1.5 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold text-xs transition-all shadow-lg shadow-indigo-950 cursor-pointer"
-            title="Terapkan Naskah Soal ke Slide CBT & Uji Mode Siswa"
+            title="Terapkan Naskah Soal ke Slide CBT & Buka Mode Siswa di Tab Baru"
           >
             <Layers className="w-4 h-4" />
-            <span>Terapkan ke CBT</span>
+            <span>Terapkan ke CBT (Tab Baru)</span>
+            <ExternalLink className="w-3 h-3 text-indigo-200" />
           </button>
         </div>
       </div>

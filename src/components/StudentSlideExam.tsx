@@ -1273,19 +1273,6 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
               <ChevronRight className="w-4 h-4" />
             </button>
           </form>
-
-          {/* Discrete exit link (only visible in internal testing view, hidden for direct students) */}
-          {!isDirectLink && (
-            <div className="text-center pt-2 border-t border-slate-800">
-              <button
-                type="button"
-                onClick={onExit}
-                className="text-xs text-slate-500 hover:text-slate-400 underline cursor-pointer"
-              >
-                Masuk sebagai Guru / Administrator
-              </button>
-            </div>
-          )}
         </div>
       </div>
     );
@@ -1341,10 +1328,16 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
               <span>Ulangi dari Awal</span>
             </button>
             <button
-              onClick={onExit}
+              onClick={() => {
+                if (typeof window !== "undefined") {
+                  window.close();
+                }
+                onExit?.();
+              }}
               className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border border-slate-700 rounded-xl text-xs font-bold transition-all shadow-sm cursor-pointer"
+              title="Tutup tab simulasi ini"
             >
-              Selesai & Keluar
+              Tutup Tab Simulasi
             </button>
           </div>
         </div>
