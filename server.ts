@@ -544,8 +544,14 @@ app.post("/api/exams/share", (req, res) => {
       updatedAt: new Date().toISOString(),
     };
 
-    if (cleanId) sharedExamsRegistry.set(cleanId, record);
-    if (cleanCode) sharedExamsRegistry.set(cleanCode, record);
+    if (cleanId) {
+      sharedExamsRegistry.set(cleanId, record);
+      sharedExamsRegistry.set(cleanId.toUpperCase(), record);
+    }
+    if (cleanCode) {
+      sharedExamsRegistry.set(cleanCode, record);
+      sharedExamsRegistry.set(cleanCode.toUpperCase(), record);
+    }
 
     saveExamsToDisk(sharedExamsRegistry);
 

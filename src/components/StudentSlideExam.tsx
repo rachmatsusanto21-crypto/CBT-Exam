@@ -420,6 +420,51 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
     return () => clearInterval(timer);
   }, [isLoggedIn, isSubmitted, currentQuestionIndex, activeQuestions]);
 
+  // Ref and helper for throttled real-time sync to server and cloud
+  const syncDebounceTimerRef = useRef<any>(null);
+  const queueSessionLiveSync = (targetSession: StudentExamSession, immediate = false) => {
+    if (isTeacherTrial || !targetSession || !targetSession.id) return;
+
+    // 1. Broadcast locally (cross-tab)
+    broadcastLiveSession(targetSession);
+
+    // 2. Clear any pending debounced sync
+    if (syncDebounceTimerRef.current) {
+      clearTimeout(syncDebounceTimerRef.current);
+      syncDebounceTimerRef.current = null;
+    }
+
+    if (immediate) {
+      syncStudentSessionToFirestore(targetSession, true).catch(() => {});
+      return;
+    }
+
+    // Debounce rapid typing/clicking by 1.2 seconds
+    syncDebounceTimerRef.current = setTimeout(() => {
+      syncStudentSessionToFirestore(targetSession, false).catch(() => {});
+    }, 1200);
+  };
+
+  // Heartbeat to proctor dashboard every 5 seconds (updates online status, elapsed time, current slide)
+  useEffect(() => {
+    if (!isLoggedIn || isSubmitted || !session || isTeacherTrial) return;
+
+    const interval = setInterval(() => {
+      const activeSess = sessionRef.current || session;
+      if (!activeSess || activeSess.status !== "in_progress") return;
+
+      const elapsed = Math.max(0, exam.durationMinutes * 60 - secondsRemaining);
+      const updatedHeartbeat: StudentExamSession = {
+        ...activeSess,
+        currentSlideIndex,
+        timeSpentSeconds: elapsed,
+      };
+      syncStudentSessionToFirestore(updatedHeartbeat, false).catch(() => {});
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [isLoggedIn, isSubmitted, session?.id, currentSlideIndex, secondsRemaining, isTeacherTrial, exam.durationMinutes]);
+
   // Handle Timeout Auto-submit
   useEffect(() => {
     if (!isLoggedIn || isSubmitted) return;
@@ -476,6 +521,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
 
     setSession(updatedSession);
     onSaveSession(updatedSession);
+    queueSessionLiveSync(updatedSession, true);
 
     // Show warning alert modal
     setViolationAlertModal({
@@ -668,7 +714,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
 
     setSession(updatedSession);
     onSaveSession(updatedSession);
-    broadcastLiveSession(updatedSession);
+    queueSessionLiveSync(updatedSession, false);
   };
 
   // Text Answer Handler (for isian_singkat and uraian)
@@ -721,7 +767,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
 
     setSession(updatedSession);
     onSaveSession(updatedSession);
-    broadcastLiveSession(updatedSession);
+    queueSessionLiveSync(updatedSession, false);
   };
 
   // Matching Pair Answer Handler (for menjodohkan)
@@ -778,7 +824,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
 
     setSession(updatedSession);
     onSaveSession(updatedSession);
-    broadcastLiveSession(updatedSession);
+    queueSessionLiveSync(updatedSession, false);
   };
 
   const handleToggleFlag = (questionId: string) => {

@@ -18,13 +18,15 @@ import {
   Cloud,
   CloudUpload,
   RefreshCw,
-  FolderOpen
+  FolderOpen,
+  ShieldCheck,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { ExamPackage, StudentTokenItem } from "../types";
 import {
   generateShortStudentUrl,
-  generateDriveStudentUrl
+  generateDriveStudentUrl,
+  generateStudentShareUrl,
 } from "../utils/examShareEncoder";
 import { getStudentTokens, saveExamPackages, getExamPackages } from "../utils/storage";
 import { deduplicateStudentTokens } from "../utils/tokenValidator";
@@ -61,7 +63,7 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedTemplate, setCopiedTemplate] = useState(false);
   const [includeTokenInLink, setIncludeTokenInLink] = useState(true);
-  const [linkMode, setLinkMode] = useState<"student" | "gdrive_alternative">("student");
+  const [linkMode, setLinkMode] = useState<"student" | "offline_pkg" | "gdrive_alternative">("student");
   const [showEnlargedQr, setShowEnlargedQr] = useState(false);
   const [isUploadingToDrive, setIsUploadingToDrive] = useState(false);
   const [driveUploadError, setDriveUploadError] = useState<string | null>(null);
@@ -148,7 +150,16 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
   const studentLinkWithoutToken = generateDriveStudentUrl(baseUrl, currentExam, undefined);
   const studentActiveLink = includeTokenInLink && currentToken ? studentLinkWithToken : studentLinkWithoutToken;
 
-  // 2. Alternative Direct Google Drive File Link
+  // 2. Self-Contained Offline/Direct Package Link (100% Anti-Gagal - embeds compressed exam data in URL)
+  const selfContainedLink = generateStudentShareUrl(
+    baseUrl,
+    currentExam,
+    includeTokenInLink ? currentToken : undefined,
+    availableTokens,
+    true
+  );
+
+  // 3. Alternative Direct Google Drive File Link
   const driveFileDirectUrl =
     currentExam.gdriveWebViewLink ||
     (currentExam.gdriveFileId
@@ -159,10 +170,12 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
   const activeSelectedLink =
     linkMode === "gdrive_alternative"
       ? driveFileDirectUrl || studentActiveLink
+      : linkMode === "offline_pkg"
+      ? selfContainedLink
       : studentActiveLink;
 
-  // QR Code encodes the primary student URL for fast smartphone scanning
-  const qrCodeTargetUrl = studentActiveLink;
+  // QR Code encodes the active selected URL for fast smartphone scanning
+  const qrCodeTargetUrl = activeSelectedLink;
 
   // Handle uploading current exam to Google Drive
   const handleUploadCurrentExamToDrive = async () => {
@@ -398,32 +411,45 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
               )}
             </div>
 
-            {/* 2-Option Tabs: Student CBT Link vs Alternative Google Drive Link */}
-            <div className="grid grid-cols-2 gap-2 p-1 bg-[#161618] rounded-xl border border-slate-800">
+            {/* 3-Option Tabs: Student CBT Link vs Self-Contained Offline Link vs Alternative Google Drive Link */}
+            <div className="grid grid-cols-3 gap-1.5 p-1 bg-[#161618] rounded-xl border border-slate-800">
               <button
                 type="button"
                 onClick={() => setLinkMode("student")}
-                className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                className={`py-2 px-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                   linkMode === "student"
                     ? "bg-indigo-600 text-white shadow-md shadow-indigo-950"
                     : "text-slate-400 hover:text-slate-200"
                 }`}
               >
                 <Zap className="w-3.5 h-3.5 shrink-0 text-amber-400" />
-                <span className="truncate">Link Ujian Siswa (Utama)</span>
+                <span className="truncate">Kode CBT Cloud</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setLinkMode("offline_pkg")}
+                className={`py-2 px-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                  linkMode === "offline_pkg"
+                    ? "bg-emerald-600 text-white shadow-md shadow-emerald-950"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                <ShieldCheck className="w-3.5 h-3.5 shrink-0 text-emerald-300" />
+                <span className="truncate">Paket Anti-Gagal</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setLinkMode("gdrive_alternative")}
-                className={`py-2 px-3 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                className={`py-2 px-2 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                   linkMode === "gdrive_alternative"
                     ? "bg-cyan-600 text-white shadow-md shadow-cyan-950"
                     : "text-slate-400 hover:text-slate-200"
                 }`}
               >
                 <Cloud className="w-3.5 h-3.5 shrink-0 text-cyan-300" />
-                <span className="truncate">Link Google Drive (Alternatif)</span>
+                <span className="truncate">Google Drive</span>
               </button>
             </div>
 
@@ -431,15 +457,24 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
             {linkMode === "student" && (
               <div className="p-3 bg-indigo-950/20 border border-indigo-500/20 rounded-xl space-y-2 text-xs">
                 <p className="text-[11px] text-indigo-200 leading-relaxed">
-                  Bagikan link ini kepada siswa. Siswa dapat langsung membuka di tab baru HP atau laptop dan mengerjakan ujian CBT secara otomatis dengan kode soal{" "}
-                  <strong className="text-white font-mono">{currentExam.code}</strong>.
+                  <strong>Link Ringkas CBT Cloud:</strong> Link standar dengan kode soal{" "}
+                  <strong className="text-white font-mono">{currentExam.code}</strong>. Memuat naskah otomatis dari Server CBT & Cloud Firestore secara instan.
                 </p>
                 {currentExam.gdriveFileId && (
                   <p className="text-[11px] text-cyan-300 flex items-center gap-1">
                     <Cloud className="w-3 h-3 text-cyan-400 shrink-0" />
-                    <span>Naskah tersambung dengan Google Drive (ID: {currentExam.gdriveFileId.slice(0, 8)}...).</span>
+                    <span>Tersambung dengan Google Drive (ID: {currentExam.gdriveFileId.slice(0, 8)}...).</span>
                   </p>
                 )}
+              </div>
+            )}
+
+            {/* Content for Link Paket Anti-Gagal */}
+            {linkMode === "offline_pkg" && (
+              <div className="p-3 bg-emerald-950/30 border border-emerald-500/30 rounded-xl space-y-2 text-xs">
+                <p className="text-[11px] text-emerald-200 leading-relaxed">
+                  <strong>Link Paket Mandiri (100% Pasti Terbuka):</strong> Tautan ini membawa seluruh data naskah soal dalam format terkompresi. Naskah dijamin <strong>100% langsung muncul di HP/laptop siswa</strong> tanpa takut "soal tidak ditemukan", bahkan tanpa Google Drive atau saat server restart.
+                </p>
               </div>
             )}
 

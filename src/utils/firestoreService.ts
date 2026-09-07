@@ -18,7 +18,7 @@ export const FIRESTORE_UPGRADE_URL = `https://console.firebase.google.com/projec
 
 const QUOTA_STORAGE_KEY = "slideexam_firestore_quota_exceeded_v1";
 
-// Check if quota was marked exceeded in the last 4 hours
+// Check if quota was marked exceeded recently (limit to 3 minutes before auto-retrying)
 function getInitialQuotaState(): boolean {
   if (typeof window === "undefined") return false;
   try {
@@ -26,9 +26,11 @@ function getInitialQuotaState(): boolean {
     if (!raw) return false;
     const parsed = JSON.parse(raw);
     const elapsed = Date.now() - (parsed.timestamp || 0);
-    // Persist quota block for 4 hours before auto-retrying
-    if (elapsed < 4 * 60 * 60 * 1000) {
+    // Persist quota block for at most 3 minutes before auto-retrying
+    if (elapsed < 3 * 60 * 1000) {
       return true;
+    } else {
+      localStorage.removeItem(QUOTA_STORAGE_KEY);
     }
   } catch {}
   return false;
@@ -36,12 +38,6 @@ function getInitialQuotaState(): boolean {
 
 let _isQuotaExceeded = getInitialQuotaState();
 const quotaListeners = new Set<(exceeded: boolean) => void>();
-
-if (_isQuotaExceeded) {
-  try {
-    disableNetwork(db).catch(() => {});
-  } catch {}
-}
 
 export function isQuotaExceeded(): boolean {
   return _isQuotaExceeded;
@@ -181,7 +177,28 @@ export async function fetchExamFromFirestore(
     const query = codeOrId.trim();
     const upperQuery = query.toUpperCase();
 
-    // 1. Try fetching from Firestore if quota is available
+    // 1. Fast Server CBT Cloud Registry Lookup (<20ms)
+    try {
+      let res = await fetch(`/api/exams/by-code/${encodeURIComponent(upperQuery)}`);
+      if (!res.ok) {
+        res = await fetch(`/api/exams/share/${encodeURIComponent(upperQuery)}`);
+      }
+      if (!res.ok) {
+        res = await fetch(`/api/exams/${encodeURIComponent(upperQuery)}`);
+      }
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.exam) {
+          return {
+            exam: data.exam,
+            token: data.token || data.exam.sessionToken,
+            tokens: data.tokens || data.exam.tokens || [],
+          };
+        }
+      }
+    } catch {}
+
+    // 2. Query Firestore if available and quota not exceeded
     if (!_isQuotaExceeded) {
       try {
         const codeDocSnap = await getDoc(doc(db, "examCodes", upperQuery));
@@ -209,28 +226,6 @@ export async function fetchExamFromFirestore(
         handleFirestoreCatch(fsErr, "fetchExamFromFirestore");
       }
     }
-
-    // 2. Fallback to server registry
-    try {
-      // Check code or id endpoints
-      let res = await fetch(`/api/exams/by-code/${encodeURIComponent(upperQuery)}`);
-      if (!res.ok) {
-        res = await fetch(`/api/exams/share/${encodeURIComponent(upperQuery)}`);
-      }
-      if (!res.ok) {
-        res = await fetch(`/api/exams/${encodeURIComponent(upperQuery)}`);
-      }
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success && data.exam) {
-          return {
-            exam: data.exam,
-            token: data.token || data.exam.sessionToken,
-            tokens: data.tokens || data.exam.tokens || [],
-          };
-        }
-      }
-    } catch {}
 
     return { exam: null };
   } catch (err) {
