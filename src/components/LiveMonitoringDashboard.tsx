@@ -53,9 +53,34 @@ interface LiveMonitoringDashboardProps {
   history: StudentExamSession[];
   tokens: StudentTokenItem[];
   onForceSubmitStudent: (sessionId: string) => void;
-  onResetStudentSession: (sessionId: string) => void;
+  onResetStudentSession: (sessionId?: string, studentName?: string, token?: string, nisn?: string) => void;
+  onDeleteStudent?: (payload: {
+    sessionId?: string;
+    tokenId?: string;
+    studentName: string;
+    token?: string;
+    nisn?: string;
+  }) => void;
+  onBatchDeleteStudents?: (
+    students: Array<{
+      sessionId?: string;
+      tokenId?: string;
+      studentName: string;
+      token?: string;
+      nisn?: string;
+    }>
+  ) => void;
+  onBatchResetSessions?: (
+    students: Array<{
+      sessionId?: string;
+      studentName: string;
+      token?: string;
+      nisn?: string;
+    }>
+  ) => void;
   onUpdateHistory?: (updatedHistory: StudentExamSession[]) => void;
   onUpdateTokens?: (updatedTokens: StudentTokenItem[]) => void;
+  onUpdateExam?: (updatedExam: ExamPackage) => void;
 }
 
 export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = ({
@@ -65,8 +90,12 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
   tokens,
   onForceSubmitStudent,
   onResetStudentSession,
+  onDeleteStudent,
+  onBatchDeleteStudents,
+  onBatchResetSessions,
   onUpdateHistory,
   onUpdateTokens,
+  onUpdateExam,
 }) => {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterClass, setFilterClass] = useState("all");
@@ -370,10 +399,12 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
       onUpdateHistory?.(updatedHistory);
     } else {
       // If session was cleared (set to not started)
-      if (editingStudentRow?.session) {
-        const updatedHistory = history.filter((h) => h.id !== editingStudentRow.session?.id);
-        onUpdateHistory?.(updatedHistory);
-      }
+      onResetStudentSession(
+        editingStudentRow?.session?.id,
+        updatedToken.studentName,
+        updatedToken.token,
+        updatedToken.nisn
+      );
     }
 
     showActionFeedback(`Data dan status pengerjaan siswa "${updatedToken.studentName}" berhasil diperbarui.`);
@@ -382,21 +413,32 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
   // --- SUPERVISOR ACTIONS: DELETE ---
   const handleDeleteSingleStudent = (row: StudentRowItem) => {
     const studentName = row.session?.studentName || row.tokenItem.studentName;
-    if (confirm(`Apakah Anda yakin ingin menghapus data siswa "${studentName}"? Riwayat sesi dan token terkait akan dihapus.`)) {
-      // Remove from history if session exists
-      if (row.session) {
-        const updatedHistory = history.filter((h) => h.id !== row.session?.id);
-        onUpdateHistory?.(updatedHistory);
-      }
-      // Remove from tokens if exists
-      if (tokens.some((t) => t.id === row.tokenItem.id)) {
-        const updatedTokens = tokens.filter((t) => t.id !== row.tokenItem.id);
-        onUpdateTokens?.(updatedTokens);
+    const token = row.session?.token || row.tokenItem.token;
+    const nisn = row.session?.nisn || row.tokenItem.nisn;
+    const sessionId = row.session?.id;
+    const tokenId = row.tokenItem.id;
+
+    if (confirm(`Apakah Anda yakin ingin menghapus data siswa "${studentName}"? Riwayat sesi pengerjaan, jawaban, dan token ujian terkait akan dihapus secara permanen.`)) {
+      if (onDeleteStudent) {
+        onDeleteStudent({
+          sessionId,
+          tokenId,
+          studentName,
+          token,
+          nisn,
+        });
+      } else {
+        // Fallback:
+        onResetStudentSession(sessionId, studentName, token, nisn);
+        if (tokens.some((t) => t.id === tokenId)) {
+          const updatedTokens = tokens.filter((t) => t.id !== tokenId);
+          onUpdateTokens?.(updatedTokens);
+        }
       }
 
-      if (selectedIds.has(row.tokenItem.id)) {
+      if (selectedIds.has(tokenId)) {
         const next = new Set(selectedIds);
-        next.delete(row.tokenItem.id);
+        next.delete(tokenId);
         setSelectedIds(next);
       }
 
@@ -408,17 +450,29 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
   const handleBatchDelete = () => {
     if (selectedIds.size === 0) return;
     const selectedRows = studentRows.filter((r) => selectedIds.has(r.tokenItem.id));
-    if (confirm(`Hapus ${selectedRows.length} data siswa terpilih? Seluruh riwayat pengerjaan dan token ujian terkait akan dibersihkan.`)) {
-      const sessionIdsToDelete = new Set(selectedRows.map((r) => r.session?.id).filter(Boolean));
-      const tokenIdsToDelete = new Set(selectedRows.map((r) => r.tokenItem.id));
+    if (confirm(`Hapus ${selectedRows.length} data siswa terpilih? Seluruh riwayat pengerjaan, jawaban, dan token ujian terkait akan dibersihkan dari server & database.`)) {
+      if (onBatchDeleteStudents) {
+        onBatchDeleteStudents(
+          selectedRows.map((r) => ({
+            sessionId: r.session?.id,
+            tokenId: r.tokenItem.id,
+            studentName: r.session?.studentName || r.tokenItem.studentName,
+            token: r.session?.token || r.tokenItem.token,
+            nisn: r.session?.nisn || r.tokenItem.nisn,
+          }))
+        );
+      } else {
+        const sessionIdsToDelete = new Set(selectedRows.map((r) => r.session?.id).filter(Boolean));
+        const tokenIdsToDelete = new Set(selectedRows.map((r) => r.tokenItem.id));
 
-      if (sessionIdsToDelete.size > 0) {
-        const updatedHistory = history.filter((h) => !sessionIdsToDelete.has(h.id));
-        onUpdateHistory?.(updatedHistory);
+        if (sessionIdsToDelete.size > 0) {
+          const updatedHistory = history.filter((h) => !sessionIdsToDelete.has(h.id));
+          onUpdateHistory?.(updatedHistory);
+        }
+
+        const updatedTokens = tokens.filter((t) => !tokenIdsToDelete.has(t.id));
+        onUpdateTokens?.(updatedTokens);
       }
-
-      const updatedTokens = tokens.filter((t) => !tokenIdsToDelete.has(t.id));
-      onUpdateTokens?.(updatedTokens);
 
       setSelectedIds(new Set());
       showActionFeedback(`Berhasil menghapus ${selectedRows.length} data siswa terpilih.`);
@@ -446,22 +500,37 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
   };
 
   const handleBatchResetSessions = () => {
-    const sessionRows = studentRows.filter(
-      (r) => selectedIds.has(r.tokenItem.id) && r.session !== null
+    const targetRows = studentRows.filter(
+      (r) => selectedIds.has(r.tokenItem.id) && (r.session !== null || r.tokenItem.status !== "belum_mulai")
     );
 
-    if (sessionRows.length === 0) {
-      alert("Tidak ada siswa dengan sesi aktif di antara pilihan yang dicentang.");
+    if (targetRows.length === 0) {
+      alert("Tidak ada siswa dengan sesi aktif atau status ujian berjalan di antara pilihan yang dicentang.");
       return;
     }
 
-    if (confirm(`Reset sesi pengerjaan untuk ${sessionRows.length} siswa terpilih? Jawaban tersimpan akan dikosongkan agar siswa dapat memulai tes dari awal.`)) {
-      sessionRows.forEach((r) => {
-        if (r.session) {
-          onResetStudentSession(r.session.id);
-        }
-      });
-      showActionFeedback(`Sesi pengerjaan ${sessionRows.length} siswa berhasil di-reset.`);
+    if (confirm(`Reset sesi pengerjaan untuk ${targetRows.length} siswa terpilih? Jawaban tersimpan akan dikosongkan dan status diubah ke 'Belum Mulai' agar siswa dapat memulai tes dari awal.`)) {
+      if (onBatchResetSessions) {
+        onBatchResetSessions(
+          targetRows.map((r) => ({
+            sessionId: r.session?.id,
+            studentName: r.session?.studentName || r.tokenItem.studentName,
+            token: r.session?.token || r.tokenItem.token,
+            nisn: r.session?.nisn || r.tokenItem.nisn,
+          }))
+        );
+      } else {
+        targetRows.forEach((r) => {
+          onResetStudentSession(
+            r.session?.id,
+            r.session?.studentName || r.tokenItem.studentName,
+            r.session?.token || r.tokenItem.token,
+            r.session?.nisn || r.tokenItem.nisn
+          );
+        });
+      }
+      setSelectedIds(new Set());
+      showActionFeedback(`Sesi pengerjaan ${targetRows.length} siswa berhasil di-reset menjadi Belum Mulai.`);
     }
   };
 
@@ -933,20 +1002,21 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
                             </button>
                           )}
 
-                          {/* 5. RESET SESSION: If session exists */}
-                          {session && (
+                          {/* 5. RESET SESSION: If session exists or status is not belum_mulai */}
+                          {(session || tokenItem.status !== "belum_mulai") && (
                             <button
                               type="button"
                               onClick={() => {
-                                if (confirm(`Reset sesi pengerjaan siswa "${tokenItem.studentName}"? Siswa dapat mengulang ujian dari awal.`)) {
-                                  onResetStudentSession(session.id);
-                                  showActionFeedback(`Sesi ujian "${tokenItem.studentName}" berhasil di-reset.`);
+                                const sName = tokenItem.studentName;
+                                if (confirm(`Reset sesi pengerjaan siswa "${sName}"? Seluruh jawaban tersimpan akan dikosongkan dan status diubah ke 'Belum Mulai' agar siswa dapat mengulang ujian dari awal.`)) {
+                                  onResetStudentSession(session?.id, sName, tokenItem.token, tokenItem.nisn);
+                                  showActionFeedback(`Sesi ujian "${sName}" berhasil di-reset menjadi Belum Mulai.`);
                                 }
                               }}
-                              className="p-1.5 text-slate-400 hover:text-amber-400 hover:bg-amber-500/10 border border-slate-800 hover:border-amber-500/30 rounded-lg transition-colors cursor-pointer"
-                              title="Reset Sesi Siswa (Mulai Ulang)"
+                              className="p-1.5 text-amber-400 hover:text-white hover:bg-amber-500/20 border border-amber-500/30 rounded-lg transition-colors cursor-pointer"
+                              title="Reset Sesi Siswa (Mulai Ulang dari Awal)"
                             >
-                              <RefreshCw className="w-3.5 h-3.5" />
+                              <RotateCcw className="w-3.5 h-3.5" />
                             </button>
                           )}
 
@@ -954,7 +1024,7 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
                           <button
                             type="button"
                             onClick={() => handleDeleteSingleStudent({ tokenItem, session })}
-                            className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-500/15 border border-transparent hover:border-rose-500/30 rounded-lg transition-colors cursor-pointer"
+                            className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/15 border border-slate-800 hover:border-rose-500/30 rounded-lg transition-colors cursor-pointer"
                             title="Hapus Data Siswa & Sesi Ujian"
                           >
                             <Trash2 className="w-4 h-4" />

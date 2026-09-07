@@ -153,7 +153,7 @@ export const LiveStudentEditModal: React.FC<LiveStudentEditModalProps> = ({
       className: trimmedClass,
       token: trimmedToken,
       examCode: exam.code,
-      status: examStatus === "submitted" ? "selesai" : "active",
+      status: examStatus === "submitted" ? "selesai" : examStatus === "not_started" ? "belum_mulai" : "sedang_mengerjakan",
     };
 
     let updatedSession: StudentExamSession | null = null;

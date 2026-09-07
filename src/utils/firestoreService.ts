@@ -1,4 +1,4 @@
-import { db } from "../firebase";
+import { db, firebaseConfig } from "../firebase";
 import {
   doc,
   getDoc,
@@ -9,8 +9,11 @@ import {
   deleteDoc,
   disableNetwork,
   enableNetwork,
+  query,
+  where,
 } from "firebase/firestore";
 import { ExamPackage, StudentTokenItem, StudentExamSession } from "../types";
+import { broadcastLiveSessionReset } from "./liveSync";
 
 export const FIRESTORE_PROJECT_ID = "gen-lang-client-0464440670";
 export const FIRESTORE_DATABASE_ID = "ai-studio-slideexamcbtujia-337b5171-4150-47ed-a493-fc87b19bc190";
@@ -445,25 +448,144 @@ export function subscribeToExamSessions(
 }
 
 /**
- * Delete / Reset student session from Firestore & server
+ * Delete / Reset student session from Firestore, Server, and Broadcast to student devices.
  */
-export async function deleteStudentSessionFromFirestore(sessionId: string): Promise<boolean> {
+export async function deleteStudentSessionFromFirestore(
+  sessionId?: string,
+  studentName?: string,
+  token?: string,
+  examCode?: string,
+  nisn?: string
+): Promise<boolean> {
   try {
-    if (!sessionId) return false;
+    const cleanId = (sessionId || "").trim();
+    const cleanName = (studentName || "").trim();
+    const cleanToken = (token || "").trim();
+    const cleanNisn = (nisn || "").trim();
+    const cleanCode = (examCode || "").trim().toUpperCase();
 
-    // Delete on server
+    if (!cleanId && !cleanName && !cleanToken && !cleanNisn) {
+      return false;
+    }
+
+    // 1. Broadcast reset so any open student browser tab immediately exits to login
+    broadcastLiveSessionReset({
+      sessionId: cleanId || undefined,
+      studentName: cleanName || undefined,
+      token: cleanToken || undefined,
+      nisn: cleanNisn || undefined,
+      examCode: cleanCode || undefined,
+    });
+
+    // 2. Delete on Express server
     try {
-      fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" }).catch(() => {});
+      const targetParam = cleanId || cleanToken || cleanName;
+      if (targetParam) {
+        fetch(`/api/sessions/${encodeURIComponent(targetParam)}`, { method: "DELETE" }).catch(() => {});
+      }
     } catch {}
 
-    // Delete in Firestore if quota allows
+    // 3. Delete in Firestore if quota allows
     if (!_isQuotaExceeded) {
-      await deleteDoc(doc(db, "sessions", sessionId));
+      // If direct document ID known
+      if (cleanId) {
+        try {
+          await deleteDoc(doc(db, "sessions", cleanId));
+        } catch (e) {
+          // May not exist as exact doc id
+        }
+      }
+
+      // Also clean up by studentName or token or nisn if provided
+      try {
+        const promises: Promise<any>[] = [];
+        if (cleanName) {
+          const qName = query(collection(db, "sessions"), where("studentName", "==", cleanName));
+          const snap = await getDocs(qName);
+          snap.forEach((d) => promises.push(deleteDoc(d.ref)));
+        }
+        if (cleanToken && (!cleanId || cleanToken !== cleanId)) {
+          const qToken = query(collection(db, "sessions"), where("token", "==", cleanToken));
+          const snap = await getDocs(qToken);
+          snap.forEach((d) => promises.push(deleteDoc(d.ref)));
+        }
+        if (promises.length > 0) {
+          await Promise.all(promises);
+        }
+      } catch (qErr) {
+        handleFirestoreCatch(qErr, "deleteStudentSessionFromFirestore-query");
+      }
+    }
+
+    // 4. REST Direct Fallback if direct ID
+    if (cleanId && firebaseConfig.projectId && firebaseConfig.apiKey) {
+      try {
+        const customDbId = (firebaseConfig as any).firestoreDatabaseId || "(default)";
+        const restUrl = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${customDbId}/documents/sessions/${encodeURIComponent(cleanId)}?key=${firebaseConfig.apiKey}`;
+        fetch(restUrl, { method: "DELETE" }).catch(() => {});
+      } catch {}
     }
 
     return true;
   } catch (err) {
     handleFirestoreCatch(err, "deleteStudentSessionFromFirestore");
+    return false;
+  }
+}
+
+export interface BatchDeleteOptions {
+  sessionIds?: string[];
+  studentNames?: string[];
+  tokens?: string[];
+  nisns?: string[];
+  examCode?: string;
+  examId?: string;
+}
+
+/**
+ * Batch delete multiple student sessions from Firestore and server.
+ */
+export async function batchDeleteStudentSessionsFromFirestore(options: BatchDeleteOptions): Promise<boolean> {
+  try {
+    const { sessionIds = [], studentNames = [], tokens = [], nisns = [], examCode, examId } = options;
+
+    // 1. Broadcast reset for all targets
+    studentNames.forEach((name, idx) => {
+      broadcastLiveSessionReset({
+        sessionId: sessionIds[idx] || undefined,
+        studentName: name,
+        token: tokens[idx] || undefined,
+        nisn: nisns[idx] || undefined,
+        examCode,
+      });
+    });
+
+    // 2. Call server batch delete endpoint
+    try {
+      fetch("/api/sessions/batch-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(options),
+      }).catch(() => {});
+    } catch {}
+
+    // 3. Firestore doc deletions
+    if (!_isQuotaExceeded) {
+      const deletePromises: Promise<any>[] = [];
+
+      // Direct doc deletions by ID
+      for (const sId of sessionIds) {
+        if (sId) {
+          deletePromises.push(deleteDoc(doc(db, "sessions", sId)).catch(() => {}));
+        }
+      }
+
+      await Promise.all(deletePromises);
+    }
+
+    return true;
+  } catch (err) {
+    handleFirestoreCatch(err, "batchDeleteStudentSessionsFromFirestore");
     return false;
   }
 }

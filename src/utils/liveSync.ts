@@ -3,8 +3,19 @@ import { StudentExamSession } from "../types";
 const CHANNEL_NAME = "slideexam_live_sessions_channel_v1";
 const STORAGE_SYNC_KEY = "slideexam_latest_session_broadcast_v1";
 
+export interface SessionResetPayload {
+  sessionId?: string;
+  studentName?: string;
+  token?: string;
+  examCode?: string;
+  nisn?: string;
+}
+
 type SessionListener = (session: StudentExamSession) => void;
+type ResetListener = (resetPayload: SessionResetPayload) => void;
+
 const listeners = new Set<SessionListener>();
+const resetListeners = new Set<ResetListener>();
 
 let broadcastChannel: BroadcastChannel | null = null;
 
@@ -19,6 +30,15 @@ if (typeof window !== "undefined" && "BroadcastChannel" in window) {
             fn(incomingSession);
           } catch (e) {
             console.error("LiveSync listener error:", e);
+          }
+        });
+      } else if (event?.data && event.data.type === "SESSION_RESET") {
+        const payload = event.data.payload;
+        resetListeners.forEach((fn) => {
+          try {
+            fn(payload);
+          } catch (e) {
+            console.error("LiveSync reset listener error:", e);
           }
         });
       }
@@ -41,6 +61,14 @@ if (typeof window !== "undefined") {
               fn(incoming);
             } catch (e) {
               console.error("Storage sync listener error:", e);
+            }
+          });
+        } else if (payload && payload.type === "SESSION_RESET" && payload.resetPayload) {
+          resetListeners.forEach((fn) => {
+            try {
+              fn(payload.resetPayload);
+            } catch (e) {
+              console.error("Storage reset listener error:", e);
             }
           });
         }
@@ -99,3 +127,61 @@ export function subscribeToLiveSessions(listener: SessionListener): () => void {
     listeners.delete(listener);
   };
 }
+
+export interface SessionResetPayload {
+  sessionId?: string;
+  studentName?: string;
+  token?: string;
+  nisn?: string;
+  examCode?: string;
+}
+
+/**
+ * Broadcast a student session reset / deletion so all student views reset to initial state.
+ */
+export function broadcastLiveSessionReset(payload: SessionResetPayload): void {
+  if (!payload) return;
+
+  // 1. BroadcastChannel
+  if (broadcastChannel) {
+    try {
+      broadcastChannel.postMessage({
+        type: "SESSION_RESET",
+        payload,
+        timestamp: Date.now(),
+      });
+    } catch (e) {
+      console.warn("Failed to broadcast session reset via channel:", e);
+    }
+  }
+
+  // 2. LocalStorage event
+  try {
+    localStorage.setItem(
+      STORAGE_SYNC_KEY,
+      JSON.stringify({ type: "SESSION_RESET", resetPayload: payload, timestamp: Date.now() })
+    );
+  } catch (e) {
+    // ignore
+  }
+
+  // 3. In-tab listeners
+  resetListeners.forEach((fn) => {
+    try {
+      fn(payload);
+    } catch (err) {
+      console.error("In-tab reset listener error:", err);
+    }
+  });
+}
+
+/**
+ * Subscribe to session reset notifications across tabs.
+ */
+export function subscribeToSessionResets(listener: ResetListener): () => void {
+  resetListeners.add(listener);
+  return () => {
+    resetListeners.delete(listener);
+  };
+}
+

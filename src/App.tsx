@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   GraduationCap,
   Sparkles,
@@ -62,7 +62,7 @@ import { DirectStudentShareModal } from "./components/DirectStudentShareModal";
 import { getGeminiRequestHeaders } from "./utils/storage";
 import { normalizeToken, deduplicateStudentTokens } from "./utils/tokenValidator";
 import { decodeExamFromCurrentUrl, decodeExamFromUrlString } from "./utils/examShareEncoder";
-import { broadcastLiveSession, subscribeToLiveSessions } from "./utils/liveSync";
+import { broadcastLiveSession, subscribeToLiveSessions, subscribeToSessionResets } from "./utils/liveSync";
 import { loadExamFromGoogleDrive, findAndLoadExamFromDriveByCode, extractGoogleDriveFileId } from "./utils/googleDrive";
 import {
   syncExamToFirestore,
@@ -71,6 +71,7 @@ import {
   subscribeToExamSessions,
   fetchExamSessions,
   deleteStudentSessionFromFirestore,
+  batchDeleteStudentSessionsFromFirestore,
   subscribeQuotaStatus,
   resetQuotaCheck,
   FIRESTORE_UPGRADE_URL
@@ -226,6 +227,17 @@ export default function App() {
 
   const [history, setHistoryState] = useState<StudentExamSession[]>(getExamHistory);
   const [activeSession, setActiveSessionState] = useState<StudentExamSession | null>(getActiveStudentSession);
+
+  // Keep track of recently deleted session keys to prevent momentary race-condition re-additions from Firestore
+  const recentlyDeletedKeysRef = useRef<Map<string, number>>(new Map());
+
+  const markRecentlyDeleted = (id?: string, name?: string, token?: string, nisn?: string) => {
+    const expiresAt = Date.now() + 20000;
+    if (id) recentlyDeletedKeysRef.current.set(id, expiresAt);
+    if (name) recentlyDeletedKeysRef.current.set(name.trim().toLowerCase(), expiresAt);
+    if (token) recentlyDeletedKeysRef.current.set(token.trim().toLowerCase(), expiresAt);
+    if (nisn) recentlyDeletedKeysRef.current.set(nisn.trim(), expiresAt);
+  };
 
   const [isFetchingRemoteExam, setIsFetchingRemoteExam] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
@@ -611,12 +623,35 @@ export default function App() {
 
     const mergeIncomingSessions = (remoteSessions: StudentExamSession[]) => {
       if (!remoteSessions || remoteSessions.length === 0) return;
+      const now = Date.now();
+      // Clean expired
+      for (const [key, exp] of recentlyDeletedKeysRef.current.entries()) {
+        if (now > exp) recentlyDeletedKeysRef.current.delete(key);
+      }
+
+      // Filter out any sessions that were recently deleted/reset
+      const validRemote = remoteSessions.filter((rs) => {
+        if (!rs) return false;
+        if (rs.id && recentlyDeletedKeysRef.current.has(rs.id)) return false;
+        if (rs.studentName && recentlyDeletedKeysRef.current.has(rs.studentName.trim().toLowerCase())) return false;
+        if (rs.token && recentlyDeletedKeysRef.current.has(rs.token.trim().toLowerCase())) return false;
+        if (rs.nisn && recentlyDeletedKeysRef.current.has(rs.nisn.trim())) return false;
+        return true;
+      });
+
       setHistoryState((prevHistory) => {
         const sessionMap = new Map<string, StudentExamSession>();
         prevHistory.forEach((h) => {
-          if (h && h.id) sessionMap.set(h.id, h);
+          if (h && h.id) {
+            const isDeleted =
+              recentlyDeletedKeysRef.current.has(h.id) ||
+              (h.studentName && recentlyDeletedKeysRef.current.has(h.studentName.trim().toLowerCase())) ||
+              (h.token && recentlyDeletedKeysRef.current.has(h.token.trim().toLowerCase())) ||
+              (h.nisn && recentlyDeletedKeysRef.current.has(h.nisn.trim()));
+            if (!isDeleted) sessionMap.set(h.id, h);
+          }
         });
-        remoteSessions.forEach((rs) => {
+        validRemote.forEach((rs) => {
           if (rs && rs.id) sessionMap.set(rs.id, rs);
         });
         const merged = Array.from(sessionMap.values());
@@ -643,12 +678,48 @@ export default function App() {
     // 3. Real-time Firestore subscription (onSnapshot)
     const unsubscribeFirestore = subscribeToExamSessions(currentId, currentCode, mergeIncomingSessions);
 
-    // 4. Periodic fallback poll every 3 seconds for remote multi-device sync
+    // 4. Listen to live session resets/deletions so student views and teacher views clear immediately
+    const unsubscribeReset = subscribeToSessionResets((payload) => {
+      if (!payload) return;
+      const cleanId = payload.sessionId;
+      const cleanName = payload.studentName?.trim().toLowerCase();
+      const cleanToken = payload.token?.trim().toLowerCase();
+      const cleanNisn = payload.nisn?.trim();
+
+      markRecentlyDeleted(cleanId, payload.studentName, payload.token, payload.nisn);
+
+      setHistoryState((prevHistory) => {
+        const updated = prevHistory.filter((item) => {
+          const matchId = cleanId && item.id === cleanId;
+          const matchName = cleanName && item.studentName.trim().toLowerCase() === cleanName;
+          const matchToken = cleanToken && item.token.trim().toLowerCase() === cleanToken;
+          const matchNisn = cleanNisn && item.nisn && item.nisn.trim() === cleanNisn;
+          return !(matchId || matchName || matchToken || matchNisn);
+        });
+        saveExamHistory(updated);
+        return updated;
+      });
+
+      // Clear active student session if this student was reset
+      setActiveSessionState((prevActive) => {
+        if (!prevActive) return null;
+        const matchId = cleanId && prevActive.id === cleanId;
+        const matchName = cleanName && prevActive.studentName.trim().toLowerCase() === cleanName;
+        const matchToken = cleanToken && prevActive.token.trim().toLowerCase() === cleanToken;
+        if (matchId || matchName || matchToken) {
+          saveActiveStudentSession(null);
+          return null;
+        }
+        return prevActive;
+      });
+    });
+
+    // 5. Periodic fallback poll every 3 seconds for remote multi-device sync
     const pollInterval = setInterval(() => {
       fetchExamSessions(currentId, currentCode).then(mergeIncomingSessions).catch(() => {});
     }, 3000);
 
-    // 5. Cross-tab storage listener
+    // 6. Cross-tab storage listener
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key === "slide_exam_history_v1" && e.newValue) {
         try {
@@ -664,6 +735,7 @@ export default function App() {
     return () => {
       unsubscribeLive();
       unsubscribeFirestore();
+      unsubscribeReset();
       clearInterval(pollInterval);
       window.removeEventListener("storage", handleStorageChange);
     };
@@ -853,15 +925,284 @@ export default function App() {
     handleSubmitStudentExam(finalized);
   };
 
-  const handleResetStudentSession = (sessionId: string) => {
-    const updatedHistory = history.filter((item) => item.id !== sessionId);
-    setHistoryState(updatedHistory);
-    saveExamHistory(updatedHistory);
-    deleteStudentSessionFromFirestore(sessionId).catch(() => {});
+  const handleResetStudentSession = (
+    sessionId?: string,
+    studentName?: string,
+    token?: string,
+    nisn?: string
+  ) => {
+    const cleanId = (sessionId || "").trim();
+    const cleanName = (studentName || "").trim().toLowerCase();
+    const cleanToken = (token || "").trim().toLowerCase();
+    const cleanNisn = (nisn || "").trim();
 
-    if (activeSession?.id === sessionId) {
+    markRecentlyDeleted(cleanId, studentName, token, nisn);
+
+    // 1. Remove from historyState
+    setHistoryState((prevHistory) => {
+      const updatedHistory = prevHistory.filter((item) => {
+        const matchId = cleanId && item.id === cleanId;
+        const matchName = cleanName && item.studentName.trim().toLowerCase() === cleanName;
+        const matchToken = cleanToken && item.token.trim().toLowerCase() === cleanToken;
+        const matchNisn = cleanNisn && item.nisn && item.nisn.trim() === cleanNisn;
+        return !(matchId || matchName || matchToken || matchNisn);
+      });
+      saveExamHistory(updatedHistory);
+      return updatedHistory;
+    });
+
+    // 2. Delete on Firestore & Express server + broadcast reset to student devices
+    deleteStudentSessionFromFirestore(cleanId, studentName, token, activeExam.code, nisn).catch(() => {});
+
+    // 3. Reset token status in global tokens list to "belum_mulai"
+    setTokensState((prevTokens) => {
+      const updatedTokens = prevTokens.map((t) => {
+        const matchId = cleanId && t.id === cleanId;
+        const matchName = cleanName && t.studentName.trim().toLowerCase() === cleanName;
+        const matchToken = cleanToken && t.token.trim().toLowerCase() === cleanToken;
+        const matchNisn = cleanNisn && t.nisn && t.nisn.trim() === cleanNisn;
+        if (matchId || matchName || matchToken || matchNisn) {
+          return { ...t, status: "belum_mulai" as const };
+        }
+        return t;
+      });
+      saveStudentTokens(updatedTokens);
+      return updatedTokens;
+    });
+
+    // 4. Also reset in activeExam.tokens if present
+    if (activeExam.tokens && activeExam.tokens.length > 0) {
+      const updatedExamTokens = activeExam.tokens.map((t) => {
+        const matchName = cleanName && t.studentName.trim().toLowerCase() === cleanName;
+        const matchToken = cleanToken && t.token.trim().toLowerCase() === cleanToken;
+        const matchNisn = cleanNisn && t.nisn && t.nisn.trim() === cleanNisn;
+        if (matchName || matchToken || matchNisn) {
+          return { ...t, status: "belum_mulai" as const };
+        }
+        return t;
+      });
+      handleUpdateActiveExam({ ...activeExam, tokens: updatedExamTokens });
+    }
+
+    // 5. Clear active student session if matching
+    if (
+      activeSession &&
+      (activeSession.id === cleanId ||
+        (cleanName && activeSession.studentName.trim().toLowerCase() === cleanName) ||
+        (cleanToken && activeSession.token.trim().toLowerCase() === cleanToken))
+    ) {
       setActiveSessionState(null);
       saveActiveStudentSession(null);
+    }
+  };
+
+  const handleDeleteStudent = (payload: {
+    sessionId?: string;
+    tokenId?: string;
+    studentName: string;
+    token?: string;
+    nisn?: string;
+  }) => {
+    const cleanId = (payload.sessionId || "").trim();
+    const cleanTokenId = (payload.tokenId || "").trim();
+    const cleanName = (payload.studentName || "").trim().toLowerCase();
+    const cleanToken = (payload.token || "").trim().toLowerCase();
+    const cleanNisn = (payload.nisn || "").trim();
+
+    markRecentlyDeleted(cleanId, payload.studentName, payload.token, payload.nisn);
+
+    // 1. Remove from history
+    setHistoryState((prevHistory) => {
+      const updatedHistory = prevHistory.filter((item) => {
+        const matchId = cleanId && item.id === cleanId;
+        const matchName = cleanName && item.studentName.trim().toLowerCase() === cleanName;
+        const matchToken = cleanToken && item.token.trim().toLowerCase() === cleanToken;
+        const matchNisn = cleanNisn && item.nisn && item.nisn.trim() === cleanNisn;
+        return !(matchId || matchName || matchToken || matchNisn);
+      });
+      saveExamHistory(updatedHistory);
+      return updatedHistory;
+    });
+
+    // 2. Delete on Firestore & Express server + broadcast
+    deleteStudentSessionFromFirestore(cleanId, payload.studentName, payload.token, activeExam.code, payload.nisn).catch(() => {});
+
+    // 3. Remove token from tokensState
+    setTokensState((prevTokens) => {
+      const updatedTokens = prevTokens.filter((t) => {
+        const matchTokenId = cleanTokenId && t.id === cleanTokenId;
+        const matchName = cleanName && t.studentName.trim().toLowerCase() === cleanName;
+        const matchToken = cleanToken && t.token.trim().toLowerCase() === cleanToken;
+        const matchNisn = cleanNisn && t.nisn && t.nisn.trim() === cleanNisn;
+        return !(matchTokenId || matchName || matchToken || matchNisn);
+      });
+      saveStudentTokens(updatedTokens);
+      return updatedTokens;
+    });
+
+    // 4. Remove from activeExam.tokens if present
+    if (activeExam.tokens && activeExam.tokens.length > 0) {
+      const updatedExamTokens = activeExam.tokens.filter((t) => {
+        const matchTokenId = cleanTokenId && t.id === cleanTokenId;
+        const matchName = cleanName && t.studentName.trim().toLowerCase() === cleanName;
+        const matchToken = cleanToken && t.token.trim().toLowerCase() === cleanToken;
+        const matchNisn = cleanNisn && t.nisn && t.nisn.trim() === cleanNisn;
+        return !(matchTokenId || matchName || matchToken || matchNisn);
+      });
+      handleUpdateActiveExam({ ...activeExam, tokens: updatedExamTokens });
+    }
+
+    // 5. Clear active session if matching
+    if (
+      activeSession &&
+      (activeSession.id === cleanId ||
+        (cleanName && activeSession.studentName.trim().toLowerCase() === cleanName) ||
+        (cleanToken && activeSession.token.trim().toLowerCase() === cleanToken))
+    ) {
+      setActiveSessionState(null);
+      saveActiveStudentSession(null);
+    }
+  };
+
+  const handleBatchDeleteStudents = (
+    students: Array<{
+      sessionId?: string;
+      tokenId?: string;
+      studentName: string;
+      token?: string;
+      nisn?: string;
+    }>
+  ) => {
+    if (!students || students.length === 0) return;
+
+    students.forEach((s) => {
+      markRecentlyDeleted(s.sessionId, s.studentName, s.token, s.nisn);
+    });
+
+    const sessionIdsToDelete = new Set(students.map((s) => (s.sessionId || "").trim()).filter(Boolean));
+    const tokenIdsToDelete = new Set(students.map((s) => (s.tokenId || "").trim()).filter(Boolean));
+    const namesToDelete = new Set(students.map((s) => (s.studentName || "").trim().toLowerCase()).filter(Boolean));
+    const tokensToDelete = new Set(students.map((s) => (s.token || "").trim().toLowerCase()).filter(Boolean));
+    const nisnsToDelete = new Set(students.map((s) => (s.nisn || "").trim()).filter(Boolean));
+
+    // 1. Remove from history
+    setHistoryState((prevHistory) => {
+      const updatedHistory = prevHistory.filter((item) => {
+        const matchId = sessionIdsToDelete.has(item.id);
+        const matchName = namesToDelete.has(item.studentName.trim().toLowerCase());
+        const matchToken = tokensToDelete.has(item.token.trim().toLowerCase());
+        const matchNisn = item.nisn && nisnsToDelete.has(item.nisn.trim());
+        return !(matchId || matchName || matchToken || matchNisn);
+      });
+      saveExamHistory(updatedHistory);
+      return updatedHistory;
+    });
+
+    // 2. Batch delete on Firestore and server
+    batchDeleteStudentSessionsFromFirestore({
+      sessionIds: Array.from(sessionIdsToDelete),
+      studentNames: students.map((s) => s.studentName),
+      tokens: Array.from(tokensToDelete),
+      nisns: Array.from(nisnsToDelete),
+      examCode: activeExam.code,
+      examId: activeExam.id,
+    }).catch(() => {});
+
+    // 3. Remove from tokensState
+    setTokensState((prevTokens) => {
+      const updatedTokens = prevTokens.filter((t) => {
+        const matchId = tokenIdsToDelete.has(t.id);
+        const matchName = namesToDelete.has(t.studentName.trim().toLowerCase());
+        const matchToken = tokensToDelete.has(t.token.trim().toLowerCase());
+        const matchNisn = t.nisn && nisnsToDelete.has(t.nisn.trim());
+        return !(matchId || matchName || matchToken || matchNisn);
+      });
+      saveStudentTokens(updatedTokens);
+      return updatedTokens;
+    });
+
+    // 4. Remove from activeExam.tokens
+    if (activeExam.tokens && activeExam.tokens.length > 0) {
+      const updatedExamTokens = activeExam.tokens.filter((t) => {
+        const matchId = tokenIdsToDelete.has(t.id);
+        const matchName = namesToDelete.has(t.studentName.trim().toLowerCase());
+        const matchToken = tokensToDelete.has(t.token.trim().toLowerCase());
+        const matchNisn = t.nisn && nisnsToDelete.has(t.nisn.trim());
+        return !(matchId || matchName || matchToken || matchNisn);
+      });
+      handleUpdateActiveExam({ ...activeExam, tokens: updatedExamTokens });
+    }
+  };
+
+  const handleBatchResetSessions = (
+    students: Array<{
+      sessionId?: string;
+      studentName: string;
+      token?: string;
+      nisn?: string;
+    }>
+  ) => {
+    if (!students || students.length === 0) return;
+
+    students.forEach((s) => {
+      markRecentlyDeleted(s.sessionId, s.studentName, s.token, s.nisn);
+    });
+
+    const sessionIdsToReset = new Set(students.map((s) => (s.sessionId || "").trim()).filter(Boolean));
+    const namesToReset = new Set(students.map((s) => (s.studentName || "").trim().toLowerCase()).filter(Boolean));
+    const tokensToReset = new Set(students.map((s) => (s.token || "").trim().toLowerCase()).filter(Boolean));
+    const nisnsToReset = new Set(students.map((s) => (s.nisn || "").trim()).filter(Boolean));
+
+    // 1. Remove from history
+    setHistoryState((prevHistory) => {
+      const updatedHistory = prevHistory.filter((item) => {
+        const matchId = sessionIdsToReset.has(item.id);
+        const matchName = namesToReset.has(item.studentName.trim().toLowerCase());
+        const matchToken = tokensToReset.has(item.token.trim().toLowerCase());
+        const matchNisn = item.nisn && nisnsToReset.has(item.nisn.trim());
+        return !(matchId || matchName || matchToken || matchNisn);
+      });
+      saveExamHistory(updatedHistory);
+      return updatedHistory;
+    });
+
+    // 2. Batch delete on Firestore and server
+    batchDeleteStudentSessionsFromFirestore({
+      sessionIds: Array.from(sessionIdsToReset),
+      studentNames: students.map((s) => s.studentName),
+      tokens: Array.from(tokensToReset),
+      nisns: Array.from(nisnsToReset),
+      examCode: activeExam.code,
+      examId: activeExam.id,
+    }).catch(() => {});
+
+    // 3. Reset tokens status to "belum_mulai"
+    setTokensState((prevTokens) => {
+      const updatedTokens = prevTokens.map((t) => {
+        const matchName = namesToReset.has(t.studentName.trim().toLowerCase());
+        const matchToken = tokensToReset.has(t.token.trim().toLowerCase());
+        const matchNisn = t.nisn && nisnsToReset.has(t.nisn.trim());
+        if (matchName || matchToken || matchNisn) {
+          return { ...t, status: "belum_mulai" as const };
+        }
+        return t;
+      });
+      saveStudentTokens(updatedTokens);
+      return updatedTokens;
+    });
+
+    // 4. Also in activeExam.tokens
+    if (activeExam.tokens && activeExam.tokens.length > 0) {
+      const updatedExamTokens = activeExam.tokens.map((t) => {
+        const matchName = namesToReset.has(t.studentName.trim().toLowerCase());
+        const matchToken = tokensToReset.has(t.token.trim().toLowerCase());
+        const matchNisn = t.nisn && nisnsToReset.has(t.nisn.trim());
+        if (matchName || matchToken || matchNisn) {
+          return { ...t, status: "belum_mulai" as const };
+        }
+        return t;
+      });
+      handleUpdateActiveExam({ ...activeExam, tokens: updatedExamTokens });
     }
   };
 
@@ -1407,8 +1748,12 @@ export default function App() {
             tokens={activeExamTokens}
             onForceSubmitStudent={handleForceSubmitStudent}
             onResetStudentSession={handleResetStudentSession}
+            onDeleteStudent={handleDeleteStudent}
+            onBatchDeleteStudents={handleBatchDeleteStudents}
+            onBatchResetSessions={handleBatchResetSessions}
             onUpdateHistory={handleUpdateActiveExamHistory}
             onUpdateTokens={handleUpdateTokens}
+            onUpdateExam={handleUpdateActiveExam}
           />
         )}
 

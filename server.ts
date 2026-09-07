@@ -750,10 +750,71 @@ app.get("/api/sessions/by-exam/:codeOrId", (req, res) => {
 
 // Delete or reset student session
 app.delete("/api/sessions/:sessionId", (req, res) => {
-  const id = (req.params.sessionId || "").trim();
+  const id = decodeURIComponent(req.params.sessionId || "").trim();
+  const lowerId = id.toLowerCase();
+  
+  // Direct delete
   studentSessionsRegistry.delete(id);
+
+  // Also purge any matching by token, nisn, studentName, or id
+  const toDelete: string[] = [];
+  studentSessionsRegistry.forEach((session, key) => {
+    if (
+      key === id ||
+      (session.id && String(session.id).trim() === id) ||
+      (session.token && String(session.token).trim().toLowerCase() === lowerId) ||
+      (session.nisn && String(session.nisn).trim() === id) ||
+      (session.studentName && String(session.studentName).trim().toLowerCase() === lowerId)
+    ) {
+      toDelete.push(key);
+    }
+  });
+
+  toDelete.forEach((k) => studentSessionsRegistry.delete(k));
   saveSessionsToDisk(studentSessionsRegistry);
-  res.json({ success: true, message: `Session ${id} deleted` });
+  res.json({ success: true, message: `Session ${id} deleted`, deletedCount: toDelete.length });
+});
+
+// Batch delete sessions by IDs, tokens, or student names
+app.post("/api/sessions/batch-delete", (req, res) => {
+  try {
+    const { sessionIds = [], studentNames = [], tokens = [], nisns = [], examCode, examId } = req.body || {};
+    const lowerNames = new Set((studentNames || []).map((n: string) => String(n).trim().toLowerCase()));
+    const tokenSet = new Set((tokens || []).map((t: string) => String(t).trim().toLowerCase()));
+    const idSet = new Set((sessionIds || []).map((i: string) => String(i).trim()));
+    const nisnSet = new Set((nisns || []).map((n: string) => String(n).trim()));
+    const cleanExamCode = examCode ? String(examCode).trim().toUpperCase() : null;
+    const cleanExamId = examId ? String(examId).trim() : null;
+
+    const toDelete: string[] = [];
+    studentSessionsRegistry.forEach((session, key) => {
+      const matchId = idSet.has(key) || (session.id && idSet.has(String(session.id).trim()));
+      const matchName = session.studentName && lowerNames.has(String(session.studentName).trim().toLowerCase());
+      const matchToken = session.token && tokenSet.has(String(session.token).trim().toLowerCase());
+      const matchNisn = session.nisn && nisnSet.has(String(session.nisn).trim());
+      const matchExam = (cleanExamCode && session.examCode && String(session.examCode).trim().toUpperCase() === cleanExamCode) ||
+                        (cleanExamId && session.examId && String(session.examId).trim() === cleanExamId);
+
+      // If specific targets given, delete if any match
+      const hasSpecificTarget = idSet.size > 0 || lowerNames.size > 0 || tokenSet.size > 0 || nisnSet.size > 0;
+      if (hasSpecificTarget) {
+        if (matchId || matchName || matchToken || matchNisn) {
+          toDelete.push(key);
+        }
+      } else if (cleanExamCode || cleanExamId) {
+        // Exam-wide clear
+        if (matchExam) {
+          toDelete.push(key);
+        }
+      }
+    });
+
+    toDelete.forEach((k) => studentSessionsRegistry.delete(k));
+    saveSessionsToDisk(studentSessionsRegistry);
+    res.json({ success: true, deletedCount: toDelete.length, message: `${toDelete.length} sesi berhasil dihapus` });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || "Failed to batch delete sessions" });
+  }
 });
 
 // Check Gemini API Key Status
