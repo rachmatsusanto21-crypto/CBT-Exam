@@ -20,6 +20,7 @@ import {
   RefreshCw,
   FolderOpen,
   ShieldCheck,
+  AlertCircle,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { ExamPackage, StudentTokenItem } from "../types";
@@ -49,6 +50,57 @@ interface DirectStudentShareModalProps {
   allExams?: ExamPackage[];
   onSelectExam?: (exam: ExamPackage) => void;
 }
+
+interface SafeQRCodeSVGProps {
+  value: string;
+  size?: number;
+  level?: "L" | "M" | "Q" | "H";
+  bgColor?: string;
+  fgColor?: string;
+  marginSize?: number;
+  svgRef?: React.Ref<SVGSVGElement>;
+  className?: string;
+}
+
+const SafeQRCodeSVG: React.FC<SafeQRCodeSVGProps> = ({
+  value,
+  size = 140,
+  level = "L",
+  bgColor = "#ffffff",
+  fgColor = "#09090b",
+  marginSize = 1,
+  svgRef,
+  className,
+}) => {
+  // QR codes have a mathematical maximum capacity (Version 40).
+  // When a value longer than ~1,000 characters is provided, mobile cameras cannot scan it,
+  // and qrcode.react throws "RangeError: Data too long".
+  // Guarding against length prevents RangeError entirely.
+  const isSafeLength = Boolean(value && value.trim().length > 0 && value.trim().length <= 1000);
+
+  if (!isSafeLength) {
+    return (
+      <div className="flex flex-col items-center justify-center p-3 text-center text-xs text-amber-300 bg-amber-950/40 rounded-2xl border border-amber-500/30 max-w-[200px]">
+        <AlertCircle className="w-5 h-5 text-amber-400 mb-1" />
+        <span className="font-semibold text-[11px]">Tautan Terlalu Panjang</span>
+        <span className="text-[10px] text-slate-400 mt-0.5">Gunakan tombol Salin Link / Kirim WhatsApp</span>
+      </div>
+    );
+  }
+
+  return (
+    <QRCodeSVG
+      ref={svgRef}
+      value={value.trim()}
+      size={size}
+      level={level}
+      bgColor={bgColor}
+      fgColor={fgColor}
+      marginSize={marginSize}
+      className={className}
+    />
+  );
+};
 
 export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = ({
   isOpen,
@@ -174,8 +226,20 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
       ? selfContainedLink
       : studentActiveLink;
 
-  // QR Code encodes the active selected URL for fast smartphone scanning
-  const qrCodeTargetUrl = activeSelectedLink;
+  // QR Code ALWAYS encodes a clean, concise, high-speed mobile-scannable CBT link (< 300 chars)
+  // Physical QR codes cannot encode massive package payloads (which causes RangeError: Data too long)
+  const qrCodeTargetUrl = useMemo(() => {
+    // If studentActiveLink is short (standard CBT Cloud Link, typically < 150 chars), use it directly
+    if (studentActiveLink && studentActiveLink.length <= 600) {
+      return studentActiveLink;
+    }
+    // Otherwise fallback to ultra-short URL
+    return generateShortStudentUrl(
+      baseUrl,
+      currentExam,
+      includeTokenInLink && currentToken ? currentToken : undefined
+    );
+  }, [studentActiveLink, baseUrl, currentExam, includeTokenInLink, currentToken]);
 
   // Handle uploading current exam to Google Drive
   const handleUploadCurrentExamToDrive = async () => {
@@ -613,11 +677,11 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
                 className="p-3 bg-white rounded-2xl shadow-xl shadow-black/70 inline-flex items-center justify-center cursor-pointer hover:scale-102 transition-transform group relative"
                 title="Klik untuk memperbesar QR Code"
               >
-                <QRCodeSVG
-                  ref={qrRef}
+                <SafeQRCodeSVG
+                  svgRef={qrRef}
                   value={qrCodeTargetUrl}
                   size={140}
-                  level="M"
+                  level="L"
                   bgColor="#ffffff"
                   fgColor="#09090b"
                   marginSize={1}
@@ -735,10 +799,10 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
             </div>
 
             <div className="p-4 bg-white rounded-3xl inline-block shadow-2xl shadow-black/80">
-              <QRCodeSVG
+              <SafeQRCodeSVG
                 value={qrCodeTargetUrl}
                 size={260}
-                level="M"
+                level="L"
                 bgColor="#ffffff"
                 fgColor="#09090b"
                 marginSize={2}
