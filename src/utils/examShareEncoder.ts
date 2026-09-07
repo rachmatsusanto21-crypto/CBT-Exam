@@ -369,3 +369,70 @@ export const decodeExamFromCurrentUrl = (): SharedExamPayload | null => {
 
   return null;
 };
+
+/**
+ * Decodes a SharedExamPayload from any input string (full URL, query string, hash, or raw compressed payload)
+ */
+export const decodeExamFromUrlString = (urlString: string): SharedExamPayload | null => {
+  if (!urlString || typeof urlString !== "string") return null;
+  try {
+    let rawPayload = "";
+    if (urlString.includes("pkg=") || urlString.includes("examData=") || urlString.includes("data=")) {
+      const match = urlString.match(/[?&#](pkg|examData|data)=([^&#]+)/);
+      if (match && match[2]) {
+        rawPayload = decodeURIComponent(match[2]);
+      }
+    } else if (urlString.length > 50 && !urlString.includes(" ")) {
+      rawPayload = urlString;
+    }
+
+    if (!rawPayload) return null;
+
+    let decompressed = LZString.decompressFromEncodedURIComponent(rawPayload);
+    if (!decompressed) {
+      decompressed = LZString.decompressFromBase64(rawPayload);
+    }
+    if (!decompressed) {
+      decompressed = rawPayload;
+    }
+    if (!decompressed) return null;
+
+    const parsed = JSON.parse(decompressed);
+    if (parsed.e) {
+      const restoredExam = unminifyExamPackage(parsed.e);
+      let restoredTokens: StudentTokenItem[] | undefined;
+      if (Array.isArray(parsed.ks)) {
+        restoredTokens = parsed.ks.map((kItem: any, kIdx: number) =>
+          Array.isArray(kItem)
+            ? {
+                id: kItem[0] || `tok-${kIdx}`,
+                token: kItem[1],
+                studentName: kItem[2] || "",
+                nisn: kItem[3] || "",
+                className: kItem[4] || "",
+                seatNumber: kItem[5] || undefined,
+                status: kItem[6] || "belum_mulai",
+                examCode: restoredExam.code,
+                generatedAt: new Date().toISOString(),
+              }
+            : kItem
+        );
+      }
+      return {
+        exam: restoredExam,
+        token: parsed.k || undefined,
+        tokens: restoredTokens,
+        v: 2,
+      };
+    }
+
+    if (parsed.exam && Array.isArray(parsed.exam.questions)) {
+      return parsed as SharedExamPayload;
+    }
+    if (parsed.id && Array.isArray(parsed.questions)) {
+      return { exam: parsed as ExamPackage };
+    }
+  } catch {}
+  return null;
+};
+

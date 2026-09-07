@@ -1,5 +1,5 @@
-import { initializeApp, getApps, getApp } from "firebase/app";
-import { getFirestore, Firestore } from "firebase/firestore";
+import { initializeApp, getApps, getApp, FirebaseApp } from "firebase/app";
+import { initializeFirestore, getFirestore, Firestore } from "firebase/firestore";
 import firebaseConfigJson from "../firebase-applet-config.json";
 
 const firebaseConfig = {
@@ -11,11 +11,25 @@ const firebaseConfig = {
   appId: firebaseConfigJson.appId,
 };
 
-// Initialize Firebase App
-export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+// Inisialisasi Firebase App
+export const app: FirebaseApp = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
-// Initialize Firestore with custom databaseId if configured
-const customDbId = (firebaseConfigJson as Record<string, any>).firestoreDatabaseId;
-export const db: Firestore = customDbId
-  ? getFirestore(app, customDbId)
-  : getFirestore(app);
+// Inisialisasi Firestore dengan Database ID Kustom Anda
+export const FIRESTORE_DATABASE_ID: string =
+  (firebaseConfigJson as Record<string, any>).firestoreDatabaseId ||
+  "ai-studio-slideexamcbtujia-337b5171-4150-47ed-a493-fc87b19bc190";
+
+let firestoreDb: Firestore;
+try {
+  // Inisialisasi Firestore dengan Database ID Kustom Anda
+  firestoreDb = initializeFirestore(
+    app,
+    { databaseId: FIRESTORE_DATABASE_ID } as any,
+    FIRESTORE_DATABASE_ID
+  );
+} catch {
+  // Jika sudah terinisialisasi pada hot reload/render sebelumnya, ambil instance yang ada
+  firestoreDb = getFirestore(app, FIRESTORE_DATABASE_ID);
+}
+
+export const db: Firestore = firestoreDb;

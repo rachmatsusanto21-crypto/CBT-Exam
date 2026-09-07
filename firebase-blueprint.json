@@ -32,6 +32,20 @@
         "submittedAt": { "type": "string", "description": "Submission ISO timestamp" }
       },
       "required": ["id", "examId", "studentName"]
+    },
+    "examCodes": {
+      "title": "Exam Code Index",
+      "description": "Index mapping exam short codes, tokens and drive IDs to exam packages",
+      "type": "object",
+      "properties": {
+        "examId": { "type": "string", "description": "Unique Exam ID" },
+        "code": { "type": "string", "description": "Short Exam Code" },
+        "title": { "type": "string", "description": "Exam Title" },
+        "sessionToken": { "type": "string", "description": "Exam Session Token" },
+        "exam": { "type": "object", "description": "Full Exam Package" },
+        "updatedAt": { "type": "string", "description": "Last updated ISO timestamp" }
+      },
+      "required": ["examId", "code", "title"]
     }
   }
 }

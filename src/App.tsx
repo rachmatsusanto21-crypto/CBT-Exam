@@ -61,7 +61,7 @@ import { GeminiApiKeyModal } from "./components/GeminiApiKeyModal";
 import { DirectStudentShareModal } from "./components/DirectStudentShareModal";
 import { getGeminiRequestHeaders } from "./utils/storage";
 import { normalizeToken, deduplicateStudentTokens } from "./utils/tokenValidator";
-import { decodeExamFromCurrentUrl } from "./utils/examShareEncoder";
+import { decodeExamFromCurrentUrl, decodeExamFromUrlString } from "./utils/examShareEncoder";
 import { broadcastLiveSession, subscribeToLiveSessions } from "./utils/liveSync";
 import { loadExamFromGoogleDrive, findAndLoadExamFromDriveByCode, extractGoogleDriveFileId } from "./utils/googleDrive";
 import {
@@ -571,8 +571,36 @@ export default function App() {
   useEffect(() => {
     if (activeExam?.id && activeExam?.code) {
       syncExamToFirestore(activeExam, activeExamTokens).catch(() => {});
+      fetch("/api/exams/share", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          exam: activeExam,
+          token: activeExam.sessionToken,
+          tokens: activeExamTokens || [],
+        }),
+      }).catch(() => {});
     }
-  }, [activeExam?.id, activeExam?.code, activeExam?.updatedAt]);
+  }, [activeExam?.id, activeExam?.code, activeExam?.updatedAt, activeExamTokens]);
+
+  // Auto-sync all teacher exams to Cloud Firestore and Server Share Registry on teacher dashboard load
+  useEffect(() => {
+    if (isDirectStudentMode || exams.length === 0) return;
+    exams.forEach((ex) => {
+      if (ex && ex.id && Array.isArray(ex.questions) && ex.questions.length > 0) {
+        syncExamToFirestore(ex, tokens).catch(() => {});
+        fetch("/api/exams/share", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            exam: ex,
+            token: ex.sessionToken,
+            tokens: ex.tokens || tokens || [],
+          }),
+        }).catch(() => {});
+      }
+    });
+  }, [isDirectStudentMode, exams.length]);
 
   // Real-time synchronization for student sessions from LiveSync (BroadcastChannel), Firestore & Server
   useEffect(() => {
@@ -941,6 +969,12 @@ export default function App() {
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && manualStudentCode.trim()) {
                       const trimmed = manualStudentCode.trim();
+                      const decoded = decodeExamFromUrlString(trimmed);
+                      if (decoded?.exam && Array.isArray(decoded.exam.questions) && decoded.exam.questions.length > 0) {
+                        applyLoadedRemoteExam(decoded.exam, decoded.token, decoded.tokens);
+                        setManualStudentCode("");
+                        return;
+                      }
                       const extracted = extractGoogleDriveFileId(trimmed);
                       if (extracted.fileId) {
                         setRequestedDriveId(extracted.fileId);
@@ -951,7 +985,7 @@ export default function App() {
                       }
                     }
                   }}
-                  placeholder="Contoh: PP-01 atau https://drive.google.com/file/d/..."
+                  placeholder="Contoh: PP-01, link ujian, atau link Google Drive"
                   className="flex-1 px-3.5 py-2.5 bg-slate-800/80 border border-slate-700 rounded-xl text-xs font-mono text-white placeholder:text-slate-500 focus:outline-none focus:border-indigo-500"
                 />
                 <button
@@ -959,6 +993,12 @@ export default function App() {
                   onClick={() => {
                     if (!manualStudentCode.trim()) return;
                     const trimmed = manualStudentCode.trim();
+                    const decoded = decodeExamFromUrlString(trimmed);
+                    if (decoded?.exam && Array.isArray(decoded.exam.questions) && decoded.exam.questions.length > 0) {
+                      applyLoadedRemoteExam(decoded.exam, decoded.token, decoded.tokens);
+                      setManualStudentCode("");
+                      return;
+                    }
                     const extracted = extractGoogleDriveFileId(trimmed);
                     if (extracted.fileId) {
                       setRequestedDriveId(extracted.fileId);
@@ -975,7 +1015,7 @@ export default function App() {
                 </button>
               </div>
               <p className="text-[10px] text-slate-400">
-                💡 Anda dapat mengetik kode ujian (misal: <code>PP-01</code>) atau menempel link berbagi Google Drive dari guru.
+                💡 Anda dapat mengetik kode ujian (misal: <code>PP-01</code>), menempel link paket anti-gagal, atau link Google Drive.
               </p>
             </div>
 

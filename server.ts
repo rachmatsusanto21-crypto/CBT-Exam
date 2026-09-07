@@ -574,8 +574,31 @@ app.get("/api/exams", (req, res) => {
   res.json({ success: true, exams: examsList });
 });
 
-// Retrieve shared exam package by code or ID (multiple route aliases for maximum compatibility)
-const handleGetExamByCode = (req: any, res: any) => {
+// Helper to decode Firestore REST document fields to standard JSON
+function decodeFirestoreValue(val: any): any {
+  if (!val || typeof val !== "object") return val;
+  if ("stringValue" in val) return val.stringValue;
+  if ("integerValue" in val) return parseInt(val.integerValue, 10);
+  if ("doubleValue" in val) return parseFloat(val.doubleValue);
+  if ("booleanValue" in val) return val.booleanValue;
+  if ("nullValue" in val) return null;
+  if ("mapValue" in val) {
+    const res: Record<string, any> = {};
+    const fields = val.mapValue.fields || {};
+    for (const k of Object.keys(fields)) {
+      res[k] = decodeFirestoreValue(fields[k]);
+    }
+    return res;
+  }
+  if ("arrayValue" in val) {
+    const values = val.arrayValue.values || [];
+    return values.map(decodeFirestoreValue);
+  }
+  return val;
+}
+
+// Retrieve shared exam package by code or ID (with fallback to custom Firestore database)
+const handleGetExamByCode = async (req: any, res: any) => {
   const code = (req.params.code || req.params.codeOrId || "").trim();
   const upperCode = code.toUpperCase();
   let record = sharedExamsRegistry.get(code) || sharedExamsRegistry.get(upperCode);
@@ -627,8 +650,51 @@ const handleGetExamByCode = (req: any, res: any) => {
     }
   }
 
+  // Fallback to custom Firestore database (ai-studio-slideexamcbtujia-337b5171-4150-47ed-a493-fc87b19bc190)
   if (!record) {
-    return res.status(404).json({ success: false, message: `Naskah soal dengan kode atau ID '${code}' belum ditemukan di server.` });
+    try {
+      const cfgPath = path.join(process.cwd(), "firebase-applet-config.json");
+      if (fs.existsSync(cfgPath)) {
+        const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+        const customDbId = cfg.firestoreDatabaseId || "ai-studio-slideexamcbtujia-337b5171-4150-47ed-a493-fc87b19bc190";
+        const projectId = cfg.projectId || "gen-lang-client-0464440670";
+        const apiKey = cfg.apiKey;
+
+        const codesToCheck = [upperCode, code];
+        for (const queryCode of codesToCheck) {
+          const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/${customDbId}/documents/examCodes/${encodeURIComponent(queryCode)}?key=${apiKey}`;
+          const fsRes = await fetch(url);
+          if (fsRes.ok) {
+            const fsData: any = await fsRes.json();
+            if (fsData.fields) {
+              const decodedFields: Record<string, any> = {};
+              for (const k of Object.keys(fsData.fields)) {
+                decodedFields[k] = decodeFirestoreValue(fsData.fields[k]);
+              }
+              if (decodedFields.exam) {
+                record = {
+                  exam: decodedFields.exam,
+                  token: decodedFields.sessionToken || decodedFields.exam.sessionToken,
+                  tokens: decodedFields.exam.tokens || [],
+                  gdriveFileId: decodedFields.exam.gdriveFileId,
+                  gdriveFileName: decodedFields.exam.gdriveFileName,
+                };
+                // Cache into sharedExamsRegistry
+                sharedExamsRegistry.set(queryCode, record);
+                if (record.exam.code) sharedExamsRegistry.set(record.exam.code, record);
+                break;
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error("[server] Firestore fallback lookup error:", e);
+    }
+  }
+
+  if (!record) {
+    return res.status(404).json({ success: false, message: `Naskah soal dengan kode atau ID '${code}' belum ditemukan di server maupun Cloud Firestore.` });
   }
 
   res.json({ success: true, ...record });

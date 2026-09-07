@@ -159,6 +159,22 @@ export async function syncExamToFirestore(
       );
     }
 
+    // 5. If exam has a Google Drive File ID, also index by file ID for instant lookups
+    if (exam.gdriveFileId) {
+      await setDoc(
+        doc(db, "examCodes", exam.gdriveFileId),
+        {
+          examId: cleanId,
+          code: cleanCode,
+          title: exam.title,
+          sessionToken: exam.sessionToken,
+          exam: payload,
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+    }
+
     return true;
   } catch (err) {
     handleFirestoreCatch(err, "syncExamToFirestore");
@@ -201,7 +217,10 @@ export async function fetchExamFromFirestore(
     // 2. Query Firestore if available and quota not exceeded
     if (!_isQuotaExceeded) {
       try {
-        const codeDocSnap = await getDoc(doc(db, "examCodes", upperQuery));
+        let codeDocSnap = await getDoc(doc(db, "examCodes", upperQuery));
+        if (!codeDocSnap.exists() && query !== upperQuery) {
+          codeDocSnap = await getDoc(doc(db, "examCodes", query));
+        }
         if (codeDocSnap.exists()) {
           const data = codeDocSnap.data();
           if (data?.exam) {

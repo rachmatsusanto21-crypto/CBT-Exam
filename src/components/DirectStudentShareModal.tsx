@@ -209,17 +209,22 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
     true
   );
 
-  // 3. Alternative Direct Google Drive File Link
+  // 3. Alternative Direct Google Drive File Link (Raw JSON file for teacher archive)
   const driveFileDirectUrl =
     currentExam.gdriveWebViewLink ||
     (currentExam.gdriveFileId
       ? `https://drive.google.com/file/d/${currentExam.gdriveFileId}/view?usp=sharing`
       : "");
 
+  // 4. Student CBT Link with Google Drive ID (Opens SlideExam CBT and fetches from Drive automatically)
+  const driveStudentCbtLink = currentExam.gdriveFileId
+    ? `${baseUrl.replace(/\/$/, "")}?mode=student&code=${encodeURIComponent(currentExam.code)}&driveId=${encodeURIComponent(currentExam.gdriveFileId)}${includeTokenInLink && currentToken ? `&token=${encodeURIComponent(currentToken)}` : ""}`
+    : studentActiveLink;
+
   // Link selected in the input box
   const activeSelectedLink =
     linkMode === "gdrive_alternative"
-      ? driveFileDirectUrl || studentActiveLink
+      ? driveStudentCbtLink
       : linkMode === "offline_pkg"
       ? selfContainedLink
       : studentActiveLink;
@@ -321,10 +326,8 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
     `📁 Kode Soal: *${currentExam.code}*` +
     (currentExam.gdriveFileName ? `\n📄 File Drive: *${currentExam.gdriveFileName}*` : "") +
     (includeTokenInLink && currentToken ? `\n🔑 Token Masuk: *${currentToken}*` : "") +
-    `\n\n👉 *Link Ujian Siswa (Klik untuk Mulai):*\n${studentActiveLink}\n` +
-    (driveFileDirectUrl
-      ? `\n🔗 *Link Google Drive Alternatif (Jika Soal Belum Muncul):*\n${driveFileDirectUrl}\n`
-      : "\n") +
+    `\n\n👉 *Link Ujian Siswa (Klik untuk Mulai):*\n${activeSelectedLink}\n` +
+    `\n🛡️ *Link Cadangan Paket Anti-Gagal (100% Pasti Terbuka):*\n${selfContainedLink}\n` +
     `\n_Petunjuk: Buka link ujian di HP atau laptop siswa, pilih nama, masukkan token jika diminta, lalu kerjakan dengan teliti._`;
 
   const handleCopyWhatsAppTemplate = () => {
@@ -566,7 +569,7 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
                     </span>
                   </div>
                   <p className="text-slate-400 leading-relaxed">
-                    Bagikan tautan Google Drive ini kepada siswa sebagai <strong>alternatif cadangan</strong> jika aplikasi siswa tidak dapat menemukan naskah soal secara otomatis. Siswa dapat menempelkan link Google Drive ini di layar ujian atau mengunduh file naskah soal (.json).
+                    Tautan di bawah ini adalah <strong>Link Ujian Siswa berbasis Google Drive</strong>. Saat siswa membuka link ini, aplikasi CBT langsung memuat naskah soal dari Google Drive Anda secara otomatis.
                   </p>
                 </div>
 
