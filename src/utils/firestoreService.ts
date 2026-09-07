@@ -1,4 +1,4 @@
-import { db, firebaseConfig } from "../firebase";
+import { db, firebaseConfig, terminateFirestoreInstance } from "../firebase";
 import {
   doc,
   getDoc,
@@ -21,7 +21,8 @@ export const FIRESTORE_UPGRADE_URL = `https://console.firebase.google.com/projec
 
 const QUOTA_STORAGE_KEY = "slideexam_firestore_quota_exceeded_v1";
 
-// Check if quota was marked exceeded recently (limit to 3 minutes before auto-retrying)
+// Daily quota resets on the next day (Pacific Time / 24-hr cycle).
+// Persist quota block for at least 8 hours or until manual reset to prevent hammering exhausted quotas.
 function getInitialQuotaState(): boolean {
   if (typeof window === "undefined") return false;
   try {
@@ -29,8 +30,7 @@ function getInitialQuotaState(): boolean {
     if (!raw) return false;
     const parsed = JSON.parse(raw);
     const elapsed = Date.now() - (parsed.timestamp || 0);
-    // Persist quota block for at most 3 minutes before auto-retrying
-    if (elapsed < 3 * 60 * 1000) {
+    if (elapsed < 8 * 60 * 60 * 1000) {
       return true;
     } else {
       localStorage.removeItem(QUOTA_STORAGE_KEY);
@@ -40,6 +40,14 @@ function getInitialQuotaState(): boolean {
 }
 
 let _isQuotaExceeded = getInitialQuotaState();
+
+// If quota is already known to be exceeded on initial load, terminate Firestore client immediately to prevent retries
+if (_isQuotaExceeded) {
+  try {
+    terminateFirestoreInstance().catch(() => {});
+  } catch {}
+}
+
 const quotaListeners = new Set<(exceeded: boolean) => void>();
 
 export function isQuotaExceeded(): boolean {
@@ -52,6 +60,27 @@ export function subscribeQuotaStatus(cb: (exceeded: boolean) => void): () => voi
   return () => quotaListeners.delete(cb);
 }
 
+export function markQuotaExceeded(reason: string): void {
+  _isQuotaExceeded = true;
+  try {
+    terminateFirestoreInstance().catch(() => {});
+  } catch {}
+  try {
+    localStorage.setItem(
+      QUOTA_STORAGE_KEY,
+      JSON.stringify({ timestamp: Date.now(), reason })
+    );
+  } catch {}
+  console.warn(
+    `[Firestore Quota Exceeded] Batas kuota gratis harian Firestore tercapai: ${reason}. Mengalihkan ke Server & LocalStorage Engine. Upgrade/pantau: ${FIRESTORE_UPGRADE_URL}`
+  );
+  quotaListeners.forEach((fn) => {
+    try {
+      fn(true);
+    } catch {}
+  });
+}
+
 export function resetQuotaCheck(): void {
   _isQuotaExceeded = false;
   try {
@@ -60,8 +89,13 @@ export function resetQuotaCheck(): void {
   try {
     enableNetwork(db).catch(() => {});
   } catch {}
-  quotaListeners.forEach((fn) => fn(false));
+  quotaListeners.forEach((fn) => {
+    try {
+      fn(false);
+    } catch {}
+  });
 }
+
 
 function handleFirestoreCatch(err: any, context: string) {
   const errMsg = err?.message || String(err);
@@ -69,26 +103,15 @@ function handleFirestoreCatch(err: any, context: string) {
     errMsg.includes("resource-exhausted") ||
     errMsg.includes("Quota limit exceeded") ||
     errMsg.includes("Quota exceeded") ||
-    errMsg.includes("Free daily write units")
+    errMsg.includes("Free daily write units") ||
+    errMsg.includes("Free daily read units") ||
+    errMsg.includes("Using maximum backoff delay")
   ) {
     if (!_isQuotaExceeded) {
-      _isQuotaExceeded = true;
-      try {
-        disableNetwork(db).catch(() => {});
-      } catch {}
-      try {
-        localStorage.setItem(
-          QUOTA_STORAGE_KEY,
-          JSON.stringify({ timestamp: Date.now(), reason: errMsg })
-        );
-      } catch {}
-      console.warn(
-        `[Firestore Quota Exceeded] Batas kuota gratis harian Firestore tercapai. Mengalihkan ke Server & LocalStorage Engine. Upgrade/pantau: ${FIRESTORE_UPGRADE_URL}`
-      );
-      quotaListeners.forEach((fn) => fn(true));
+      markQuotaExceeded(errMsg);
     }
   } else {
-    console.warn(`Firestore ${context} warning:`, errMsg);
+    console.warn(`Firestore ${context} notice:`, errMsg);
   }
 }
 
@@ -287,12 +310,11 @@ export async function syncStudentSessionToFirestore(
       return true;
     }
 
-    // 3. Throttle Firestore writes: only write at most once every 15 seconds per session unless forceImmediate (e.g. submit)
+    // 3. Throttle Firestore writes: only write at most once every 30 seconds per session unless forceImmediate (e.g. submit)
     const now = Date.now();
-    const lastWrite = sessionLastFirestoreWriteTime.get(session.id) || 0;
     const isSubmitted = session.status === "submitted" || session.status === "timed_out";
 
-    if (!forceImmediate && !isSubmitted && now - lastLastWriteTime(session.id) < 15000) {
+    if (!forceImmediate && !isSubmitted && now - lastLastWriteTime(session.id) < 30000) {
       return true;
     }
 
@@ -317,18 +339,20 @@ function lastLastWriteTime(sessionId: string): number {
 }
 
 /**
- * Fetch all sessions for a specific exam from Firestore and server fallback
+ * Fetch all sessions for a specific exam from server fallback and optional Firestore
  */
 export async function fetchExamSessions(
   examId?: string,
-  examCode?: string
+  examCode?: string,
+  includeFirestore = false
 ): Promise<StudentExamSession[]> {
   const sessionsMap = new Map<string, StudentExamSession>();
   const cleanId = (examId || "").trim();
   const cleanCode = (examCode || "").trim().toUpperCase();
 
-  // 1. Fetch from Firestore if quota is available
-  if (!_isQuotaExceeded) {
+  // 1. Fetch from Firestore ONLY when explicitly requested (e.g. initial load or manual refresh)
+  // and ONLY if quota is available. Never inside frequent poll loops.
+  if (includeFirestore && !_isQuotaExceeded) {
     try {
       const querySnapshot = await getDocs(collection(db, "sessions"));
       querySnapshot.forEach((docSnap) => {
@@ -517,8 +541,8 @@ export async function deleteStudentSessionFromFirestore(
       }
     }
 
-    // 4. REST Direct Fallback if direct ID
-    if (cleanId && firebaseConfig.projectId && firebaseConfig.apiKey) {
+    // 4. REST Direct Fallback if direct ID and quota allows
+    if (!_isQuotaExceeded && cleanId && firebaseConfig.projectId && firebaseConfig.apiKey) {
       try {
         const customDbId = (firebaseConfig as any).firestoreDatabaseId || "(default)";
         const restUrl = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${customDbId}/documents/sessions/${encodeURIComponent(cleanId)}?key=${firebaseConfig.apiKey}`;

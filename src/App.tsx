@@ -660,8 +660,8 @@ export default function App() {
       });
     };
 
-    // 1. Initial immediate fetch
-    fetchExamSessions(currentId, currentCode).then(mergeIncomingSessions).catch(() => {});
+    // 1. Initial immediate fetch (attempts Firestore if quota available, plus server)
+    fetchExamSessions(currentId, currentCode, true).then(mergeIncomingSessions).catch(() => {});
 
     // 2. Real-time BroadcastChannel subscription for instant same-browser cross-tab sync (0ms)
     const unsubscribeLive = subscribeToLiveSessions((incomingSession) => {
@@ -714,9 +714,9 @@ export default function App() {
       });
     });
 
-    // 5. Periodic fallback poll every 3 seconds for remote multi-device sync
+    // 5. Periodic fallback poll every 3 seconds for remote multi-device sync (server registry, zero quota cost)
     const pollInterval = setInterval(() => {
-      fetchExamSessions(currentId, currentCode).then(mergeIncomingSessions).catch(() => {});
+      fetchExamSessions(currentId, currentCode, false).then(mergeIncomingSessions).catch(() => {});
     }, 3000);
 
     // 6. Cross-tab storage listener
@@ -1677,10 +1677,10 @@ export default function App() {
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0"></span>
               <span>
-                <strong>Batas Kuota Gratis Firestore Harian Tercapai:</strong> Aplikasi otomatis beralih menggunakan <em>Server & Local Storage Backup Engine</em> sehingga ujian & pemantauan tetap berjalan normal.
+                <strong>Batas Kuota Tulis Gratis Firestore Harian Tercapai:</strong> Kuota akan di-reset otomatis pada pergantian hari berikutnya. Sistem otomatis beralih menggunakan <em>Express Server & Local Storage Backup Engine</em> sehingga pengerjaan ujian dan pemantauan tetap berjalan normal tanpa gangguan.
               </span>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-2 shrink-0 flex-wrap">
               <button
                 onClick={() => {
                   resetQuotaCheck();
@@ -1692,6 +1692,16 @@ export default function App() {
                 <RefreshCw className="w-3 h-3 text-slate-400" />
                 <span>Coba Sambung Ulang</span>
               </button>
+              <a
+                href="https://firebase.google.com/pricing#cloud-firestore"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-800/80 hover:bg-slate-700 text-amber-300 border border-amber-700/50 rounded-lg text-[11px] font-medium transition-all cursor-pointer"
+                title="Lihat batas kuota paket gratis Spark"
+              >
+                <span>Info Kuota Spark</span>
+                <ExternalLink className="w-2.5 h-2.5" />
+              </a>
               <a
                 href={FIRESTORE_UPGRADE_URL}
                 target="_blank"

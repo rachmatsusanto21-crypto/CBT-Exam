@@ -459,7 +459,18 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
         currentSlideIndex,
         timeSpentSeconds: elapsed,
       };
-      syncStudentSessionToFirestore(updatedHeartbeat, false).catch(() => {});
+
+      // Heartbeat updates live server session registry directly (0 quota cost, fast)
+      try {
+        fetch("/api/sessions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(updatedHeartbeat),
+        }).catch(() => {});
+      } catch {}
+
+      // Cross-tab broadcast for instant local monitoring
+      broadcastLiveSession(updatedHeartbeat);
     }, 5000);
 
     return () => clearInterval(interval);
