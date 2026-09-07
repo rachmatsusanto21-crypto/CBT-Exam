@@ -1000,6 +1000,64 @@ Berikan:
   }
 });
 
+// AI Essay Auto-Grading based on rubric or answer key
+app.post("/api/gemini/grade-essay", async (req, res) => {
+  try {
+    const customKey = (req.headers["x-gemini-api-key"] as string) || req.body?.apiKey;
+    const { questionText, correctAnswer, rubric, studentAnswer, maxScore = 10 } = req.body;
+    const ai = getGeminiClient(customKey);
+
+    const prompt = `Koreksi jawaban esai siswa berikut berdasarkan kunci jawaban/rubrik ini:
+- Soal: ${questionText}
+- Kunci Jawaban / Model Jawaban: ${correctAnswer || "-"}
+- Panduan Rubrik Penilaian: ${rubric || "Nilai ketepatan konsep, kelengkapan argumen, dan logika penalaran."}
+- Bobot Nilai Maksimal: ${maxScore} Poin
+- Jawaban Siswa: "${studentAnswer || "(Kosong / Tidak menjawab)"}"
+
+Tugas Anda:
+1. Berikan skor numerik yang adil dan proporsional antara 0 hingga ${maxScore} (bisa desimal 0.5 jika perlu).
+2. Berikan feedback penjelasan singkat (1-3 kalimat) mengapa skor tersebut diberikan dan koreksi konsep jika ada kekeliruan.`;
+
+    const { response, modelUsed } = await callGeminiWithResilience(ai, {
+      preferredModel: "gemini-3.6-flash",
+      fallbackModels: ["gemini-3.7-flash", "gemini-flash-latest", "gemini-3.1-flash-lite"],
+      contents: prompt,
+      config: {
+        systemInstruction:
+          "Anda adalah penilai ujian profesional dan objektif yang mengoreksi jawaban esai siswa secara adil sesuai rubrik.",
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            score: {
+              type: Type.NUMBER,
+              description: `Skor nilai yang diperoleh siswa (rentang 0 sampai ${maxScore})`,
+            },
+            feedback: {
+              type: Type.STRING,
+              description: "Penjelasan alasan pemberian skor dan koreksi jawaban secara pedagogik",
+            },
+          },
+          required: ["score", "feedback"],
+        },
+      },
+    });
+
+    const parsed = JSON.parse(response.text?.trim() || "{}");
+    const awardedScore = Math.max(0, Math.min(Number(parsed.score) || 0, maxScore));
+
+    res.json({
+      success: true,
+      score: awardedScore,
+      feedback: parsed.feedback || "Telah dikoreksi oleh AI.",
+      modelUsed,
+    });
+  } catch (error: any) {
+    console.error("Error grading essay:", error);
+    res.status(500).json({ success: false, error: formatGeminiError(error) });
+  }
+});
+
 // Vite middleware for development & static serving for production
 async function setupVite() {
   if (process.env.NODE_ENV !== "production") {

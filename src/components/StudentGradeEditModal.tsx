@@ -9,9 +9,11 @@ import {
   BookOpen,
   HelpCircle,
   Sparkles,
-  AlertCircle
+  AlertCircle,
+  Loader2,
 } from "lucide-react";
-import { ExamPackage, StudentAnswerItem, StudentExamSession } from "../types";
+import { ExamPackage, Question, StudentAnswerItem, StudentExamSession } from "../types";
+import { gradeEssayWithGemini } from "../utils/geminiApi";
 
 interface StudentGradeEditModalProps {
   session: StudentExamSession | null;
@@ -36,6 +38,29 @@ export const StudentGradeEditModal: React.FC<StudentGradeEditModalProps> = ({
   const [percentage, setPercentage] = useState(0);
   const [passed, setPassed] = useState(false);
   const [aiRemediation, setAiRemediation] = useState("");
+  const [aiGradingId, setAiGradingId] = useState<string | null>(null);
+  const [aiFeedbackMap, setAiFeedbackMap] = useState<Record<string, string>>({});
+
+  const handleAiGradeEssay = async (q: Question) => {
+    const ans = answers[q.id];
+    const studentAnswer = ans?.selectedOption || "";
+    setAiGradingId(q.id);
+    try {
+      const result = await gradeEssayWithGemini({
+        questionText: q.questionText,
+        correctAnswer: q.correctAnswer,
+        rubric: (q as any).rubric || q.explanation,
+        studentAnswer: studentAnswer,
+        maxScore: q.score,
+      });
+      handleScoreChange(q.id, result.score, q.score);
+      setAiFeedbackMap((prev) => ({ ...prev, [q.id]: result.feedback }));
+    } catch (err: any) {
+      alert(err.message || "Gagal mengoreksi dengan AI.");
+    } finally {
+      setAiGradingId(null);
+    }
+  };
 
   useEffect(() => {
     if (session) {
@@ -265,7 +290,29 @@ export const StudentGradeEditModal: React.FC<StudentGradeEditModalProps> = ({
                       </div>
 
                       {/* Score Input & Toggle */}
-                      <div className="flex items-center gap-3 shrink-0 self-end sm:self-center">
+                      <div className="flex flex-wrap items-center gap-2 shrink-0 self-end sm:self-center">
+                        {(q.type === "uraian" || q.type === "isian_singkat") && (
+                          <button
+                            type="button"
+                            disabled={aiGradingId === q.id}
+                            onClick={() => handleAiGradeEssay(q)}
+                            className="px-2.5 py-1.5 rounded-xl text-[11px] font-bold bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
+                            title="Koreksi esai otomatis dengan Gemini AI berdasarkan rubrik/kunci jawaban"
+                          >
+                            {aiGradingId === q.id ? (
+                              <>
+                                <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400" />
+                                <span>Menilai...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                                <span>AI Koreksi</span>
+                              </>
+                            )}
+                          </button>
+                        )}
+
                         <button
                           type="button"
                           onClick={() => handleToggleCorrect(q.id, isCorrect, q.score)}
@@ -304,6 +351,17 @@ export const StudentGradeEditModal: React.FC<StudentGradeEditModalProps> = ({
                         </div>
                       </div>
                     </div>
+
+                    {/* AI Feedback if available */}
+                    {aiFeedbackMap[q.id] && (
+                      <div className="p-2.5 bg-indigo-950/40 border border-indigo-500/20 rounded-xl text-xs text-indigo-200 flex items-start gap-2">
+                        <Sparkles className="w-3.5 h-3.5 text-amber-300 shrink-0 mt-0.5" />
+                        <div>
+                          <strong className="text-white">Ulasan Koreksi AI:</strong>{" "}
+                          <span>{aiFeedbackMap[q.id]}</span>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}

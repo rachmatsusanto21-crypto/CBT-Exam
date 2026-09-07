@@ -528,3 +528,86 @@ Berikan:
 
   throw new Error("Kunci API Gemini belum terhubung. Silakan masukkan Kunci API Anda.");
 }
+
+/**
+ * Evaluates and auto-grades student essay answer against rubric or answer key using Gemini
+ */
+export async function gradeEssayWithGemini(params: {
+  questionText: string;
+  correctAnswer?: string;
+  rubric?: string;
+  studentAnswer: string;
+  maxScore?: number;
+}): Promise<{ score: number; feedback: string }> {
+  const customKey = getCustomGeminiApiKey();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (customKey) {
+    headers["x-gemini-api-key"] = customKey;
+  }
+
+  // 1. Try server endpoint
+  try {
+    const res = await fetch("/api/gemini/grade-essay", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(params),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success) {
+        return {
+          score: typeof data.score === "number" ? data.score : 0,
+          feedback: data.feedback || "Telah dinilai otomatis oleh Gemini AI.",
+        };
+      }
+    }
+  } catch {}
+
+  // 2. Direct client fallback if custom key exists
+  if (customKey) {
+    try {
+      const ai = new GoogleGenAI({ apiKey: customKey });
+      const maxScore = params.maxScore || 10;
+      const prompt = `Koreksi jawaban esai siswa berikut berdasarkan kunci jawaban/rubrik ini:
+- Soal: ${params.questionText}
+- Kunci Jawaban / Model Jawaban: ${params.correctAnswer || "-"}
+- Panduan Rubrik Penilaian: ${params.rubric || "Nilai ketepatan konsep, kelengkapan argumen, dan logika penalaran."}
+- Bobot Nilai Maksimal: ${maxScore} Poin
+- Jawaban Siswa: "${params.studentAnswer || "(Kosong / Tidak menjawab)"}"
+
+Tugas Anda:
+1. Berikan skor numerik yang adil antara 0 hingga ${maxScore}.
+2. Berikan feedback penjelasan singkat (1-3 kalimat) mengapa skor tersebut diberikan.`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.6-flash",
+        contents: prompt,
+        config: {
+          systemInstruction:
+            "Anda adalah penilai ujian objektif yang mengoreksi jawaban esai siswa secara adil sesuai rubrik.",
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              score: { type: Type.NUMBER },
+              feedback: { type: Type.STRING },
+            },
+            required: ["score", "feedback"],
+          },
+        },
+      });
+
+      const parsed = JSON.parse(response.text?.trim() || "{}");
+      return {
+        score: Math.max(0, Math.min(Number(parsed.score) || 0, maxScore)),
+        feedback: parsed.feedback || "Telah dinilai otomatis oleh Gemini AI.",
+      };
+    } catch (err: any) {
+      throw new Error(formatGeminiClientError(err));
+    }
+  }
+
+  throw new Error("Koneksi ke Gemini AI belum siap. Pastikan Kunci API Gemini telah aktif.");
+}
+
