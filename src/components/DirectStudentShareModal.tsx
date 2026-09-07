@@ -192,8 +192,6 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
     }
   }, [isOpen, currentExam.id, currentExam.code, currentExam.updatedAt, currentToken]);
 
-  if (!isOpen) return null;
-
   const currentUrl = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
   const baseUrl = currentUrl.endsWith("/") ? currentUrl.slice(0, -1) : currentUrl;
 
@@ -228,18 +226,14 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
 
   // QR Code ALWAYS encodes a clean, concise, high-speed mobile-scannable CBT link (< 300 chars)
   // Physical QR codes cannot encode massive package payloads (which causes RangeError: Data too long)
-  const qrCodeTargetUrl = useMemo(() => {
-    // If studentActiveLink is short (standard CBT Cloud Link, typically < 150 chars), use it directly
-    if (studentActiveLink && studentActiveLink.length <= 600) {
-      return studentActiveLink;
-    }
-    // Otherwise fallback to ultra-short URL
-    return generateShortStudentUrl(
-      baseUrl,
-      currentExam,
-      includeTokenInLink && currentToken ? currentToken : undefined
-    );
-  }, [studentActiveLink, baseUrl, currentExam, includeTokenInLink, currentToken]);
+  const qrCodeTargetUrl =
+    studentActiveLink && studentActiveLink.length <= 600
+      ? studentActiveLink
+      : generateShortStudentUrl(
+          baseUrl,
+          currentExam,
+          includeTokenInLink && currentToken ? currentToken : undefined
+        );
 
   // Handle uploading current exam to Google Drive
   const handleUploadCurrentExamToDrive = async () => {
@@ -366,6 +360,8 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
       if (found) onSelectExam(found);
     }
   };
+
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-sm animate-in fade-in duration-200">
