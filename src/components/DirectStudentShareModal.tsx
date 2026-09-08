@@ -152,8 +152,13 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
     } else {
       list = getStudentTokens();
     }
-    return deduplicateStudentTokens(list, currentExam.code, currentExam.teacherProfile?.gradeLevel);
-  }, [tokens, currentExam.tokens, currentExam.code, currentExam.teacherProfile?.gradeLevel]);
+    return deduplicateStudentTokens(
+      list,
+      currentExam.code,
+      currentExam.teacherProfile?.gradeLevel,
+      currentExam.id
+    );
+  }, [tokens, currentExam.tokens, currentExam.code, currentExam.teacherProfile?.gradeLevel, currentExam.id]);
 
   // When modal is opened or exam is switched, auto-sync package to Firestore, backend server, and register Drive entry
   useEffect(() => {

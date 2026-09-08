@@ -92,20 +92,55 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
   // Available registered students roster from profile data (strictly deduplicated & isolated to current exam code and grade level)
   const availableStudents = React.useMemo(() => {
     let list: StudentTokenItem[] = [];
+
+    // Priority 1: Tokens explicitly saved on the exam package
     if (exam.tokens && exam.tokens.length > 0) {
-      list = exam.tokens;
-    } else if (tokens && tokens.length > 0) {
+      list = exam.tokens.map((t) => ({
+        ...t,
+        examCode: exam.code,
+      }));
+      return deduplicateStudentTokens(list, exam.code, exam.teacherProfile?.gradeLevel, exam.id);
+    }
+
+    // Priority 2: Tokens passed via prop from global app state
+    if (tokens && tokens.length > 0) {
       list = tokens;
     } else {
+      // Priority 3: LocalStorage tokens repository
       list = getStudentTokens();
     }
-    return deduplicateStudentTokens(list, exam.code, exam.teacherProfile?.gradeLevel);
-  }, [tokens, exam.tokens, exam.code, exam.teacherProfile?.gradeLevel]);
+
+    // Priority 4: Draft roster if available in localStorage
+    if (!list || list.length === 0) {
+      try {
+        const draftRoster = localStorage.getItem("slideexam_draft_student_roster");
+        if (draftRoster) {
+          const parsed = JSON.parse(draftRoster);
+          if (parsed.studentNames) {
+            const rawNames = parsed.studentNames.split("\n").map((s: string) => s.trim()).filter(Boolean);
+            if (rawNames.length > 0) {
+              list = rawNames.map((name: string, idx: number) => ({
+                id: `tok-draft-${idx + 1}-${name.toLowerCase().replace(/\s+/g, "")}`,
+                studentName: name,
+                className: parsed.className || exam.teacherProfile?.gradeLevel || "Kelas Siswa",
+                nisn: String(idx + 1).padStart(2, "0"),
+                examCode: exam.code,
+                status: "belum_mulai" as const,
+                generatedAt: new Date().toISOString(),
+              }));
+            }
+          }
+        }
+      } catch {}
+    }
+
+    return deduplicateStudentTokens(list, exam.code, exam.teacherProfile?.gradeLevel, exam.id);
+  }, [tokens, exam.tokens, exam.code, exam.teacherProfile?.gradeLevel, exam.id]);
 
   // Login Gate State (if no session active)
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(!!currentSession);
   const [selectedStudentId, setSelectedStudentId] = useState<string>("");
-  const [isManualInput, setIsManualInput] = useState<boolean>(() => availableStudents.length === 0);
+  const [isManualInput, setIsManualInput] = useState<boolean>(false);
   const [loginStudentName, setLoginStudentName] = useState("");
   const [loginNisn, setLoginNisn] = useState("");
   const [loginClass, setLoginClass] = useState(() => exam.teacherProfile.gradeLevel || "");
@@ -122,17 +157,17 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
     }
   }, [exam.code, exam.sessionToken, exam.teacherProfile.gradeLevel, initialToken]);
 
-  // Automatically update isManualInput when availableStudents roster is loaded
+  // Automatically maintain dropdown mode when availableStudents roster is loaded
   useEffect(() => {
     if (availableStudents.length > 0) {
-      if (!loginStudentName && selectedStudentId !== "__manual__") {
+      if (selectedStudentId !== "__manual__") {
         setIsManualInput(false);
       }
     } else {
       setIsManualInput(true);
       setSelectedStudentId("__manual__");
     }
-  }, [availableStudents.length]);
+  }, [availableStudents.length, selectedStudentId]);
 
   // Student dropdown selector handler
   const handleSelectStudent = (studentId: string) => {
@@ -663,11 +698,25 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isLoggedIn, isSubmitted, currentSlideIndex, currentQuestion, session]);
 
+  // Check if student arrived via a specific exam code that does not match this loaded exam
+  const isExamCodeMismatch = Boolean(
+    requestedExamCode &&
+    requestedExamCode.trim().toUpperCase() !== exam.code.trim().toUpperCase() &&
+    requestedExamCode.trim() !== exam.id
+  );
+
   // Login Validator
   const executeStartExam = (forceAdmin = false) => {
     let activeTargetExam = exam;
 
     if (!forceAdmin) {
+      if (isExamCodeMismatch) {
+        setLoginError(
+          `Kode soal pada link Anda ("${requestedExamCode}") tidak cocok dengan naskah aktif ("${exam.code}"). Pengerjaan dikunci agar data nilai tidak tercampur.`
+        );
+        return;
+      }
+
       if (!loginStudentName.trim()) {
         setLoginError("Silakan masukkan nama lengkap Anda.");
         return;
@@ -1171,12 +1220,15 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
             {/* 1. NAMA SISWA DROPDOWN */}
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <label className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+                <label
+                  htmlFor={!isManualInput ? "student-name-dropdown" : "student-name-manual-input"}
+                  className="text-xs font-semibold text-slate-300 flex items-center gap-1.5"
+                >
                   <UserCheck className="w-3.5 h-3.5 text-indigo-400" />
                   <span>Nama Lengkap Siswa</span>
                   <span className="text-rose-400">*</span>
                 </label>
-                {availableStudents.length > 0 && (
+                {availableStudents.length > 0 ? (
                   <button
                     type="button"
                     onClick={() => {
@@ -1192,8 +1244,12 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
                     }}
                     className="text-[11px] text-indigo-400 hover:text-indigo-300 font-medium underline cursor-pointer"
                   >
-                    {isManualInput ? "📋 Pilih dari Daftar Siswa" : "✏️ Input Manual"}
+                    {isManualInput ? `📋 Pilih dari Daftar (${availableStudents.length} Siswa)` : "✏️ Input Manual"}
                   </button>
+                ) : (
+                  <span className="text-[10px] text-slate-400">
+                    Input Manual Mandiri
+                  </span>
                 )}
               </div>
 
@@ -1206,41 +1262,51 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
                     onChange={(e) => handleSelectStudent(e.target.value)}
                     className="w-full pl-10 pr-10 py-3 bg-[#1a1a1c] border border-slate-800 focus:border-indigo-500 rounded-xl text-slate-100 text-sm font-semibold focus:outline-none appearance-none cursor-pointer"
                   >
-                    <option key="select-student-placeholder" value="">-- Pilih Nama Siswa / Peserta Ujian --</option>
+                    <option key="select-student-placeholder" value="">
+                      -- Pilih Nama Siswa ({availableStudents.length} Siswa Terdaftar) --
+                    </option>
                     {availableStudents.map((st, idx) => {
                       const noUrut = String(idx + 1).padStart(2, "0");
                       return (
-                        <option key={st.id || idx} value={st.id || st.studentName}>
+                        <option key={st.id || `st-${idx}`} value={st.id || st.studentName}>
                           {noUrut}. {st.studentName} ({st.className || exam.teacherProfile.gradeLevel})
                         </option>
                       );
                     })}
-                    <option value="__manual__">✏️ Tulis Nama Siswa Lainnya (Manual)...</option>
+                    <option value="__manual__">✏️ Tulis Nama Siswa Lainnya (Ketik Manual)...</option>
                   </select>
                   <UserCheck className="w-4 h-4 text-slate-500 absolute left-3.5 top-3.5 pointer-events-none" />
                   <ChevronRight className="w-4 h-4 text-slate-500 rotate-90 absolute right-3.5 top-3.5 pointer-events-none" />
                 </div>
               ) : (
-                <div className="relative">
-                  <input
-                    type="text"
-                    required
-                    value={loginStudentName}
-                    onChange={(e) => {
-                      setLoginStudentName(e.target.value);
-                      if (loginError) setLoginError(null);
-                    }}
-                    placeholder="Ketik Nama Lengkap Siswa..."
-                    className="w-full pl-10 pr-4 py-3 bg-[#1a1a1c] border border-indigo-500/50 rounded-xl text-slate-100 text-sm font-semibold focus:border-indigo-500 focus:outline-none"
-                  />
-                  <UserCheck className="w-4 h-4 text-indigo-400 absolute left-3.5 top-3.5" />
+                <div className="space-y-1.5">
+                  <div className="relative">
+                    <input
+                      id="student-name-manual-input"
+                      type="text"
+                      required
+                      value={loginStudentName}
+                      onChange={(e) => {
+                        setLoginStudentName(e.target.value);
+                        if (loginError) setLoginError(null);
+                      }}
+                      placeholder="Ketik Nama Lengkap Siswa..."
+                      className="w-full pl-10 pr-4 py-3 bg-[#1a1a1c] border border-indigo-500/50 rounded-xl text-slate-100 text-sm font-semibold focus:border-indigo-500 focus:outline-none"
+                    />
+                    <UserCheck className="w-4 h-4 text-indigo-400 absolute left-3.5 top-3.5" />
+                  </div>
+                  {availableStudents.length === 0 && (
+                    <p className="text-[10px] text-slate-400">
+                      ℹ️ Belum ada token nama tersimpan untuk naskah ini. Silakan ketik nama secara manual.
+                    </p>
+                  )}
                 </div>
               )}
 
               {selectedStudentId && !isManualInput && selectedStudentId !== "__manual__" && (
                 <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-emerald-400 font-medium animate-in fade-in">
                   <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>Siswa terverifikasi di profil: <strong>{loginStudentName}</strong></span>
+                  <span>Siswa terverifikasi di profil: <strong>{loginStudentName}</strong> (No. Urut: {loginNisn})</span>
                 </div>
               )}
             </div>
@@ -1352,6 +1418,21 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
               )}
             </div>
 
+            {isExamCodeMismatch && (
+              <div className="p-3 bg-rose-950/40 border border-rose-500/40 rounded-2xl text-left space-y-1.5 text-xs text-rose-200 animate-in fade-in">
+                <div className="flex items-center gap-1.5 font-bold text-rose-300">
+                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span>Pengerjaan Dikunci: Kode Soal Berbeda</span>
+                </div>
+                <p className="text-[11px] text-rose-200/90 leading-relaxed">
+                  Tautan Anda meminta kode <span className="font-mono font-bold bg-rose-900/60 px-1.5 py-0.5 rounded">{requestedExamCode}</span>, namun naskah yang termuat di perangkat ini adalah <span className="font-mono font-bold bg-slate-800 px-1.5 py-0.5 rounded">{exam.code}</span> ({exam.title}).
+                </p>
+                <p className="text-[10px] text-rose-300/80 font-medium">
+                  💡 <em>Pilih mata pelajaran yang cocok pada dropdown di atas atau minta Guru mengirim link lengkap paket soal (&pkg=...).</em>
+                </p>
+              </div>
+            )}
+
             {loginError && (
               <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-400 text-xs flex items-start gap-2">
                 <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
@@ -1367,9 +1448,10 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
             <button
               id="start-student-exam-btn"
               type="submit"
-              className="w-full py-3.5 px-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold text-sm transition-all shadow-lg shadow-indigo-950 hover:shadow-indigo-900 cursor-pointer flex items-center justify-center gap-2"
+              disabled={isExamCodeMismatch}
+              className="w-full py-3.5 px-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-white rounded-xl font-bold text-sm transition-all shadow-lg shadow-indigo-950 hover:shadow-indigo-900 cursor-pointer flex items-center justify-center gap-2"
             >
-              <span>Mulai Pengerjaan Ujian</span>
+              <span>{isExamCodeMismatch ? "Kode Soal Tidak Cocok (Terkunci)" : "Mulai Pengerjaan Ujian"}</span>
               <ChevronRight className="w-4 h-4" />
             </button>
           </form>

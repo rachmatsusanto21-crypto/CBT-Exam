@@ -108,11 +108,22 @@ export const createNewExamPackage = (title: string = "Ujian Baru"): ExamPackage 
   const school = getSchoolProfile();
   const lastTeacher = existingExams[0]?.teacherProfile || sampleInitialExam.teacherProfile;
 
+  // Inherit student roster from existing tokens so student dropdown is populated immediately
+  const existingTokens = existingExams.find((e) => e.tokens && e.tokens.length > 0)?.tokens || getStudentTokens();
+  const initialTokens = Array.isArray(existingTokens) && existingTokens.length > 0
+    ? existingTokens.map((t, idx) => ({
+        ...t,
+        id: `tok-${newId}-${idx + 1}-${Math.random().toString(36).substr(2, 4)}`,
+        examCode: code,
+      }))
+    : undefined;
+
   return {
     id: newId,
     code,
     title,
     schoolProfile: school,
+    tokens: initialTokens,
     teacherProfile: {
       teacherName: lastTeacher.teacherName || "Guru Pengampu",
       teacherNIP: lastTeacher.teacherNIP || "-",

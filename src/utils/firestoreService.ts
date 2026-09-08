@@ -3,6 +3,7 @@ import {
   doc,
   getDoc,
   setDoc,
+  updateDoc,
   collection,
   onSnapshot,
   getDocs,
@@ -126,16 +127,43 @@ const sanitizeForFirestore = (obj: any): any => {
 };
 
 /**
- * Save an exam package to Firestore and index its short code
+ * Save an exam package to Firestore and index its short code.
+ * Includes protection against accidental student overwrites and canonical code drift.
  */
 export async function syncExamToFirestore(
   exam: ExamPackage,
-  tokens?: StudentTokenItem[]
+  tokens?: StudentTokenItem[],
+  options: { isStudentClient?: boolean; allowCodeOverride?: boolean } = {}
 ): Promise<boolean> {
   try {
     if (!exam || !exam.id) return false;
+
+    // Strict guard: Students must NEVER write or overwrite exam packages or codes in Firestore!
+    if (options.isStudentClient) {
+      return false;
+    }
+
     const cleanId = exam.id.trim();
-    const cleanCode = (exam.code || "").trim().toUpperCase();
+    let cleanCode = (exam.code || "").trim().toUpperCase();
+
+    // Check if exam already exists in Firestore to protect canonical exam code
+    if (!_isQuotaExceeded) {
+      try {
+        const existingDocSnap = await getDoc(doc(db, "exams", cleanId));
+        if (existingDocSnap.exists()) {
+          const existingData = existingDocSnap.data();
+          const existingCanonicalCode = (existingData?.code || "").trim().toUpperCase();
+          // If Firestore already has an established custom code and this call didn't explicitly override it,
+          // preserve the canonical code so an accidental local state or student fallback never overwrites it!
+          if (existingCanonicalCode && existingCanonicalCode !== cleanCode) {
+            if (!options.allowCodeOverride) {
+              cleanCode = existingCanonicalCode;
+              exam.code = existingCanonicalCode;
+            }
+          }
+        }
+      } catch {}
+    }
 
     // Extract tokens that specifically belong to this exam
     const rawTokens = tokens || (exam as any).tokens || [];
@@ -148,6 +176,7 @@ export async function syncExamToFirestore(
 
     const payload = sanitizeForFirestore({
       ...exam,
+      code: cleanCode,
       tokens: examTokens,
       updatedAt: new Date().toISOString(),
     });
@@ -644,4 +673,137 @@ export async function batchDeleteStudentSessionsFromFirestore(options: BatchDele
     return false;
   }
 }
+
+/**
+ * Reconciles and unifies all student exam sessions and code entries
+ * that share the same examId but have mismatched or disparate examCodes.
+ * This guarantees zero student score data loss and merges all records into the canonical examCode.
+ */
+export async function reconcileAndMergeExamSessions(
+  targetExamId: string,
+  canonicalExamCode: string
+): Promise<{ success: boolean; mergedSessionsCount: number; affectedStudentNames: string[] }> {
+  const cleanId = (targetExamId || "").trim();
+  const cleanCode = (canonicalExamCode || "").trim().toUpperCase();
+  if (!cleanId || !cleanCode) {
+    return { success: false, mergedSessionsCount: 0, affectedStudentNames: [] };
+  }
+
+  const affectedStudents: string[] = [];
+  let mergedCount = 0;
+
+  // 1. Reconcile on Express server in-memory registry
+  try {
+    const res = await fetch("/api/sessions/reconcile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ examId: cleanId, canonicalCode: cleanCode }),
+    });
+    const json = await res.json();
+    if (json?.updatedCount) {
+      mergedCount += json.updatedCount;
+    }
+  } catch {}
+
+  // 2. Reconcile in Firestore 'sessions' collection
+  if (!_isQuotaExceeded) {
+    try {
+      const sessionsSnap = await getDocs(collection(db, "sessions"));
+      const updatePromises: Promise<any>[] = [];
+
+      sessionsSnap.forEach((docSnap) => {
+        const sessionData = docSnap.data() as StudentExamSession;
+        if (!sessionData) return;
+        const sId = (sessionData.examId || "").trim();
+        const sCode = (sessionData.examCode || "").trim().toUpperCase();
+
+        if (sId === cleanId && sCode !== cleanCode) {
+          mergedCount++;
+          if (sessionData.studentName && !affectedStudents.includes(sessionData.studentName)) {
+            affectedStudents.push(sessionData.studentName);
+          }
+          // Update doc in Firestore with canonical code
+          updatePromises.push(
+            updateDoc(doc(db, "sessions", docSnap.id), {
+              examCode: cleanCode,
+            }).catch(() => {})
+          );
+        }
+      });
+
+      await Promise.all(updatePromises);
+    } catch (err) {
+      handleFirestoreCatch(err, "reconcileAndMergeExamSessions");
+    }
+
+    // 3. Clean up / map duplicate entries in 'examCodes' collection pointing to this examId
+    try {
+      const codesSnap = await getDocs(collection(db, "examCodes"));
+      codesSnap.forEach((codeDoc) => {
+        const data = codeDoc.data();
+        if (data && data.examId === cleanId && codeDoc.id.toUpperCase() !== cleanCode) {
+          // If this codeDoc is an outdated alias, point it to the canonical package or redirect
+          setDoc(
+            doc(db, "examCodes", codeDoc.id),
+            {
+              canonicalCode: cleanCode,
+              examId: cleanId,
+              isAlias: true,
+              updatedAt: new Date().toISOString(),
+            },
+            { merge: true }
+          ).catch(() => {});
+        }
+      });
+    } catch {}
+  }
+
+  // 4. Also reconcile local storage (slide_exam_history_v1 and slide_exam_tokens_v1)
+  try {
+    const rawHistory = localStorage.getItem("slide_exam_history_v1");
+    if (rawHistory) {
+      const parsed: StudentExamSession[] = JSON.parse(rawHistory);
+      let localUpdated = false;
+      parsed.forEach((s) => {
+        if (s && s.examId === cleanId && (s.examCode || "").trim().toUpperCase() !== cleanCode) {
+          s.examCode = cleanCode;
+          localUpdated = true;
+          if (s.studentName && !affectedStudents.includes(s.studentName)) {
+            affectedStudents.push(s.studentName);
+          }
+        }
+      });
+      if (localUpdated) {
+        localStorage.setItem("slide_exam_history_v1", JSON.stringify(parsed));
+      }
+    }
+
+    const rawTokens = localStorage.getItem("slide_exam_tokens_v1");
+    if (rawTokens) {
+      const parsedTokens: StudentTokenItem[] = JSON.parse(rawTokens);
+      let tokensUpdated = false;
+      parsedTokens.forEach((t) => {
+        const tExamId = (t as any).examId;
+        if (
+          (tExamId === cleanId || (!tExamId && t.examCode && t.examCode.trim().toUpperCase() !== cleanCode)) &&
+          t.examCode !== cleanCode
+        ) {
+          t.examCode = cleanCode;
+          (t as any).examId = cleanId;
+          tokensUpdated = true;
+        }
+      });
+      if (tokensUpdated) {
+        localStorage.setItem("slide_exam_tokens_v1", JSON.stringify(parsedTokens));
+      }
+    }
+  } catch {}
+
+  return {
+    success: true,
+    mergedSessionsCount: mergedCount,
+    affectedStudentNames: affectedStudents,
+  };
+}
+
 

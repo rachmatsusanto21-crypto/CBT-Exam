@@ -894,6 +894,38 @@ app.post("/api/sessions/batch-delete", (req, res) => {
   }
 });
 
+// Reconcile and unify student sessions with mismatched exam codes for the same examId
+app.post("/api/sessions/reconcile", (req, res) => {
+  try {
+    const { examId, canonicalCode } = req.body || {};
+    if (!examId || !canonicalCode) {
+      return res.status(400).json({ success: false, message: "Missing examId or canonicalCode" });
+    }
+    const cleanId = String(examId).trim();
+    const cleanCode = String(canonicalCode).trim().toUpperCase();
+    let updatedCount = 0;
+
+    studentSessionsRegistry.forEach((session, key) => {
+      if (session && String(session.examId || "").trim() === cleanId) {
+        const currentCode = String(session.examCode || "").trim().toUpperCase();
+        if (currentCode !== cleanCode) {
+          session.examCode = cleanCode;
+          studentSessionsRegistry.set(key, session);
+          updatedCount++;
+        }
+      }
+    });
+
+    if (updatedCount > 0) {
+      saveSessionsToDisk(studentSessionsRegistry);
+    }
+
+    res.json({ success: true, updatedCount, canonicalCode, examId: cleanId });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || "Failed to reconcile sessions" });
+  }
+});
+
 // Check Gemini API Key Status
 app.get("/api/gemini/status", (req, res) => {
   const headerKey = req.headers["x-gemini-api-key"] as string | undefined;

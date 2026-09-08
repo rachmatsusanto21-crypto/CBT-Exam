@@ -143,47 +143,89 @@ export function validateExamToken(
 }
 
 /**
- * Deduplicates and isolates student tokens strictly by exam code and/or class name.
- * Prevents student rosters from other classes or different exams from leaking or mixing.
+ * Helper to check if two class/grade designations match or overlap in meaning.
+ * Handles SD (Kelas 1-6, I-VI), SMP (7-9, VII-IX), SMA (10-12, X-XII),
+ * and custom designations like "X MIPA 1" vs "Kelas X (Fase E)".
+ */
+function isGradeOrClassMatch(className1?: string, className2?: string): boolean {
+  if (!className1 || !className2) return false;
+  const c1 = className1.trim().toLowerCase();
+  const c2 = className2.trim().toLowerCase();
+  if (c1 === c2) return true;
+  if (c1.includes(c2) || c2.includes(c1)) return true;
+
+  // Extract digits and roman numerals
+  const extractGradeKey = (str: string): string => {
+    const romanMatch = str.match(/\b(xii|xi|x|ix|viii|vii|vi|iv|v|iii|ii|i)\b/i);
+    if (romanMatch) {
+      const r = romanMatch[1].toUpperCase();
+      const map: Record<string, string> = {
+        I: "1", II: "2", III: "3", IV: "4", V: "5", VI: "6",
+        VII: "7", VIII: "8", IX: "9", X: "10", XI: "11", XII: "12"
+      };
+      if (map[r]) return map[r];
+    }
+    const numMatch = str.match(/\b([1-9]|1[0-2])\b/);
+    if (numMatch) return numMatch[1];
+    return "";
+  };
+
+  const k1 = extractGradeKey(c1);
+  const k2 = extractGradeKey(c2);
+  if (k1 && k2 && k1 === k2) return true;
+
+  return false;
+}
+
+/**
+ * Deduplicates and isolates student tokens strictly by exam code, exam ID, and/or class name.
+ * Prevents student rosters from other classes or different exams from leaking or mixing,
+ * while allowing tokens to remain stable if exam code has aliases or minor revisions.
+ * If no specific tokens match, safely falls back to available tokens so student name dropdown never disappears.
  */
 export function deduplicateStudentTokens(
   tokenList: StudentTokenItem[],
   targetExamCode?: string,
-  targetClassName?: string
+  targetClassName?: string,
+  targetExamId?: string
 ): StudentTokenItem[] {
   if (!Array.isArray(tokenList) || tokenList.length === 0) return [];
 
   const targetCode = targetExamCode ? targetExamCode.trim().toUpperCase() : null;
-  const targetClass = targetClassName ? targetClassName.trim().toLowerCase() : null;
+  const targetClass = targetClassName ? targetClassName.trim() : null;
+  const targetId = targetExamId ? targetExamId.trim() : null;
 
   let sourceList: StudentTokenItem[] = [];
 
-  if (targetCode || targetClass) {
-    // 1. First priority: match by exact examCode
-    if (targetCode) {
-      const codeMatches = tokenList.filter((t) => {
-        if (!t) return false;
-        const c = (t.examCode || "").trim().toUpperCase();
-        return c === targetCode || (t.id && t.id.toUpperCase() === targetCode);
-      });
-      if (codeMatches.length > 0) {
-        sourceList = codeMatches;
-      }
-    }
+  if (targetCode || targetClass || targetId) {
+    // 1. First priority: match by exact examId or examCode
+    const idOrCodeMatches = tokenList.filter((t) => {
+      if (!t) return false;
+      const c = (t.examCode || "").trim().toUpperCase();
+      const tExamId = ((t as any).examId || "").trim();
+      const matchId = targetId && (tExamId === targetId || t.id === targetId);
+      const matchCode = targetCode && (c === targetCode || (t.id && t.id.toUpperCase() === targetCode));
+      return matchId || matchCode;
+    });
 
-    // 2. Second priority: if no exact examCode match found, try matching by class name
-    if (sourceList.length === 0 && targetClass) {
+    if (idOrCodeMatches.length > 0) {
+      sourceList = idOrCodeMatches;
+    } else if (targetClass) {
+      // 2. Second priority: if no exact exam match found, try matching by class name / grade level
       const classMatches = tokenList.filter((t) => {
         if (!t) return false;
-        const cl = (t.className || "").trim().toLowerCase();
-        return cl === targetClass;
+        return isGradeOrClassMatch(t.className, targetClass);
       });
       if (classMatches.length > 0) {
         sourceList = classMatches;
       }
     }
 
-    // Strict boundary: If neither exam code nor class matched, return empty so other classes NEVER mix!
+    // 3. Third priority (Fallback): If neither exam code/id nor class matched,
+    // do NOT return empty and break the dropdown! Use available tokens so students can select their names.
+    if (sourceList.length === 0 && tokenList.length > 0) {
+      sourceList = tokenList;
+    }
   } else {
     // Global list (e.g. general token repository view)
     sourceList = tokenList;

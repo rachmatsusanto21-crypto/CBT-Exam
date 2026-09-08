@@ -26,13 +26,15 @@ import {
   CheckSquare,
   Square,
   Check,
-  RotateCcw
+  RotateCcw,
+  AlertTriangle,
+  FolderSync
 } from "lucide-react";
 import { ExamPackage, SchoolProfile, StudentExamSession, StudentTokenItem } from "../types";
 import { exportGradebookToExcel, exportItemAnalysisToExcel } from "../utils/sheetExport";
 import { generateStudentExamPdfReport, generateBatchStudentsPdfReport } from "../utils/studentPdfReport";
 import { deduplicateStudentTokens } from "../utils/tokenValidator";
-import { fetchExamSessions } from "../utils/firestoreService";
+import { fetchExamSessions, reconcileAndMergeExamSessions } from "../utils/firestoreService";
 import { getStudentTokens } from "../utils/storage";
 import { subscribeToLiveSessions } from "../utils/liveSync";
 import { LiveStudentEditModal, StudentRowItem } from "./LiveStudentEditModal";
@@ -110,14 +112,62 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isReconciling, setIsReconciling] = useState(false);
+
+  // Detect any student sessions that share this exam's ID but have disparate/mismatched exam codes
+  const disparateCodeSessions = useMemo(() => {
+    const cleanId = (exam.id || "").trim();
+    const cleanCode = (exam.code || "").trim().toUpperCase();
+    return history.filter(
+      (s) =>
+        s &&
+        (s.examId || "").trim() === cleanId &&
+        (s.examCode || "").trim().toUpperCase() !== cleanCode
+    );
+  }, [history, exam.id, exam.code]);
+
+  const handleReconcileCodes = async () => {
+    setIsReconciling(true);
+    try {
+      const res = await reconcileAndMergeExamSessions(exam.id, exam.code);
+      const remoteSessions = await fetchExamSessions(exam.id, exam.code);
+      if (remoteSessions && remoteSessions.length > 0 && onUpdateHistory) {
+        onUpdateHistory(remoteSessions);
+      } else if (onUpdateHistory) {
+        // Apply locally if remote is offline
+        const cleanId = (exam.id || "").trim();
+        const cleanCode = (exam.code || "").trim().toUpperCase();
+        const updated = history.map((s) =>
+          s && (s.examId || "").trim() === cleanId
+            ? { ...s, examCode: cleanCode }
+            : s
+        );
+        onUpdateHistory(updated);
+      }
+
+      showActionFeedback(
+        `Penyatuan Berhasil: ${res.mergedSessionsCount} sesi dari kode berbeda telah digabungkan ke kode resmi "${exam.code}".`
+      );
+    } catch (err: any) {
+      showActionFeedback("Gagal menyatukan kode soal: " + (err?.message || "Koneksi terputus"));
+    } finally {
+      setIsReconciling(false);
+    }
+  };
 
   const handleSyncCloud = async () => {
     setIsSyncing(true);
     try {
+      // Reconcile and unify any fragmented codes during sync
+      const reconcileRes = await reconcileAndMergeExamSessions(exam.id, exam.code);
       const remoteSessions = await fetchExamSessions(exam.id, exam.code);
       if (remoteSessions && remoteSessions.length > 0 && onUpdateHistory) {
         onUpdateHistory(remoteSessions);
-        showActionFeedback(`Sinkronisasi berhasil: ${remoteSessions.length} data pengerjaan siswa terdeteksi.`);
+        if (reconcileRes.mergedSessionsCount > 0) {
+          showActionFeedback(`Sinkronisasi & Penyatuan Berhasil: ${remoteSessions.length} data termuat, ${reconcileRes.mergedSessionsCount} sesi kode berbeda berhasil digabungkan.`);
+        } else {
+          showActionFeedback(`Sinkronisasi berhasil: ${remoteSessions.length} data pengerjaan siswa terdeteksi.`);
+        }
       } else {
         showActionFeedback("Sinkronisasi selesai: Data sudah mutakhir.");
       }
@@ -271,7 +321,8 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
   const uniqueExamTokens = deduplicateStudentTokens(
     tokenSource,
     exam.code,
-    exam.teacherProfile?.gradeLevel
+    exam.teacherProfile?.gradeLevel,
+    exam.id
   );
 
   const studentRows: StudentRowItem[] = uniqueExamTokens.map((tokenItem) => {
@@ -657,6 +708,42 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
           )}
         </div>
       </div>
+
+      {/* Disparate Exam Codes Reconciliation Banner */}
+      {disparateCodeSessions.length > 0 && (
+        <div className="bg-amber-950/40 border border-amber-500/40 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 text-amber-200 animate-in fade-in shadow-lg shadow-amber-950/20">
+          <div className="flex items-start gap-3.5">
+            <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0 mt-0.5">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <div className="space-y-1">
+              <div className="text-sm font-bold text-amber-300 flex items-center gap-2">
+                <span>Terdeteksi {disparateCodeSessions.length} Data Sesi Siswa dengan Kode Berbeda</span>
+                <span className="px-2 py-0.5 rounded-md bg-amber-500/20 text-[10px] font-mono font-bold text-amber-300 border border-amber-500/30">
+                  ID: {exam.id}
+                </span>
+              </div>
+              <p className="text-xs text-amber-200/90 leading-relaxed max-w-3xl">
+                Siswa mengerjakan soal dari naskah ujian yang sama (ID naskah identik), namun tercatat di Firestore/server dengan kode:{" "}
+                <span className="font-mono font-bold text-amber-100 bg-amber-900/60 px-1.5 py-0.5 rounded">
+                  {[...new Set(disparateCodeSessions.map((s) => s.examCode))].join(", ")}
+                </span>.
+                Seluruh data jawaban siswa aman. Klik tombol di samping untuk menyatukan dan menyeragamkan semua rekaman ke kode resmi{" "}
+                <span className="font-mono font-bold text-amber-100 bg-amber-900/60 px-1.5 py-0.5 rounded">{exam.code}</span>.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={handleReconcileCodes}
+            disabled={isReconciling}
+            className="px-4 py-2.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-2 transition-all cursor-pointer shrink-0 shadow-md"
+            title="Satukan seluruh sesi siswa yang berbeda kode ke kode resmi naskah ini"
+          >
+            <FolderSync className={`w-4 h-4 ${isReconciling ? "animate-spin" : ""}`} />
+            <span>{isReconciling ? "Menyatukan Data..." : "Satukan ke Kode Resmi"}</span>
+          </button>
+        </div>
+      )}
 
       {/* Summary KPI Grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

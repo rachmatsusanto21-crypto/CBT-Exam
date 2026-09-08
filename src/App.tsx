@@ -72,6 +72,7 @@ import {
   fetchExamSessions,
   deleteStudentSessionFromFirestore,
   batchDeleteStudentSessionsFromFirestore,
+  reconcileAndMergeExamSessions,
   subscribeQuotaStatus,
   resetQuotaCheck,
   FIRESTORE_UPGRADE_URL
@@ -273,9 +274,10 @@ export default function App() {
     setActiveExamIdState(loadedExam.id);
     saveActiveExamId(loadedExam.id);
     if (token) setUrlToken(token);
-    if (tokensList && tokensList.length > 0) {
+    const effectiveTokens = (tokensList && tokensList.length > 0) ? tokensList : (loadedExam.tokens || []);
+    if (effectiveTokens.length > 0) {
       setTokensState((prev) => {
-        const merged = deduplicateStudentTokens([...tokensList, ...prev]);
+        const merged = deduplicateStudentTokens([...effectiveTokens, ...prev]);
         saveStudentTokens(merged);
         return merged;
       });
@@ -522,28 +524,64 @@ export default function App() {
   const activeExam = exams.find((e) => e.id === activeExamId) || exams[0] || createNewExamPackage("Ujian Standar");
 
   // Strictly filter student exam history records by activeExamId / activeExam.code
-  // so students and sessions from other exams or previous archives don't leak into current view
+  // so students and sessions from other exams don't leak, while merging any disparate codes sharing the same examId
   const activeExamHistory = useMemo(() => {
     if (!activeExam) return [];
-    const currentId = activeExam.id;
+    const currentId = (activeExam.id || "").trim();
     const currentCode = (activeExam.code || "").trim().toUpperCase();
 
     return history.filter((session) => {
       if (!session) return false;
-      const matchId = currentId && session.examId === currentId;
-      const matchCode = currentCode && session.examCode && session.examCode.trim().toUpperCase() === currentCode;
+      const sId = (session.examId || "").trim();
+      const sCode = (session.examCode || "").trim().toUpperCase();
+      const matchId = Boolean(currentId && sId && sId === currentId);
+      const matchCode = Boolean(currentCode && sCode && sCode === currentCode);
       return matchId || matchCode;
     });
   }, [history, activeExam]);
 
-  // Isolate tokens strictly for the active exam to prevent other classes/archives from leaking
+  // Isolate tokens strictly for the active exam, matching both code and examId
   const activeExamTokens = useMemo(() => {
+    const baseList = (activeExam.tokens && activeExam.tokens.length > 0)
+      ? activeExam.tokens
+      : tokens;
     return deduplicateStudentTokens(
-      tokens,
+      baseList,
       activeExam.code,
-      activeExam.teacherProfile?.gradeLevel
+      activeExam.teacherProfile?.gradeLevel,
+      activeExam.id
     );
-  }, [tokens, activeExam.code, activeExam.teacherProfile?.gradeLevel]);
+  }, [tokens, activeExam.tokens, activeExam.code, activeExam.teacherProfile?.gradeLevel, activeExam.id]);
+
+  // Auto-reconcile student sessions when teacher views an exam with disparate codes
+  useEffect(() => {
+    if (isDirectStudentMode || !activeExam?.id || !activeExam?.code) return;
+    const cleanId = activeExam.id.trim();
+    const cleanCode = activeExam.code.trim().toUpperCase();
+
+    const hasDisparate = history.some(
+      (s) =>
+        s &&
+        (s.examId || "").trim() === cleanId &&
+        (s.examCode || "").trim().toUpperCase() !== cleanCode
+    );
+
+    if (hasDisparate) {
+      reconcileAndMergeExamSessions(cleanId, cleanCode)
+        .then((res) => {
+          if (res.mergedSessionsCount > 0) {
+            setHistoryState((prev) =>
+              prev.map((s) =>
+                s && (s.examId || "").trim() === cleanId
+                  ? { ...s, examCode: cleanCode }
+                  : s
+              )
+            );
+          }
+        })
+        .catch(() => {});
+    }
+  }, [isDirectStudentMode, activeExam?.id, activeExam?.code, history.length]);
 
   // Active student session isolated to current active exam
   const examActiveSession = useMemo(() => {
@@ -580,9 +618,11 @@ export default function App() {
   }, [activeTab, activeExam?.code, isTeacherTrial]);
 
   // Automatically broadcast and sync active exam to server & Firestore for 2-way multi-device discovery
+  // CRITICAL SECURITY RULE: Only run for teacher workspace! NEVER for student devices!
   useEffect(() => {
+    if (isDirectStudentMode) return;
     if (activeExam?.id && activeExam?.code) {
-      syncExamToFirestore(activeExam, activeExamTokens).catch(() => {});
+      syncExamToFirestore(activeExam, activeExamTokens, { isStudentClient: false }).catch(() => {});
       fetch("/api/exams/share", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -593,14 +633,14 @@ export default function App() {
         }),
       }).catch(() => {});
     }
-  }, [activeExam?.id, activeExam?.code, activeExam?.updatedAt, activeExamTokens]);
+  }, [isDirectStudentMode, activeExam?.id, activeExam?.code, activeExam?.updatedAt, activeExamTokens]);
 
   // Auto-sync all teacher exams to Cloud Firestore and Server Share Registry on teacher dashboard load
   useEffect(() => {
     if (isDirectStudentMode || exams.length === 0) return;
     exams.forEach((ex) => {
       if (ex && ex.id && Array.isArray(ex.questions) && ex.questions.length > 0) {
-        syncExamToFirestore(ex, tokens).catch(() => {});
+        syncExamToFirestore(ex, tokens, { isStudentClient: false }).catch(() => {});
         fetch("/api/exams/share", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1414,10 +1454,14 @@ export default function App() {
 
     // 3. Target Exam Found: Render isolated StudentSlideExam
     const examToRender = targetExam;
+    const baseList = (examToRender.tokens && examToRender.tokens.length > 0)
+      ? examToRender.tokens
+      : tokens;
     const targetExamTokens = deduplicateStudentTokens(
-      tokens,
+      baseList,
       examToRender.code,
-      examToRender.teacherProfile?.gradeLevel
+      examToRender.teacherProfile?.gradeLevel,
+      examToRender.id
     );
     const targetExamSession = activeSession &&
       (activeSession.examId === examToRender.id ||
