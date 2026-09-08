@@ -583,9 +583,9 @@ export const TokenManager: React.FC<TokenManagerProps> = ({
                       onChange={(e) => setFilterClass(e.target.value)}
                       className="bg-[#1a1a1c] border border-slate-700 text-slate-200 text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:border-indigo-500 cursor-pointer"
                     >
-                      <option value="all">Semua Kelas ({examTokens.length})</option>
+                      <option key="all-classes" value="all">Semua Kelas ({examTokens.length})</option>
                       {uniqueClasses.map((cls) => (
-                        <option key={cls} value={cls}>
+                        <option key={`token-cls-${cls}`} value={cls}>
                           {cls} ({examTokens.filter((t) => t.className === cls).length})
                         </option>
                       ))}

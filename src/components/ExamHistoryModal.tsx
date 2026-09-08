@@ -367,9 +367,9 @@ export const ExamHistoryModal: React.FC<ExamHistoryModalProps> = ({
                 onChange={(e) => setFilterSubject(e.target.value)}
                 className="bg-[#18181b] text-slate-200 text-xs rounded-xl px-3 py-2.5 border border-slate-700 focus:outline-none focus:border-indigo-500 cursor-pointer shrink-0"
               >
-                <option value="all">Semua Mapel</option>
+                <option key="all-subjects" value="all">Semua Mapel</option>
                 {subjects.map((sub) => (
-                  <option key={sub} value={sub}>
+                  <option key={`sub-${sub}`} value={sub}>
                     {sub}
                   </option>
                 ))}

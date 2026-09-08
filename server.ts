@@ -207,6 +207,16 @@ let lastKnownDriveToken = "";
 // Persistent Student Sessions Registry for live monitoring & grading
 const studentSessionsRegistry = loadSessionsFromDisk();
 
+// Registry of reset sessions to actively tell student devices to stop and reset
+interface ResetSessionRecord {
+  resetAt: number;
+  sessionId?: string;
+  studentName?: string;
+  examCode?: string;
+  nisn?: string;
+}
+const resetSessionsRegistry = new Map<string, ResetSessionRecord>();
+
 // Health check
 app.get("/api/health", (req, res) => {
   res.json({
@@ -716,6 +726,37 @@ app.post("/api/sessions", (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid session payload" });
     }
     const cleanId = String(session.id).trim();
+    const cleanName = String(session.studentName || "").trim().toLowerCase();
+    const cleanCode = String(session.examCode || "").trim().toUpperCase();
+    const cleanNisn = String(session.nisn || "").trim();
+
+    // Check if this specific session was marked as reset by teacher
+    const nameCodeKey = cleanName && cleanCode ? `${cleanName}__${cleanCode}` : "";
+    const nisnCodeKey = cleanNisn && cleanCode ? `${cleanNisn}__${cleanCode}` : "";
+
+    const resetRecord =
+      resetSessionsRegistry.get(cleanId) ||
+      (nameCodeKey ? resetSessionsRegistry.get(nameCodeKey) : undefined) ||
+      (nisnCodeKey ? resetSessionsRegistry.get(nisnCodeKey) : undefined);
+
+    if (resetRecord) {
+      const sessionStartTime = session.startTime ? new Date(session.startTime).getTime() : 0;
+      // If this is the OLD session created BEFORE the reset timestamp, reject it and notify device to reset!
+      if (sessionStartTime <= resetRecord.resetAt && cleanId === resetRecord.sessionId) {
+        return res.json({
+          success: false,
+          isReset: true,
+          message: "Sesi ujian ini telah di-reset oleh Guru / Pengawas.",
+        });
+      }
+      // If student restarted with a new session (created after resetAt, or a fresh sessionId), clear reset entry!
+      if (sessionStartTime > resetRecord.resetAt || (resetRecord.sessionId && cleanId !== resetRecord.sessionId)) {
+        if (resetRecord.sessionId) resetSessionsRegistry.delete(resetRecord.sessionId);
+        if (nameCodeKey) resetSessionsRegistry.delete(nameCodeKey);
+        if (nisnCodeKey) resetSessionsRegistry.delete(nisnCodeKey);
+      }
+    }
+
     studentSessionsRegistry.set(cleanId, {
       ...session,
       serverReceivedAt: new Date().toISOString(),
@@ -723,10 +764,23 @@ app.post("/api/sessions", (req, res) => {
 
     saveSessionsToDisk(studentSessionsRegistry);
 
-    res.json({ success: true, sessionId: cleanId });
+    res.json({ success: true, sessionId: cleanId, isReset: false });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err?.message || "Failed to save session" });
   }
+});
+
+// Check if a session has been reset
+app.get("/api/sessions/status/:sessionId", (req, res) => {
+  const cleanId = decodeURIComponent(req.params.sessionId || "").trim();
+  const reset = resetSessionsRegistry.has(cleanId);
+  const exists = studentSessionsRegistry.has(cleanId);
+  res.json({
+    success: true,
+    isReset: reset,
+    exists,
+    session: exists ? studentSessionsRegistry.get(cleanId) : null,
+  });
 });
 
 // Get all student sessions or filter by exam code / exam ID
@@ -751,21 +805,38 @@ app.get("/api/sessions/by-exam/:codeOrId", (req, res) => {
 // Delete or reset student session
 app.delete("/api/sessions/:sessionId", (req, res) => {
   const id = decodeURIComponent(req.params.sessionId || "").trim();
-  const lowerId = id.toLowerCase();
-  
+  const examCode = String(req.query.examCode || req.body?.examCode || "").trim().toUpperCase();
+  const studentName = String(req.query.studentName || req.body?.studentName || "").trim().toLowerCase();
+  const nisn = String(req.query.nisn || req.body?.nisn || "").trim();
+  const now = Date.now();
+
+  // Record into reset registry so active student devices are actively told to reset
+  if (id) {
+    resetSessionsRegistry.set(id, { resetAt: now, sessionId: id, examCode, studentName, nisn });
+  }
+  if (studentName && examCode) {
+    resetSessionsRegistry.set(`${studentName}__${examCode}`, { resetAt: now, sessionId: id, examCode, studentName, nisn });
+  }
+  if (nisn && examCode) {
+    resetSessionsRegistry.set(`${nisn}__${examCode}`, { resetAt: now, sessionId: id, examCode, studentName, nisn });
+  }
+
   // Direct delete
   studentSessionsRegistry.delete(id);
 
-  // Also purge any matching by token, nisn, studentName, or id
+  // Purge matching by id, or strictly by (studentName && (examCode || nisn)), NEVER by bare token!
   const toDelete: string[] = [];
   studentSessionsRegistry.forEach((session, key) => {
-    if (
-      key === id ||
-      (session.id && String(session.id).trim() === id) ||
-      (session.token && String(session.token).trim().toLowerCase() === lowerId) ||
-      (session.nisn && String(session.nisn).trim() === id) ||
-      (session.studentName && String(session.studentName).trim().toLowerCase() === lowerId)
-    ) {
+    const sId = String(session.id || "").trim();
+    const sName = String(session.studentName || "").trim().toLowerCase();
+    const sCode = String(session.examCode || "").trim().toUpperCase();
+    const sNisn = String(session.nisn || "").trim();
+
+    const matchId = key === id || sId === id;
+    const matchNameAndExam = studentName && sName === studentName && (!examCode || sCode === examCode);
+    const matchNisnAndExam = nisn && sNisn === nisn && (!examCode || sCode === examCode);
+
+    if (matchId || matchNameAndExam || matchNisnAndExam) {
       toDelete.push(key);
     }
   });
@@ -778,34 +849,40 @@ app.delete("/api/sessions/:sessionId", (req, res) => {
 // Batch delete sessions by IDs, tokens, or student names
 app.post("/api/sessions/batch-delete", (req, res) => {
   try {
-    const { sessionIds = [], studentNames = [], tokens = [], nisns = [], examCode, examId } = req.body || {};
-    const lowerNames = new Set((studentNames || []).map((n: string) => String(n).trim().toLowerCase()));
-    const tokenSet = new Set((tokens || []).map((t: string) => String(t).trim().toLowerCase()));
-    const idSet = new Set((sessionIds || []).map((i: string) => String(i).trim()));
-    const nisnSet = new Set((nisns || []).map((n: string) => String(n).trim()));
+    const { sessionIds = [], studentNames = [], nisns = [], examCode, examId } = req.body || {};
+    const lowerNames = new Set<string>((studentNames || []).map((n: string) => String(n).trim().toLowerCase()));
+    const idSet = new Set<string>((sessionIds || []).map((i: string) => String(i).trim()));
+    const nisnSet = new Set<string>((nisns || []).map((n: string) => String(n).trim()));
     const cleanExamCode = examCode ? String(examCode).trim().toUpperCase() : null;
     const cleanExamId = examId ? String(examId).trim() : null;
+    const now = Date.now();
+
+    // Register all in reset registry
+    idSet.forEach((sid: string) => {
+      resetSessionsRegistry.set(sid, { resetAt: now, sessionId: sid, examCode: cleanExamCode || undefined });
+    });
+    lowerNames.forEach((name: string) => {
+      if (cleanExamCode) {
+        resetSessionsRegistry.set(`${name}__${cleanExamCode}`, { resetAt: now, studentName: name, examCode: cleanExamCode });
+      }
+    });
 
     const toDelete: string[] = [];
     studentSessionsRegistry.forEach((session, key) => {
-      const matchId = idSet.has(key) || (session.id && idSet.has(String(session.id).trim()));
-      const matchName = session.studentName && lowerNames.has(String(session.studentName).trim().toLowerCase());
-      const matchToken = session.token && tokenSet.has(String(session.token).trim().toLowerCase());
-      const matchNisn = session.nisn && nisnSet.has(String(session.nisn).trim());
-      const matchExam = (cleanExamCode && session.examCode && String(session.examCode).trim().toUpperCase() === cleanExamCode) ||
-                        (cleanExamId && session.examId && String(session.examId).trim() === cleanExamId);
+      const sId = String(session.id || "").trim();
+      const sName = String(session.studentName || "").trim().toLowerCase();
+      const sNisn = String(session.nisn || "").trim();
+      const sCode = String(session.examCode || "").trim().toUpperCase();
+      const sExamId = String(session.examId || "").trim();
 
-      // If specific targets given, delete if any match
-      const hasSpecificTarget = idSet.size > 0 || lowerNames.size > 0 || tokenSet.size > 0 || nisnSet.size > 0;
-      if (hasSpecificTarget) {
-        if (matchId || matchName || matchToken || matchNisn) {
-          toDelete.push(key);
-        }
-      } else if (cleanExamCode || cleanExamId) {
-        // Exam-wide clear
-        if (matchExam) {
-          toDelete.push(key);
-        }
+      const matchId = idSet.has(key) || (sId && idSet.has(sId));
+      const matchName = sName && lowerNames.has(sName) && (!cleanExamCode || sCode === cleanExamCode);
+      const matchNisn = sNisn && nisnSet.has(sNisn) && (!cleanExamCode || sCode === cleanExamCode);
+      const matchExamOnly = (!idSet.size && !lowerNames.size && !nisnSet.size) &&
+                            ((cleanExamCode && sCode === cleanExamCode) || (cleanExamId && sExamId === cleanExamId));
+
+      if (matchId || matchName || matchNisn || matchExamOnly) {
+        toDelete.push(key);
       }
     });
 

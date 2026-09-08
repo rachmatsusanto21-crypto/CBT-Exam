@@ -235,8 +235,8 @@ export default function App() {
     const expiresAt = Date.now() + 20000;
     if (id) recentlyDeletedKeysRef.current.set(id, expiresAt);
     if (name) recentlyDeletedKeysRef.current.set(name.trim().toLowerCase(), expiresAt);
-    if (token) recentlyDeletedKeysRef.current.set(token.trim().toLowerCase(), expiresAt);
     if (nisn) recentlyDeletedKeysRef.current.set(nisn.trim(), expiresAt);
+    // Note: NEVER set token alone in recentlyDeletedKeysRef because multiple students often share the same exam token
   };
 
   const [isFetchingRemoteExam, setIsFetchingRemoteExam] = useState<boolean>(() => {
@@ -634,7 +634,6 @@ export default function App() {
         if (!rs) return false;
         if (rs.id && recentlyDeletedKeysRef.current.has(rs.id)) return false;
         if (rs.studentName && recentlyDeletedKeysRef.current.has(rs.studentName.trim().toLowerCase())) return false;
-        if (rs.token && recentlyDeletedKeysRef.current.has(rs.token.trim().toLowerCase())) return false;
         if (rs.nisn && recentlyDeletedKeysRef.current.has(rs.nisn.trim())) return false;
         return true;
       });
@@ -646,7 +645,6 @@ export default function App() {
             const isDeleted =
               recentlyDeletedKeysRef.current.has(h.id) ||
               (h.studentName && recentlyDeletedKeysRef.current.has(h.studentName.trim().toLowerCase())) ||
-              (h.token && recentlyDeletedKeysRef.current.has(h.token.trim().toLowerCase())) ||
               (h.nisn && recentlyDeletedKeysRef.current.has(h.nisn.trim()));
             if (!isDeleted) sessionMap.set(h.id, h);
           }
@@ -683,7 +681,6 @@ export default function App() {
       if (!payload) return;
       const cleanId = payload.sessionId;
       const cleanName = payload.studentName?.trim().toLowerCase();
-      const cleanToken = payload.token?.trim().toLowerCase();
       const cleanNisn = payload.nisn?.trim();
 
       markRecentlyDeleted(cleanId, payload.studentName, payload.token, payload.nisn);
@@ -692,9 +689,8 @@ export default function App() {
         const updated = prevHistory.filter((item) => {
           const matchId = cleanId && item.id === cleanId;
           const matchName = cleanName && item.studentName.trim().toLowerCase() === cleanName;
-          const matchToken = cleanToken && item.token.trim().toLowerCase() === cleanToken;
           const matchNisn = cleanNisn && item.nisn && item.nisn.trim() === cleanNisn;
-          return !(matchId || matchName || matchToken || matchNisn);
+          return !(matchId || matchName || matchNisn);
         });
         saveExamHistory(updated);
         return updated;
@@ -705,8 +701,8 @@ export default function App() {
         if (!prevActive) return null;
         const matchId = cleanId && prevActive.id === cleanId;
         const matchName = cleanName && prevActive.studentName.trim().toLowerCase() === cleanName;
-        const matchToken = cleanToken && prevActive.token.trim().toLowerCase() === cleanToken;
-        if (matchId || matchName || matchToken) {
+        const matchNisn = cleanNisn && prevActive.nisn && prevActive.nisn.trim() === cleanNisn;
+        if (matchId || matchName || matchNisn) {
           saveActiveStudentSession(null);
           return null;
         }
@@ -943,9 +939,8 @@ export default function App() {
       const updatedHistory = prevHistory.filter((item) => {
         const matchId = cleanId && item.id === cleanId;
         const matchName = cleanName && item.studentName.trim().toLowerCase() === cleanName;
-        const matchToken = cleanToken && item.token.trim().toLowerCase() === cleanToken;
         const matchNisn = cleanNisn && item.nisn && item.nisn.trim() === cleanNisn;
-        return !(matchId || matchName || matchToken || matchNisn);
+        return !(matchId || matchName || matchNisn);
       });
       saveExamHistory(updatedHistory);
       return updatedHistory;
@@ -959,9 +954,8 @@ export default function App() {
       const updatedTokens = prevTokens.map((t) => {
         const matchId = cleanId && t.id === cleanId;
         const matchName = cleanName && t.studentName.trim().toLowerCase() === cleanName;
-        const matchToken = cleanToken && t.token.trim().toLowerCase() === cleanToken;
         const matchNisn = cleanNisn && t.nisn && t.nisn.trim() === cleanNisn;
-        if (matchId || matchName || matchToken || matchNisn) {
+        if (matchId || matchName || matchNisn) {
           return { ...t, status: "belum_mulai" as const };
         }
         return t;
@@ -974,9 +968,8 @@ export default function App() {
     if (activeExam.tokens && activeExam.tokens.length > 0) {
       const updatedExamTokens = activeExam.tokens.map((t) => {
         const matchName = cleanName && t.studentName.trim().toLowerCase() === cleanName;
-        const matchToken = cleanToken && t.token.trim().toLowerCase() === cleanToken;
         const matchNisn = cleanNisn && t.nisn && t.nisn.trim() === cleanNisn;
-        if (matchName || matchToken || matchNisn) {
+        if (matchName || matchNisn) {
           return { ...t, status: "belum_mulai" as const };
         }
         return t;
@@ -989,7 +982,7 @@ export default function App() {
       activeSession &&
       (activeSession.id === cleanId ||
         (cleanName && activeSession.studentName.trim().toLowerCase() === cleanName) ||
-        (cleanToken && activeSession.token.trim().toLowerCase() === cleanToken))
+        (cleanNisn && activeSession.nisn && activeSession.nisn.trim() === cleanNisn))
     ) {
       setActiveSessionState(null);
       saveActiveStudentSession(null);
@@ -1016,9 +1009,8 @@ export default function App() {
       const updatedHistory = prevHistory.filter((item) => {
         const matchId = cleanId && item.id === cleanId;
         const matchName = cleanName && item.studentName.trim().toLowerCase() === cleanName;
-        const matchToken = cleanToken && item.token.trim().toLowerCase() === cleanToken;
         const matchNisn = cleanNisn && item.nisn && item.nisn.trim() === cleanNisn;
-        return !(matchId || matchName || matchToken || matchNisn);
+        return !(matchId || matchName || matchNisn);
       });
       saveExamHistory(updatedHistory);
       return updatedHistory;

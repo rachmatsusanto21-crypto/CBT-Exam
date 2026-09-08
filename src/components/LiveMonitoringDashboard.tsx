@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   Users,
   Clock,
@@ -322,9 +322,11 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
   });
 
   const filteredRows = studentRows.filter(({ tokenItem }) => {
-    const nameMatch = tokenItem.studentName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      tokenItem.nisn.includes(searchQuery);
-    const classMatch = filterClass === "all" || tokenItem.className === filterClass;
+    const nameMatch =
+      tokenItem.studentName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (tokenItem.nisn || "").includes(searchQuery);
+    const itemClass = (tokenItem.className || "").trim();
+    const classMatch = filterClass === "all" || itemClass === filterClass;
     return nameMatch && classMatch;
   });
 
@@ -340,7 +342,16 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
   const passedCount = completedSessions.filter((s) => s.passed).length;
   const passRate = completedSessions.length > 0 ? Math.round((passedCount / completedSessions.length) * 100) : 0;
 
-  const uniqueClasses = Array.from(new Set(studentRows.map((r) => r.tokenItem.className)));
+  const uniqueClasses = useMemo(() => {
+    const classes = new Set<string>();
+    studentRows.forEach((r) => {
+      const cls = (r.tokenItem?.className || "").trim();
+      if (cls) {
+        classes.add(cls);
+      }
+    });
+    return Array.from(classes).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  }, [studentRows]);
 
   // --- SELECTION LOGIC ---
   const isAllSelected = filteredRows.length > 0 && filteredRows.every((r) => selectedIds.has(r.tokenItem.id));
@@ -803,9 +814,11 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
               onChange={(e) => setFilterClass(e.target.value)}
               className="px-3 py-2 bg-[#1a1a1c] border border-slate-800 rounded-xl text-xs text-slate-300 focus:outline-none focus:border-indigo-500"
             >
-              <option value="all" className="bg-[#121214]">Semua Kelas</option>
+              <option key="all-classes" value="all" className="bg-[#121214]">
+                Semua Kelas
+              </option>
               {uniqueClasses.map((c) => (
-                <option key={c} value={c} className="bg-[#121214]">
+                <option key={`class-filter-${c}`} value={c} className="bg-[#121214]">
                   Kelas {c}
                 </option>
               ))}

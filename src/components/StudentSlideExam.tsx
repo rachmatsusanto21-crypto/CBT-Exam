@@ -51,8 +51,8 @@ import {
 import { StudentResultView } from "./StudentResultView";
 import { prepareStudentExamQuestions } from "../utils/shuffle";
 import { validateExamToken, normalizeToken, deduplicateStudentTokens } from "../utils/tokenValidator";
-import { getStudentTokens } from "../utils/storage";
-import { broadcastLiveSession } from "../utils/liveSync";
+import { getStudentTokens, saveActiveStudentSession } from "../utils/storage";
+import { broadcastLiveSession, subscribeToSessionResets } from "../utils/liveSync";
 import { syncStudentSessionToFirestore } from "../utils/firestoreService";
 import {
   playExamTimeWarningSound,
@@ -274,6 +274,38 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
     count: 0,
   });
 
+  // Session Reset Alert State (when proctor resets session)
+  const [resetAlertMessage, setResetAlertMessage] = useState<string | null>(null);
+
+  const handleSessionResetByTeacher = (reason?: string) => {
+    saveActiveStudentSession(null);
+    setSession(null);
+    setIsLoggedIn(false);
+    setIsSubmitted(false);
+    setCurrentSlideIndex(0);
+    setResetAlertMessage(
+      reason || "Sesi ujian ini telah di-reset oleh Guru / Pengawas. Silakan masuk kembali."
+    );
+  };
+
+  // Listen to live session reset events across tabs/devices
+  useEffect(() => {
+    const unsub = subscribeToSessionResets((payload) => {
+      if (!payload || !sessionRef.current) return;
+      const cur = sessionRef.current;
+      const matchId = payload.sessionId && cur.id === payload.sessionId;
+      const matchName =
+        payload.studentName &&
+        cur.studentName.trim().toLowerCase() === payload.studentName.trim().toLowerCase();
+      const matchNisn = payload.nisn && cur.nisn && cur.nisn.trim() === payload.nisn.trim();
+
+      if (matchId || matchName || matchNisn) {
+        handleSessionResetByTeacher("Sesi ujian Anda telah di-reset oleh Guru / Pengawas.");
+      }
+    });
+    return () => unsub();
+  }, []);
+
   // Timer Calculation
   const totalDurationSeconds = exam.durationMinutes * 60;
   const [secondsRemaining, setSecondsRemaining] = useState<number>(() => {
@@ -466,7 +498,18 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(updatedHeartbeat),
-        }).catch(() => {});
+        })
+          .then(async (res) => {
+            if (res.ok) {
+              const data = await res.json();
+              if (data.isReset) {
+                handleSessionResetByTeacher(
+                  data.message || "Sesi ujian ini telah di-reset oleh Guru / Pengawas."
+                );
+              }
+            }
+          })
+          .catch(() => {});
       } catch {}
 
       // Cross-tab broadcast for instant local monitoring
@@ -1163,7 +1206,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
                     onChange={(e) => handleSelectStudent(e.target.value)}
                     className="w-full pl-10 pr-10 py-3 bg-[#1a1a1c] border border-slate-800 focus:border-indigo-500 rounded-xl text-slate-100 text-sm font-semibold focus:outline-none appearance-none cursor-pointer"
                   >
-                    <option value="">-- Pilih Nama Siswa / Peserta Ujian --</option>
+                    <option key="select-student-placeholder" value="">-- Pilih Nama Siswa / Peserta Ujian --</option>
                     {availableStudents.map((st, idx) => {
                       const noUrut = String(idx + 1).padStart(2, "0");
                       return (
@@ -1976,7 +2019,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
                                   : "bg-[#1a1a1c] border-slate-700 text-slate-400"
                               }`}
                             >
-                              <option value="">-- Pilih Pasangan yang Cocok --</option>
+                              <option key="select-pair-placeholder" value="">-- Pilih Pasangan yang Cocok --</option>
                               {allRightOptions.map((optVal, optIdx) => (
                                 <option key={optIdx} value={optVal} className="bg-[#121214] text-slate-200">
                                   {optVal}
@@ -2365,6 +2408,36 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
               className="w-full py-3 bg-rose-600 hover:bg-rose-500 text-white rounded-xl font-bold text-xs cursor-pointer shadow-lg shadow-rose-950 transition-all"
             >
               Saya Mengerti & Kembali ke Soal
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Session Reset by Teacher Alert Modal */}
+      {resetAlertMessage && (
+        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-[#12131a] border-2 border-amber-500/60 rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl shadow-black/80 text-center space-y-4">
+            <div className="w-14 h-14 bg-amber-500/20 border border-amber-500/40 text-amber-400 rounded-2xl flex items-center justify-center mx-auto">
+              <RotateCcw className="w-8 h-8 text-amber-400" />
+            </div>
+
+            <div className="space-y-1">
+              <h3 className="text-lg font-black text-amber-300">Sesi Ujian Telah Direset</h3>
+              <p className="text-xs text-slate-300 leading-relaxed">
+                {resetAlertMessage}
+              </p>
+            </div>
+
+            <div className="p-3 bg-amber-950/30 rounded-xl border border-amber-500/20 text-xs text-amber-200">
+              Guru / Pengawas telah mereset sesi ujian Anda. Anda dapat memasukkan data atau token untuk memulai sesi ujian baru.
+            </div>
+
+            <button
+              onClick={() => setResetAlertMessage(null)}
+              className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-bold text-xs cursor-pointer shadow-lg shadow-indigo-950 transition-all flex items-center justify-center gap-2"
+            >
+              <RotateCcw className="w-4 h-4" />
+              Kembali ke Halaman Masuk
             </button>
           </div>
         </div>

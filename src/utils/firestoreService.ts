@@ -282,6 +282,34 @@ export async function fetchExamFromFirestore(
 // In-memory debounce map for Firestore writes to avoid high-frequency write explosions
 const sessionLastFirestoreWriteTime = new Map<string, number>();
 
+export interface SessionSyncResult {
+  success: boolean;
+  isReset?: boolean;
+  message?: string;
+}
+
+/**
+ * Direct fast sync to server registry. Returns server response including isReset flag.
+ */
+export async function syncStudentSessionToServer(
+  session: StudentExamSession
+): Promise<SessionSyncResult> {
+  try {
+    if (!session || !session.id) return { success: false };
+    const sanitized = sanitizeForFirestore(session);
+    const res = await fetch("/api/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(sanitized),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return { success: !!data.success, isReset: !!data.isReset, message: data.message };
+    }
+  } catch {}
+  return { success: false };
+}
+
 /**
  * Sync student exam session progress/completion to Firestore & server
  * Throttled to prevent free-tier Firestore quota exhaustion
@@ -296,11 +324,10 @@ export async function syncStudentSessionToFirestore(
 
     // 1. Always write to server sessions registry immediately (Fast, lightweight, no quota cost)
     try {
-      fetch("/api/sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(sanitized),
-      }).catch(() => {});
+      const serverResult = await syncStudentSessionToServer(session);
+      if (serverResult.isReset) {
+        return false;
+      }
     } catch {
       // ignore
     }
@@ -501,12 +528,15 @@ export async function deleteStudentSessionFromFirestore(
       examCode: cleanCode || undefined,
     });
 
-    // 2. Delete on Express server
+    // 2. Delete on Express server with full context (ID, studentName, examCode, NISN)
     try {
-      const targetParam = cleanId || cleanToken || cleanName;
-      if (targetParam) {
-        fetch(`/api/sessions/${encodeURIComponent(targetParam)}`, { method: "DELETE" }).catch(() => {});
-      }
+      const targetParam = cleanId || cleanName || "unknown";
+      const qParams = new URLSearchParams();
+      if (cleanCode) qParams.set("examCode", cleanCode);
+      if (cleanName) qParams.set("studentName", cleanName);
+      if (cleanNisn) qParams.set("nisn", cleanNisn);
+      const url = `/api/sessions/${encodeURIComponent(targetParam)}?${qParams.toString()}`;
+      fetch(url, { method: "DELETE" }).catch(() => {});
     } catch {}
 
     // 3. Delete in Firestore if quota allows
@@ -520,18 +550,19 @@ export async function deleteStudentSessionFromFirestore(
         }
       }
 
-      // Also clean up by studentName or token or nisn if provided
+      // Also clean up by studentName if provided (NEVER by bare token, tokens can be shared!)
       try {
         const promises: Promise<any>[] = [];
         if (cleanName) {
           const qName = query(collection(db, "sessions"), where("studentName", "==", cleanName));
           const snap = await getDocs(qName);
-          snap.forEach((d) => promises.push(deleteDoc(d.ref)));
-        }
-        if (cleanToken && (!cleanId || cleanToken !== cleanId)) {
-          const qToken = query(collection(db, "sessions"), where("token", "==", cleanToken));
-          const snap = await getDocs(qToken);
-          snap.forEach((d) => promises.push(deleteDoc(d.ref)));
+          snap.forEach((d) => {
+            const data = d.data();
+            // Ensure examCode matches if both provided
+            if (!cleanCode || !data.examCode || data.examCode.trim().toUpperCase() === cleanCode) {
+              promises.push(deleteDoc(d.ref));
+            }
+          });
         }
         if (promises.length > 0) {
           await Promise.all(promises);
