@@ -53,7 +53,7 @@ import { prepareStudentExamQuestions } from "../utils/shuffle";
 import { validateExamToken, normalizeToken, deduplicateStudentTokens } from "../utils/tokenValidator";
 import { getStudentTokens, saveActiveStudentSession } from "../utils/storage";
 import { broadcastLiveSession, subscribeToSessionResets } from "../utils/liveSync";
-import { syncStudentSessionToFirestore } from "../utils/firestoreService";
+import { syncStudentSessionToGAS } from "../utils/gasService";
 import {
   playExamTimeWarningSound,
   isSoundNotificationEnabled,
@@ -502,13 +502,13 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
     }
 
     if (immediate) {
-      syncStudentSessionToFirestore(targetSession, true).catch(() => {});
+      syncStudentSessionToGAS(targetSession).catch(() => {});
       return;
     }
 
     // Debounce rapid typing/clicking by 1.2 seconds
     syncDebounceTimerRef.current = setTimeout(() => {
-      syncStudentSessionToFirestore(targetSession, false).catch(() => {});
+      syncStudentSessionToGAS(targetSession).catch(() => {});
     }, 1200);
   };
 
@@ -773,7 +773,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
     onSaveSession(newSession);
     broadcastLiveSession(newSession);
     if (!isTeacherTrial) {
-      syncStudentSessionToFirestore(newSession, true);
+      syncStudentSessionToGAS(newSession).catch(() => {});
     }
   };
 
@@ -1078,7 +1078,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
     if (!isTeacherTrial) {
       onSubmitExam(finalizedSession);
       broadcastLiveSession(finalizedSession);
-      syncStudentSessionToFirestore(finalizedSession, true);
+      syncStudentSessionToGAS(finalizedSession).catch(() => {});
     }
   };
 

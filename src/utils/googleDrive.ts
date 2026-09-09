@@ -6,7 +6,7 @@ import {
   isAuthExpiredError,
   formatGoogleAuthErrorMessage,
 } from "./googleAuth";
-import { syncExamToFirestore, fetchExamFromFirestore } from "./firestoreService";
+import { syncExamToGAS, fetchExamFromGAS } from "./gasService";
 
 export const GOOGLE_DRIVE_BACKUP_FOLDER_NAME = "SlideExam_CBT";
 export const GOOGLE_DRIVE_BACKUP_SUBFOLDER_NAME = "Backup_Data_Aplikasi";
@@ -587,11 +587,11 @@ export async function saveExamToGoogleDrive(
     }
   } catch {}
 
-  // 1. Dual-sync to Firestore for reliable multi-device student access across any domain
+  // 1. Dual-sync to Google Apps Script & Sheets for reliable multi-device student access
   try {
-    await syncExamToFirestore(examComplete, exam.tokens);
+    await syncExamToGAS(examComplete, exam.tokens);
   } catch (syncErr) {
-    console.warn("Firestore sync during Drive save:", syncErr);
+    console.warn("GAS sync during Drive save:", syncErr);
   }
 
   // 2. Register in local server Drive index & share registry so student short links resolve without Google sign-in
@@ -737,12 +737,12 @@ export async function loadExamFromGoogleDrive(
     console.warn("Server proxy download failed, trying Firestore and direct:", err);
   }
 
-  // Tier 3: Try Firestore lookup
+  // Tier 3: Try Google Apps Script / Sheets lookup
   try {
-    const firestoreResult = await fetchExamFromFirestore(fileId);
-    if (firestoreResult.exam && Array.isArray(firestoreResult.exam.questions)) {
+    const gasResult = await fetchExamFromGAS(fileId);
+    if (gasResult.exam && Array.isArray(gasResult.exam.questions)) {
       const result: ExamPackage = {
-        ...firestoreResult.exam,
+        ...gasResult.exam,
         gdriveFileId: fileId,
       };
       try {
@@ -883,11 +883,11 @@ export async function findAndLoadExamFromDriveByCode(
     console.warn("Server search failed:", err);
   }
 
-  // Tier 3: Check Firestore by code
+  // Tier 3: Check Google Apps Script / Sheets by code
   try {
-    const fsRes = await fetchExamFromFirestore(cleanQuery);
-    if (fsRes.exam && Array.isArray(fsRes.exam.questions)) {
-      return fsRes.exam;
+    const gasRes = await fetchExamFromGAS(cleanQuery);
+    if (gasRes.exam && Array.isArray(gasRes.exam.questions)) {
+      return gasRes.exam;
     }
   } catch {}
 

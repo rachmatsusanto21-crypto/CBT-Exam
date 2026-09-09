@@ -64,10 +64,8 @@ import { normalizeToken, deduplicateStudentTokens } from "./utils/tokenValidator
 import { decodeExamFromCurrentUrl, decodeExamFromUrlString } from "./utils/examShareEncoder";
 import { broadcastLiveSession, subscribeToLiveSessions, subscribeToSessionResets } from "./utils/liveSync";
 import { loadExamFromGoogleDrive, findAndLoadExamFromDriveByCode, extractGoogleDriveFileId } from "./utils/googleDrive";
+import { fetchExamFromGAS, syncExamToGAS, syncStudentSessionToGAS } from "./utils/gasService";
 import {
-  syncExamToFirestore,
-  fetchExamFromFirestore,
-  syncStudentSessionToFirestore,
   subscribeToExamSessions,
   fetchExamSessions,
   deleteStudentSessionFromFirestore,
@@ -323,16 +321,7 @@ export default function App() {
         }
       }
 
-      // 3. Query Firestore by exam code
-      if (code) {
-        const firestoreResult = await fetchExamFromFirestore(code);
-        if (firestoreResult.exam && Array.isArray(firestoreResult.exam.questions) && firestoreResult.exam.questions.length > 0) {
-          applyLoadedRemoteExam(firestoreResult.exam, firestoreResult.token, firestoreResult.tokens);
-          return;
-        }
-      }
-
-      // 4. Query Express backend registry
+      // 2. Query Express backend registry (Server CBT Aplikasi)
       if (code) {
         let res = await fetch(`/api/exams/by-code/${encodeURIComponent(code)}`);
         if (!res.ok) {
@@ -351,6 +340,28 @@ export default function App() {
         }
       }
 
+      // 3. Query Google Apps Script / Google Sheets (Folder 'Data Soal')
+      if (code) {
+        const gasResult = await fetchExamFromGAS(code);
+        if (gasResult.success && gasResult.exam && Array.isArray(gasResult.exam.questions) && gasResult.exam.questions.length > 0) {
+          applyLoadedRemoteExam(gasResult.exam, gasResult.token, gasResult.tokens);
+          return;
+        }
+      }
+
+      // 4. If driveId provided, load via multi-tier Google Drive loader
+      if (driveId) {
+        try {
+          const driveExam = await loadExamFromGoogleDrive(null, driveId);
+          if (driveExam && Array.isArray(driveExam.questions) && driveExam.questions.length > 0) {
+            applyLoadedRemoteExam(driveExam, driveExam.sessionToken);
+            return;
+          }
+        } catch (driveErr) {
+          console.warn("Direct Drive ID load attempt:", driveErr);
+        }
+      }
+
       // 5. Search Google Drive by Code / Filename (Backup_Data_Aplikasi)
       if (code) {
         const driveResult = await findAndLoadExamFromDriveByCode(code);
@@ -361,7 +372,7 @@ export default function App() {
       }
 
       setRemoteFetchError(
-        `Naskah soal dengan kode "${code || driveId}" tidak ditemukan di server atau Google Drive. Silakan periksa kembali kode soal atau minta guru membagikan file/link naskah.`
+        `Naskah soal dengan kode "${code || driveId}" tidak ditemukan di server CBT aplikasi atau Google Drive. Silakan periksa kembali kode soal atau minta guru membagikan file/link naskah.`
       );
     } catch (err: any) {
       console.warn("Could not fetch remote exam:", err);
@@ -605,12 +616,12 @@ export default function App() {
     }
   }, [activeTab, activeExam?.code, isTeacherTrial]);
 
-  // Automatically broadcast and sync active exam to server & Firestore for 2-way multi-device discovery
+  // Automatically broadcast and sync active exam to server & Google Sheets for 2-way multi-device discovery
   // CRITICAL SECURITY RULE: Only run for teacher workspace! NEVER for student devices!
   useEffect(() => {
     if (isDirectStudentMode) return;
     if (activeExam?.id && activeExam?.code) {
-      syncExamToFirestore(activeExam, activeExamTokens, { isStudentClient: false }).catch(() => {});
+      syncExamToGAS(activeExam, activeExamTokens).catch(() => {});
       fetch("/api/exams/share", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -623,12 +634,12 @@ export default function App() {
     }
   }, [isDirectStudentMode, activeExam?.id, activeExam?.code, activeExam?.updatedAt, activeExamTokens]);
 
-  // Auto-sync all teacher exams to Cloud Firestore and Server Share Registry on teacher dashboard load
+  // Auto-sync all teacher exams to Google Sheets and Server Share Registry on teacher dashboard load
   useEffect(() => {
     if (isDirectStudentMode || exams.length === 0) return;
     exams.forEach((ex) => {
       if (ex && ex.id && Array.isArray(ex.questions) && ex.questions.length > 0) {
-        syncExamToFirestore(ex, tokens, { isStudentClient: false }).catch(() => {});
+        syncExamToGAS(ex, tokens).catch(() => {});
         fetch("/api/exams/share", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -785,8 +796,8 @@ export default function App() {
       : [updated, ...exams];
     setExamsState(updatedExams);
     saveExamPackages(updatedExams);
-    syncExamToFirestore(updated, tokens).catch((err) =>
-      console.warn("Firestore sync error:", err)
+    syncExamToGAS(updated, tokens).catch((err) =>
+      console.warn("GAS sync error:", err)
     );
     // If the exam package contains an updated schoolProfile, sync it globally as well
     if (updated.schoolProfile) {
@@ -883,8 +894,8 @@ export default function App() {
     setActiveSessionState(session);
     saveActiveStudentSession(session);
     broadcastLiveSession(session);
-    syncStudentSessionToFirestore(session).catch((err) =>
-      console.warn("Firestore session sync error:", err)
+    syncStudentSessionToGAS(session).catch((err) =>
+      console.warn("GAS session sync error:", err)
     );
 
     // If already exists in history, update; else add
@@ -904,8 +915,8 @@ export default function App() {
     setActiveSessionState(finalizedSession);
     saveActiveStudentSession(finalizedSession);
     broadcastLiveSession(finalizedSession);
-    syncStudentSessionToFirestore(finalizedSession, true).catch((err) =>
-      console.warn("Firestore session submit sync error:", err)
+    syncStudentSessionToGAS(finalizedSession).catch((err) =>
+      console.warn("GAS session submit sync error:", err)
     );
 
     const existingIdx = history.findIndex((h) => h.id === finalizedSession.id);

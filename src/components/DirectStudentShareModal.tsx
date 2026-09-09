@@ -31,7 +31,7 @@ import {
 } from "../utils/examShareEncoder";
 import { getStudentTokens, saveExamPackages, getExamPackages } from "../utils/storage";
 import { deduplicateStudentTokens } from "../utils/tokenValidator";
-import { syncExamToFirestore } from "../utils/firestoreService";
+import { syncExamToGAS } from "../utils/gasService";
 import { saveExamToGoogleDrive, formatExamDriveFileName } from "../utils/googleDrive";
 import {
   getCachedAccessToken,
@@ -160,13 +160,13 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
     );
   }, [tokens, currentExam.tokens, currentExam.code, currentExam.teacherProfile?.gradeLevel, currentExam.id]);
 
-  // When modal is opened or exam is switched, auto-sync package to Firestore, backend server, and register Drive entry
+  // When modal is opened or exam is switched, auto-sync package to Google Sheets/GAS, backend server, and register Drive entry
   useEffect(() => {
     if (isOpen && currentExam && currentExam.id) {
-      // 1. Sync to Firestore
-      syncExamToFirestore(currentExam, availableTokens)
+      // 1. Sync to Google Apps Script / Sheets & local cache
+      syncExamToGAS(currentExam, availableTokens)
         .then(() => setCloudSynced(true))
-        .catch((err) => console.warn("Firestore sync error on share modal:", err));
+        .catch((err) => console.warn("GAS sync error on share modal:", err));
 
       // 2. Sync to Express backend
       fetch("/api/exams/share", {
@@ -200,9 +200,9 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
   const currentUrl = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
   const baseUrl = currentUrl.endsWith("/") ? currentUrl.slice(0, -1) : currentUrl;
 
-  // 1. Primary Student Link (Direct CBT exam URL with code and driveId)
-  const studentLinkWithToken = generateDriveStudentUrl(baseUrl, currentExam, currentToken);
-  const studentLinkWithoutToken = generateDriveStudentUrl(baseUrl, currentExam, undefined);
+  // 1. Primary Student Link (Murni Mode Siswa Aplikasi: ?mode=student&code=...)
+  const studentLinkWithToken = generateShortStudentUrl(baseUrl, currentExam, currentToken);
+  const studentLinkWithoutToken = generateShortStudentUrl(baseUrl, currentExam, undefined);
   const studentActiveLink = includeTokenInLink && currentToken ? studentLinkWithToken : studentLinkWithoutToken;
 
   // 2. Self-Contained Offline/Direct Package Link (100% Anti-Gagal - embeds compressed exam data in URL)
@@ -331,9 +331,9 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
     `📁 Kode Soal: *${currentExam.code}*` +
     (currentExam.gdriveFileName ? `\n📄 File Drive: *${currentExam.gdriveFileName}*` : "") +
     (includeTokenInLink && currentToken ? `\n🔑 Token Masuk: *${currentToken}*` : "") +
-    `\n\n👉 *Link Ujian Siswa (Klik untuk Mulai):*\n${activeSelectedLink}\n` +
-    `\n🛡️ *Link Cadangan Paket Anti-Gagal (100% Pasti Terbuka):*\n${selfContainedLink}\n` +
-    `\n_Petunjuk: Buka link ujian di HP atau laptop siswa, pilih nama, masukkan token jika diminta, lalu kerjakan dengan teliti._`;
+    `\n\n👉 *Link Ujian Siswa (Mode Siswa Aplikasi):*\n${activeSelectedLink}\n` +
+    `\n🛡️ *Link Cadangan Paket Mandiri (Anti-Gagal):*\n${selfContainedLink}\n` +
+    `\n_Petunjuk: Buka link ujian di HP atau laptop siswa. Aplikasi akan langsung membuka Mode Siswa. Pilih nama, masukkan token jika diminta, lalu kerjakan dengan teliti._`;
 
   const handleCopyWhatsAppTemplate = () => {
     navigator.clipboard.writeText(shareMessageText);
@@ -491,7 +491,7 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
                 }`}
               >
                 <Zap className="w-3.5 h-3.5 shrink-0 text-amber-400" />
-                <span className="truncate">Kode CBT Cloud</span>
+                <span className="truncate">Mode Siswa (Aplikasi)</span>
               </button>
 
               <button
@@ -521,17 +521,24 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
               </button>
             </div>
 
-            {/* Content for Link Ujian Siswa (Utama) */}
+            {/* Content for Link Ujian Siswa (Utama - Mode Siswa Aplikasi) */}
             {linkMode === "student" && (
               <div className="p-3 bg-indigo-950/20 border border-indigo-500/20 rounded-xl space-y-2 text-xs">
                 <p className="text-[11px] text-indigo-200 leading-relaxed">
-                  <strong>Link Ringkas CBT Cloud:</strong> Link standar dengan kode soal{" "}
-                  <strong className="text-white font-mono">{currentExam.code}</strong>. Memuat naskah otomatis dari Server CBT & Cloud Firestore secara instan.
+                  <strong>Link Mode Siswa Aplikasi:</strong> Tautan resmi langsung membuka aplikasi dalam Mode Siswa{" "}
+                  <code className="text-amber-300 font-mono bg-amber-950/50 px-1 py-0.5 rounded">?mode=student&code={currentExam.code}</code>.
+                  Siswa langsung masuk ke antarmuka pengerjaan ujian secara aman tanpa akses ke dashboard guru dan tanpa memerlukan Firestore.
                 </p>
+                {includeTokenInLink && currentToken && (
+                  <p className="text-[11px] text-emerald-300 flex items-center gap-1 font-mono">
+                    <KeyRound className="w-3 h-3 text-emerald-400 shrink-0" />
+                    <span>Token tersemat: {currentToken} (siswa tidak perlu mengetik token manual).</span>
+                  </p>
+                )}
                 {currentExam.gdriveFileId && (
                   <p className="text-[11px] text-cyan-300 flex items-center gap-1">
                     <Cloud className="w-3 h-3 text-cyan-400 shrink-0" />
-                    <span>Tersambung dengan Google Drive (ID: {currentExam.gdriveFileId.slice(0, 8)}...).</span>
+                    <span>Terhubung ke backup Drive (ID: {currentExam.gdriveFileId.slice(0, 8)}...).</span>
                   </p>
                 )}
               </div>

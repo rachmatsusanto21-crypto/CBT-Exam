@@ -39,9 +39,9 @@ import {
 import { DirectStudentShareModal } from "./DirectStudentShareModal";
 import { saveExamToGoogleDrive, formatExamDriveFileName } from "../utils/googleDrive";
 import { getCachedAccessToken, googleSignIn } from "../utils/googleAuth";
-import { generateDriveStudentUrl } from "../utils/examShareEncoder";
+import { generateDriveStudentUrl, generateShortStudentUrl } from "../utils/examShareEncoder";
 import { saveExamPackages } from "../utils/storage";
-import { syncExamToFirestore } from "../utils/firestoreService";
+import { syncExamToGAS } from "../utils/gasService";
 
 interface ExamHistoryModalProps {
   isOpen: boolean;
@@ -79,6 +79,7 @@ export const ExamHistoryModal: React.FC<ExamHistoryModalProps> = ({
   const [uploadingExamId, setUploadingExamId] = useState<string | null>(null);
   const [isBatchUploading, setIsBatchUploading] = useState(false);
   const [copiedDriveExamId, setCopiedDriveExamId] = useState<string | null>(null);
+  const [copiedStudentExamId, setCopiedStudentExamId] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
@@ -121,9 +122,9 @@ export const ExamHistoryModal: React.FC<ExamHistoryModalProps> = ({
       const updatedAll = exams.map((e) => (e.id === updatedExam.id ? updatedExam : e));
       saveExamPackages(updatedAll);
 
-      // Explicitly dual-sync to Firestore for reliable multi-device student access
+      // Explicitly sync to Google Apps Script & Sheets
       try {
-        await syncExamToFirestore(updatedExam, updatedExam.tokens);
+        await syncExamToGAS(updatedExam, updatedExam.tokens);
       } catch {}
 
       showFeedback(`✓ Naskah "${examItem.code}" tersimpan di Drive (Folder Backup_Data_Aplikasi) dengan nama: ${res.fileName}`);
@@ -133,6 +134,16 @@ export const ExamHistoryModal: React.FC<ExamHistoryModalProps> = ({
     } finally {
       setUploadingExamId(null);
     }
+  };
+
+  const handleCopyStudentLink = (examItem: ExamPackage) => {
+    const currentUrl = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
+    const baseUrl = currentUrl.endsWith("/") ? currentUrl.slice(0, -1) : currentUrl;
+    const studentUrl = generateShortStudentUrl(baseUrl, examItem, examItem.sessionToken);
+    navigator.clipboard.writeText(studentUrl);
+    setCopiedStudentExamId(examItem.id);
+    showFeedback(`✓ Link Mode Siswa (?mode=student&code=${examItem.code}) berhasil disalin!`);
+    setTimeout(() => setCopiedStudentExamId(null), 3000);
   };
 
   const handleCopyDriveLink = (examItem: ExamPackage) => {
@@ -547,8 +558,27 @@ export const ExamHistoryModal: React.FC<ExamHistoryModalProps> = ({
                           </span>
                         </div>
 
-                        {/* Google Drive Status & Filename Format */}
+                        {/* Student Mode Link Button & Google Drive Status */}
                         <div className="flex items-center gap-2 text-[11px] pt-1 flex-wrap">
+                          <button
+                            type="button"
+                            onClick={() => handleCopyStudentLink(examItem)}
+                            className="text-amber-400 hover:text-amber-300 font-semibold flex items-center gap-1 cursor-pointer bg-amber-950/40 hover:bg-amber-900/50 px-2.5 py-1 rounded-md border border-amber-500/30 text-[10px] transition-colors"
+                            title="Salin Link Mode Siswa Aplikasi (?mode=student&code=...)"
+                          >
+                            {copiedStudentExamId === examItem.id ? (
+                              <>
+                                <Check className="w-3 h-3 text-emerald-400" />
+                                <span className="text-emerald-300 font-bold">Link Siswa Tersalin!</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="w-3 h-3" />
+                                <span>Salin Link Mode Siswa</span>
+                              </>
+                            )}
+                          </button>
+
                           {examItem.gdriveFileId ? (
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="px-2 py-0.5 rounded-md bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 flex items-center gap-1 font-mono text-[10px]">
