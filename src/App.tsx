@@ -72,25 +72,13 @@ import {
   fetchExamSessions,
   deleteStudentSessionFromFirestore,
   batchDeleteStudentSessionsFromFirestore,
-  reconcileAndMergeExamSessions,
-  subscribeQuotaStatus,
-  resetQuotaCheck,
-  FIRESTORE_UPGRADE_URL
+  reconcileAndMergeExamSessions
 } from "./utils/firestoreService";
 
 export default function App() {
   // Decode any packed exam payload from URL
   const sharedPayload = useMemo(() => {
     return decodeExamFromCurrentUrl();
-  }, []);
-
-  // Track Firestore Quota state
-  const [firestoreQuotaExceeded, setFirestoreQuotaExceeded] = useState<boolean>(false);
-
-  useEffect(() => {
-    return subscribeQuotaStatus((exceeded) => {
-      setFirestoreQuotaExceeded(exceeded);
-    });
   }, []);
 
   // Direct Student Link Detection (Auto-detect mode=student, code, examId, driveId, pkg, or token)
@@ -1705,52 +1693,6 @@ export default function App() {
           </div>
         )}
       </header>
-
-      {/* Firestore Quota Exceeded Informational Banner */}
-      {firestoreQuotaExceeded && (
-        <div className="bg-amber-950/80 border-b border-amber-800/80 px-4 py-2.5 text-xs text-amber-200">
-          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse shrink-0"></span>
-              <span>
-                <strong>Batas Kuota Tulis Gratis Firestore Harian Tercapai:</strong> Kuota akan di-reset otomatis pada pergantian hari berikutnya. Sistem otomatis beralih menggunakan <em>Express Server & Local Storage Backup Engine</em> sehingga pengerjaan ujian dan pemantauan tetap berjalan normal tanpa gangguan.
-              </span>
-            </div>
-            <div className="flex items-center gap-2 shrink-0 flex-wrap">
-              <button
-                onClick={() => {
-                  resetQuotaCheck();
-                  window.location.reload();
-                }}
-                className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 rounded-lg text-[11px] font-medium transition-all cursor-pointer"
-                title="Coba sambungkan ulang ke Cloud Firestore"
-              >
-                <RefreshCw className="w-3 h-3 text-slate-400" />
-                <span>Coba Sambung Ulang</span>
-              </button>
-              <a
-                href="https://firebase.google.com/pricing#cloud-firestore"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-800/80 hover:bg-slate-700 text-amber-300 border border-amber-700/50 rounded-lg text-[11px] font-medium transition-all cursor-pointer"
-                title="Lihat batas kuota paket gratis Spark"
-              >
-                <span>Info Kuota Spark</span>
-                <ExternalLink className="w-2.5 h-2.5" />
-              </a>
-              <a
-                href={FIRESTORE_UPGRADE_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg text-[11px] transition-all cursor-pointer shadow-sm"
-              >
-                <span>Firebase Console</span>
-                <ExternalLink className="w-3 h-3" />
-              </a>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">

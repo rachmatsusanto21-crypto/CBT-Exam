@@ -1,35 +1,29 @@
-import { initializeApp, getApps, getApp } from 'firebase/app';
-import {
-  getAuth,
-  signInWithPopup,
-  signOut,
-  GoogleAuthProvider,
-  onAuthStateChanged,
-  User,
-} from 'firebase/auth';
-import firebaseConfig from '../../firebase-applet-config.json';
+/**
+ * Google Authentication & Identity Service
+ * Uses Google Identity Services (GIS) directly without Firebase dependencies.
+ */
 
-const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
-export const auth = getAuth(app);
+export interface GoogleUser {
+  displayName?: string;
+  email?: string;
+  photoURL?: string;
+  uid?: string;
+}
+
+export type User = GoogleUser;
 
 export const DRIVE_SCOPES = [
   'https://www.googleapis.com/auth/drive.file',
 ];
 
-const provider = new GoogleAuthProvider();
-DRIVE_SCOPES.forEach((scope) => {
-  provider.addScope(scope);
-});
-provider.setCustomParameters({
-  prompt: 'select_account',
-});
-
 const AUTH_STORAGE_KEY = "slideexam_gdrive_auth_session";
-
-let isSigningIn = false;
+const CLIENT_ID_STORAGE_KEY = "slideexam_google_client_id";
 
 type AuthExpiredListener = () => void;
 const authExpiredListeners = new Set<AuthExpiredListener>();
+
+type AuthStateListener = (user: GoogleUser | null, token: string | null) => void;
+const authStateListeners = new Set<AuthStateListener>();
 
 export const onGoogleAuthExpired = (cb: AuthExpiredListener) => {
   authExpiredListeners.add(cb);
@@ -48,6 +42,11 @@ export const clearAuthSession = () => {
   } catch (e) {
     console.warn("Failed clearing auth session", e);
   }
+  authStateListeners.forEach((cb) => {
+    try {
+      cb(null, null);
+    } catch {}
+  });
 };
 
 export const notifyAuthExpired = () => {
@@ -87,17 +86,14 @@ export const isAuthExpiredError = (error: any): boolean => {
 
 export const formatGoogleAuthErrorMessage = (error: any): string => {
   if (isAuthExpiredError(error)) {
-    return "Sesi login Google Drive telah kedaluwarsa. Silakan hubungkan ulang akun Google Anda untuk memperbarui izin akses.";
+    return "Sesi login Google telah kedaluwarsa. Silakan hubungkan ulang akun Google Anda.";
   }
   const msg = error?.message || String(error);
-  if (msg.includes("popup-closed-by-user")) {
-    return "Jendela login Google ditutup sebelum selesai. Silakan coba lagi.";
+  if (msg.includes("popup-closed-by-user") || msg.includes("access_denied")) {
+    return "Jendela otorisasi Google ditutup sebelum selesai atau izin ditolak.";
   }
   if (msg.includes("popup-blocked")) {
     return "Jendela pop-up diblokir oleh browser. Harap izinkan pop-up untuk situs ini.";
-  }
-  if (msg.includes("unauthorized-domain")) {
-    return "Domain ini belum diotorisasi di Firebase. Sistem beralih ke Google Identity Services.";
   }
   return msg;
 };
@@ -111,7 +107,6 @@ let cachedAccessToken: string | null = (() => {
         if (parsed.token && parsed.expiresAt && Date.now() < parsed.expiresAt) {
           return parsed.token;
         } else if (parsed.expiresAt && Date.now() >= parsed.expiresAt) {
-          // Token expired, clear it
           localStorage.removeItem(AUTH_STORAGE_KEY);
         }
       }
@@ -122,7 +117,7 @@ let cachedAccessToken: string | null = (() => {
   return null;
 })();
 
-let cachedUser: any | null = (() => {
+let cachedUser: GoogleUser | null = (() => {
   try {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem(AUTH_STORAGE_KEY);
@@ -139,18 +134,23 @@ let cachedUser: any | null = (() => {
   return null;
 })();
 
-const saveAuthSession = (user: any, token: string) => {
+export const saveAuthSession = (user: GoogleUser, token: string) => {
   try {
     cachedAccessToken = token;
     cachedUser = user;
     if (typeof window !== "undefined") {
-      // 50 minutes validity before refresh (Google tokens expire in 60 minutes)
+      // 50 minutes validity before refresh
       const expiresAt = Date.now() + 50 * 60 * 1000;
       localStorage.setItem(
         AUTH_STORAGE_KEY,
         JSON.stringify({ user, token, expiresAt })
       );
     }
+    authStateListeners.forEach((cb) => {
+      try {
+        cb(user, token);
+      } catch {}
+    });
   } catch (e) {
     console.warn("Failed saving auth session", e);
   }
@@ -160,170 +160,144 @@ const saveAuthSession = (user: any, token: string) => {
  * Initialize auth listener
  */
 export const initAuth = (
-  onAuthSuccess?: (user: User | any, token: string) => void,
+  onAuthSuccess?: (user: GoogleUser, token: string) => void,
   onAuthFailure?: () => void
 ) => {
-  // If we have cached session on start, notify listener immediately
   if (cachedUser && cachedAccessToken) {
     if (onAuthSuccess) onAuthSuccess(cachedUser, cachedAccessToken);
+  } else {
+    if (onAuthFailure) onAuthFailure();
   }
 
-  return onAuthStateChanged(auth, async (user: User | null) => {
-    if (user) {
-      if (cachedAccessToken) {
-        saveAuthSession(user, cachedAccessToken);
-        if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
-      } else if (!isSigningIn) {
-        if (cachedUser && cachedAccessToken) {
-          if (onAuthSuccess) onAuthSuccess(cachedUser, cachedAccessToken);
-        } else if (onAuthFailure) {
-          onAuthFailure();
-        }
-      }
+  const listener: AuthStateListener = (user, token) => {
+    if (user && token) {
+      if (onAuthSuccess) onAuthSuccess(user, token);
     } else {
-      if (!cachedAccessToken) {
-        if (onAuthFailure) onAuthFailure();
-      } else if (cachedUser && onAuthSuccess) {
-        onAuthSuccess(cachedUser, cachedAccessToken);
-      }
+      if (onAuthFailure) onAuthFailure();
     }
-  });
+  };
+
+  authStateListeners.add(listener);
+  return () => {
+    authStateListeners.delete(listener);
+  };
 };
 
 /**
- * Helper to request token via Google Identity Services (GIS) token client
+ * Helper to dynamically load GIS script if not present
  */
-export const requestGoogleTokenViaGIS = (clientId: string, silent = false): Promise<{ user: any; accessToken: string }> => {
+const loadGISScript = (): Promise<void> => {
   return new Promise((resolve, reject) => {
-    const loadGsi = () => {
-      if ((window as any).google?.accounts?.oauth2) {
-        return Promise.resolve();
-      }
-      return new Promise<void>((res, rej) => {
-        const id = 'google-gsi-client-script';
-        if (document.getElementById(id)) {
-          setTimeout(() => res(), 300);
-          return;
-        }
-        const s = document.createElement('script');
-        s.id = id;
-        s.src = 'https://accounts.google.com/gsi/client';
-        s.async = true;
-        s.onload = () => res();
-        s.onerror = () => rej(new Error('Gagal memuat script Google Identity Services.'));
-        document.head.appendChild(s);
-      });
-    };
-
-    loadGsi().then(() => {
-      try {
-        const client = (window as any).google.accounts.oauth2.initTokenClient({
-          client_id: clientId,
-          scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email',
-          callback: async (tokenResponse: any) => {
-            if (tokenResponse.error) {
-              reject(new Error(tokenResponse.error_description || tokenResponse.error));
-              return;
-            }
-            if (tokenResponse.access_token) {
-              cachedAccessToken = tokenResponse.access_token;
-              let displayName = "Pengguna Google";
-              let email = "";
-              let photoURL = "";
-              try {
-                const userRes = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
-                  headers: { Authorization: `Bearer ${tokenResponse.access_token}` },
-                });
-                if (userRes.ok) {
-                  const userData = await userRes.json();
-                  displayName = userData.name || userData.email || displayName;
-                  email = userData.email || "";
-                  photoURL = userData.picture || "";
-                }
-              } catch (e) {
-                console.warn("Could not fetch user info via access token", e);
-              }
-              const customUser = {
-                displayName,
-                email,
-                photoURL,
-                uid: email || "gis-user-" + Date.now(),
-              };
-              saveAuthSession(customUser, tokenResponse.access_token);
-              resolve({ user: customUser, accessToken: tokenResponse.access_token });
-            } else {
-              reject(new Error("Tidak menerima token akses dari Google."));
-            }
-          },
-          error_callback: (err: any) => {
-            reject(err);
-          },
-        });
-        client.requestAccessToken({ prompt: silent ? '' : 'select_account' });
-      } catch (err) {
-        reject(err);
-      }
-    }).catch(reject);
+    if (typeof (window as any).google?.accounts?.oauth2 !== 'undefined') {
+      resolve();
+      return;
+    }
+    const existing = document.getElementById('google-gis-script');
+    if (existing) {
+      existing.addEventListener('load', () => resolve());
+      existing.addEventListener('error', (err) => reject(err));
+      return;
+    }
+    const script = document.createElement('script');
+    script.id = 'google-gis-script';
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.defer = true;
+    script.onload = () => resolve();
+    script.onerror = (e) => reject(new Error('Gagal memuat Google Identity Services script'));
+    document.head.appendChild(script);
   });
 };
 
 /**
- * Sign in with Google Popup and obtain access token for Google Drive
+ * Get configured OAuth Client ID
  */
-export const googleSignIn = async (): Promise<{ user: User | any; accessToken: string } | null> => {
+export const getOAuthClientId = (): string => {
   try {
-    isSigningIn = true;
-    try {
-      const result = await signInWithPopup(auth, provider);
-      const credential = GoogleAuthProvider.credentialFromResult(result);
-      if (credential?.accessToken) {
-        saveAuthSession(result.user, credential.accessToken);
-        return {
-          user: result.user,
-          accessToken: credential.accessToken,
-        };
-      }
-      // If Firebase popup succeeded but accessToken was not returned, fallback to GIS
-      if (firebaseConfig.oAuthClientId) {
-        const gisResult = await requestGoogleTokenViaGIS(firebaseConfig.oAuthClientId, false);
-        return gisResult;
-      }
-      throw new Error('Gagal mendapatkan token akses Google Drive. Pastikan izin telah diberikan.');
-    } catch (popupErr: any) {
-      const errCode = popupErr?.code || '';
-      const errMsg = popupErr?.message || '';
-      const isUnauth =
-        errCode === 'auth/unauthorized-domain' ||
-        errMsg.includes('auth/unauthorized-domain') ||
-        errMsg.includes('unauthorized-domain') ||
-        errCode === 'auth/popup-blocked' ||
-        errMsg.includes('popup-blocked');
-
-      if (firebaseConfig.oAuthClientId) {
-        try {
-          return await requestGoogleTokenViaGIS(firebaseConfig.oAuthClientId, false);
-        } catch (gisErr: any) {
-          if (isUnauth) {
-            const currentHost = typeof window !== 'undefined' ? window.location.hostname : 'domain aplikasi';
-            const enhancedError = new Error(
-              `Domain '${currentHost}' belum terdaftar di Firebase Authorized Domains atau izin GIS ditolak.`
-            );
-            (enhancedError as any).code = 'auth/unauthorized-domain';
-            (enhancedError as any).currentHost = currentHost;
-            (enhancedError as any).projectId = firebaseConfig.projectId;
-            throw enhancedError;
-          }
-          throw gisErr;
-        }
-      }
-      throw popupErr;
+    if (typeof window !== "undefined") {
+      const custom = localStorage.getItem(CLIENT_ID_STORAGE_KEY);
+      if (custom) return custom;
     }
-  } catch (error: any) {
-    console.error('Google Sign In Error:', error);
-    throw error;
-  } finally {
-    isSigningIn = false;
+  } catch {}
+  return "";
+};
+
+export const setOAuthClientId = (clientId: string): void => {
+  try {
+    if (typeof window !== "undefined") {
+      localStorage.setItem(CLIENT_ID_STORAGE_KEY, clientId.trim());
+    }
+  } catch {}
+};
+
+/**
+ * Request Google Token via GIS (Google Identity Services)
+ */
+export const requestGoogleTokenViaGIS = async (
+  clientId?: string,
+  silent = false
+): Promise<{ user: GoogleUser; accessToken: string }> => {
+  const effectiveClientId = clientId || getOAuthClientId();
+  if (!effectiveClientId) {
+    throw new Error("Client ID Google belum disetel. Hubungkan akun Anda atau gunakan Google Apps Script.");
   }
+
+  await loadGISScript();
+
+  return new Promise((resolve, reject) => {
+    try {
+      const google = (window as any).google;
+      const client = google.accounts.oauth2.initTokenClient({
+        client_id: effectiveClientId,
+        scope: DRIVE_SCOPES.join(' ') + ' email profile openid',
+        callback: async (tokenResponse: any) => {
+          if (tokenResponse && tokenResponse.access_token) {
+            let email = '';
+            let name = 'Pengguna Google';
+            let picture = '';
+
+            try {
+              const userInfoRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+                headers: { Authorization: `Bearer ${tokenResponse.access_token}` },
+              });
+              if (userInfoRes.ok) {
+                const info = await userInfoRes.json();
+                email = info.email || '';
+                name = info.name || info.given_name || 'Pengguna Google';
+                picture = info.picture || '';
+              }
+            } catch (err) {
+              console.warn('Gagal mengambil info profil Google:', err);
+            }
+
+            const customUser: GoogleUser = {
+              displayName: name,
+              email: email,
+              photoURL: picture,
+              uid: email || "google-user-" + Date.now(),
+            };
+            saveAuthSession(customUser, tokenResponse.access_token);
+            resolve({ user: customUser, accessToken: tokenResponse.access_token });
+          } else {
+            reject(new Error("Tidak menerima token akses dari Google."));
+          }
+        },
+        error_callback: (err: any) => {
+          reject(err);
+        },
+      });
+      client.requestAccessToken({ prompt: silent ? '' : 'select_account' });
+    } catch (err) {
+      reject(err);
+    }
+  });
+};
+
+/**
+ * Sign in with Google Popup and obtain access token
+ */
+export const googleSignIn = async (): Promise<{ user: GoogleUser; accessToken: string } | null> => {
+  return await requestGoogleTokenViaGIS(undefined, false);
 };
 
 /**
@@ -331,11 +305,9 @@ export const googleSignIn = async (): Promise<{ user: User | any; accessToken: s
  */
 export const googleSignOut = async (): Promise<void> => {
   clearAuthSession();
-  await signOut(auth);
 };
 
 export const getCachedAccessToken = (): string | null => {
-  // Re-verify expiration
   try {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem(AUTH_STORAGE_KEY);
@@ -354,24 +326,21 @@ export const getCachedAccessToken = (): string | null => {
   return cachedAccessToken;
 };
 
-export const getCachedUser = (): any | null => {
+export const getCachedUser = (): GoogleUser | null => {
   return cachedUser;
 };
 
 export const getValidDriveToken = async (interactive = false): Promise<string | null> => {
   const current = getCachedAccessToken();
   if (current) return current;
-  if (firebaseConfig.oAuthClientId) {
+  const clientId = getOAuthClientId();
+  if (clientId) {
     try {
-      const res = await requestGoogleTokenViaGIS(firebaseConfig.oAuthClientId, !interactive);
+      const res = await requestGoogleTokenViaGIS(clientId, !interactive);
       return res.accessToken;
     } catch {
       return null;
     }
   }
   return null;
-};
-
-export const getFirebaseConfigData = () => {
-  return firebaseConfig;
 };

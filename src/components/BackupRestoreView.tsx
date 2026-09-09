@@ -25,10 +25,23 @@ import {
   ExternalLink,
   ShieldAlert,
   Sparkles,
-  Info
+  Info,
+  FileSpreadsheet,
+  Code2,
+  CheckCircle,
+  ExternalLink as LinkIcon,
+  Layers
 } from "lucide-react";
 import { AppStateBackup } from "../types";
 import { createFullAppBackup, restoreFullAppBackup, resetToDefaultData } from "../utils/storage";
+import {
+  getGasConfig,
+  saveGasConfig,
+  testGasConnection,
+  initializeGasDatabase,
+  getGasBackendCode,
+  GasConfig,
+} from "../utils/gasService";
 import {
   GOOGLE_DRIVE_BACKUP_FOLDER_NAME,
   GoogleDriveFileItem,
@@ -42,11 +55,12 @@ import {
   googleSignOut,
   initAuth,
   getCachedAccessToken,
-  getFirebaseConfigData,
   requestGoogleTokenViaGIS,
   onGoogleAuthExpired,
   isAuthExpiredError,
   formatGoogleAuthErrorMessage,
+  GoogleUser,
+  User,
 } from "../utils/googleAuth";
 import {
   isDriveAutoSyncEnabled,
@@ -55,7 +69,6 @@ import {
   triggerFullBackupAutoSyncToDrive,
   DriveSyncState,
 } from "../utils/googleDriveSync";
-import { User } from "firebase/auth";
 
 interface BackupRestoreViewProps {
   onDataRestored: () => void;
@@ -96,7 +109,98 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
   const [restoreSuccessMsg, setRestoreSuccessMsg] = useState<string | null>(null);
   const [lastSyncTime, setLastSyncTime] = useState<string>(() => new Date().toLocaleTimeString("id-ID"));
 
+  // Google Apps Script (GAS) & Google Sheets Database State
+  const [gasConfig, setGasConfigState] = useState<GasConfig>(() => getGasConfig());
+  const [gasUrlInput, setGasUrlInput] = useState<string>(() => getGasConfig().webAppUrl || "");
+  const [isTestingGas, setIsTestingGas] = useState(false);
+  const [gasTestResult, setGasTestResult] = useState<{
+    success: boolean;
+    message: string;
+    folders?: Record<string, string>;
+    spreadsheets?: Record<string, string>;
+  } | null>(null);
+  const [isInitializingGas, setIsInitializingGas] = useState(false);
+  const [showGasCodeModal, setShowGasCodeModal] = useState(false);
+  const [gasCodeContent, setGasCodeContent] = useState<string>("");
+  const [isLoadingGasCode, setIsLoadingGasCode] = useState(false);
+  const [isCopiedGasCode, setIsCopiedGasCode] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleSaveGasUrl = () => {
+    saveGasConfig({ webAppUrl: gasUrlInput.trim() });
+    setGasConfigState(getGasConfig());
+    setDriveSuccessMsg("URL Web App Google Apps Script berhasil disimpan.");
+  };
+
+  const handleTestGasConnection = async () => {
+    setIsTestingGas(true);
+    setGasTestResult(null);
+    try {
+      const res = await testGasConnection(gasUrlInput.trim() || undefined);
+      setGasTestResult(res);
+      if (res.success) {
+        setGasConfigState(getGasConfig());
+      }
+    } catch (e: any) {
+      setGasTestResult({ success: false, message: e?.message || "Koneksi ke Apps Script gagal." });
+    } finally {
+      setIsTestingGas(false);
+    }
+  };
+
+  const handleInitializeGasFolders = async () => {
+    setIsInitializingGas(true);
+    setGasTestResult(null);
+    try {
+      const res = await initializeGasDatabase();
+      if (res.success) {
+        setGasConfigState(getGasConfig());
+        setGasTestResult({
+          success: true,
+          message: "Folder Google Drive & Spreadsheet berhasil dibuat dan diinisialisasi!",
+          folders: res.folders,
+          spreadsheets: res.spreadsheets,
+        });
+        setDriveSuccessMsg("Folder dan Spreadsheet CBT Database berhasil diinisialisasi di Google Drive!");
+      } else {
+        setGasTestResult({
+          success: false,
+          message: res.message || "Gagal menginisialisasi database di Apps Script.",
+        });
+      }
+    } catch (err: any) {
+      setGasTestResult({
+        success: false,
+        message: err?.message || "Gagal menghubungi Apps Script backend.",
+      });
+    } finally {
+      setIsInitializingGas(false);
+    }
+  };
+
+  const handleOpenGasCodeModal = async () => {
+    setShowGasCodeModal(true);
+    if (!gasCodeContent) {
+      setIsLoadingGasCode(true);
+      try {
+        const code = await getGasBackendCode();
+        setGasCodeContent(code);
+      } catch (e) {
+        console.warn("Could not fetch code", e);
+      } finally {
+        setIsLoadingGasCode(false);
+      }
+    }
+  };
+
+  const handleCopyGasCode = () => {
+    if (gasCodeContent) {
+      navigator.clipboard.writeText(gasCodeContent);
+      setIsCopiedGasCode(true);
+      setTimeout(() => setIsCopiedGasCode(false), 2500);
+    }
+  };
 
   // Initialize Auth listener on mount
   useEffect(() => {
@@ -169,13 +273,12 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
         err?.message?.includes("unauthorized-domain");
 
       if (isUnauth) {
-        const config = getFirebaseConfigData();
         const currentHost = typeof window !== "undefined" ? window.location.hostname : "localhost";
         setUnauthDomainInfo({
           hostname: currentHost,
-          projectId: config.projectId || "gen-lang-client-0464440670",
+          projectId: "google-workspace-app",
         });
-        setDriveError(`Domain aplikasi (${currentHost}) belum terdaftar di Firebase Authorized Domains.`);
+        setDriveError(`Domain aplikasi (${currentHost}) belum terdaftar pada konfigurasi OAuth Google.`);
       } else {
         setDriveError(err?.message || "Gagal login dengan Google. Pastikan pop-up diizinkan.");
       }
@@ -193,15 +296,10 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
 
   // Alternative GIS connection attempt
   const handleTryGisDirect = async () => {
-    const config = getFirebaseConfigData();
-    if (!config.oAuthClientId) {
-      alert("OAuth Client ID belum terkonfigurasi di aplikasi.");
-      return;
-    }
     setIsConnectingDrive(true);
     setDriveError(null);
     try {
-      const res = await requestGoogleTokenViaGIS(config.oAuthClientId);
+      const res = await requestGoogleTokenViaGIS();
       if (res && res.accessToken) {
         setCurrentUser(res.user);
         setDriveToken(res.accessToken);
@@ -376,6 +474,269 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
           </button>
         </div>
       </div>
+
+      {/* Google Sheets & Google Apps Script Database Card */}
+      <div className="bg-[#121214] rounded-2xl p-6 border border-emerald-500/30 shadow-xl space-y-6">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+          <div className="flex items-start gap-3">
+            <div className="w-11 h-11 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+              <FileSpreadsheet className="w-6 h-6" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-base font-bold text-white">Database Utama Google Sheets & Apps Script (GAS)</h3>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  Backend Aktif
+                </span>
+              </div>
+              <p className="text-xs text-slate-400 mt-0.5 leading-relaxed">
+                Seluruh data disimpan ke dalam 3 subfolder terstruktur di Google Drive: <em>'Data Siswa dan Kelas'</em>, <em>'Data Analisis dan Nilai'</em>, dan <em>'Data Soal'</em>.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0 flex-wrap">
+            <button
+              type="button"
+              onClick={handleOpenGasCodeModal}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition-all cursor-pointer shadow-sm"
+            >
+              <Code2 className="w-4 h-4 text-emerald-400" />
+              <span>Lihat / Salin Script Code.gs</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleInitializeGasFolders}
+              disabled={isInitializingGas}
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-950 cursor-pointer disabled:opacity-50"
+            >
+              <FolderSync className={`w-4 h-4 ${isInitializingGas ? "animate-spin" : ""}`} />
+              <span>{isInitializingGas ? "Menginisialisasi..." : "Inisialisasi Folder & Sheets"}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* 3 Subfolders Blueprint */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+          {/* Subfolder 1 */}
+          <div className="p-4 bg-[#161618] rounded-xl border border-slate-800 space-y-2">
+            <div className="flex items-center gap-2 text-emerald-400 font-bold text-xs">
+              <FolderOpen className="w-4 h-4" />
+              <span>📂 Data Siswa dan Kelas</span>
+            </div>
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              Menampung data absensi, daftar siswa per rombel, serta token akses ujian aktif.
+            </p>
+            <div className="pt-1.5 space-y-1 text-[11px] text-slate-300">
+              <div className="flex items-center gap-1.5">
+                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>Spreadsheet: <strong>Roster_Siswa</strong></span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>Spreadsheet: <strong>Token_Ujian</strong></span>
+              </div>
+            </div>
+          </div>
+
+          {/* Subfolder 2 */}
+          <div className="p-4 bg-[#161618] rounded-xl border border-indigo-900/40 space-y-2">
+            <div className="flex items-center gap-2 text-indigo-400 font-bold text-xs">
+              <FolderOpen className="w-4 h-4" />
+              <span>📂 Data Analisis dan Nilai</span>
+            </div>
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              Menyimpan rekap nilai kelulusan, rincian jawaban per butir, serta program Pengayaan & Remidi AI.
+            </p>
+            <div className="pt-1.5 space-y-1 text-[11px] text-slate-300">
+              <div className="flex items-center gap-1.5">
+                <FileSpreadsheet className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                <span>Spreadsheet: <strong>Hasil_Ujian</strong></span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                <span>Spreadsheet: <strong>Pengayaan_Dan_Remidi_AI</strong></span>
+              </div>
+            </div>
+          </div>
+
+          {/* Subfolder 3 */}
+          <div className="p-4 bg-[#161618] rounded-xl border border-slate-800 space-y-2">
+            <div className="flex items-center gap-2 text-amber-400 font-bold text-xs">
+              <FolderOpen className="w-4 h-4" />
+              <span>📂 Data Soal</span>
+            </div>
+            <p className="text-[11px] text-slate-400 leading-relaxed">
+              Menyimpan naskah master paket ujian, kunci jawaban, rubrik, dan file arsip JSON slide.
+            </p>
+            <div className="pt-1.5 space-y-1 text-[11px] text-slate-300">
+              <div className="flex items-center gap-1.5">
+                <FileSpreadsheet className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span>Spreadsheet: <strong>Paket_Ujian</strong></span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <FileText className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span>Arsip File: <strong>Naskah JSON Slide</strong></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* GAS Web App URL Config Bar */}
+        <div className="p-4 bg-[#161618] rounded-xl border border-slate-800 space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <label className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+              <LinkIcon className="w-3.5 h-3.5 text-emerald-400" />
+              <span>URL Web App Google Apps Script:</span>
+            </label>
+            <span className="text-[11px] text-slate-400">
+              Format: <code>https://script.google.com/macros/s/.../exec</code>
+            </span>
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+            <input
+              type="text"
+              value={gasUrlInput}
+              onChange={(e) => setGasUrlInput(e.target.value)}
+              placeholder="Tempelkan URL Web App Google Apps Script di sini..."
+              className="flex-1 px-3.5 py-2.5 bg-[#0e0e10] border border-slate-700 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition-colors font-mono"
+            />
+            <button
+              type="button"
+              onClick={handleSaveGasUrl}
+              className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-sm cursor-pointer shrink-0"
+            >
+              Simpan URL
+            </button>
+            <button
+              type="button"
+              onClick={handleTestGasConnection}
+              disabled={isTestingGas}
+              className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold transition-all cursor-pointer shrink-0 disabled:opacity-50 flex items-center justify-center gap-1.5"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-emerald-400 ${isTestingGas ? "animate-spin" : ""}`} />
+              <span>{isTestingGas ? "Menguji..." : "Uji Koneksi (Ping)"}</span>
+            </button>
+          </div>
+
+          {gasTestResult && (
+            <div
+              className={`p-3 rounded-xl text-xs flex items-start gap-2.5 ${
+                gasTestResult.success
+                  ? "bg-emerald-500/10 border border-emerald-500/30 text-emerald-200"
+                  : "bg-rose-500/10 border border-rose-500/30 text-rose-300"
+              }`}
+            >
+              {gasTestResult.success ? (
+                <CheckCircle className="w-4 h-4 text-emerald-400 mt-0.5 shrink-0" />
+              ) : (
+                <AlertTriangle className="w-4 h-4 text-rose-400 mt-0.5 shrink-0" />
+              )}
+              <div className="space-y-1">
+                <span className="font-semibold">{gasTestResult.message}</span>
+                {gasTestResult.spreadsheets && (
+                  <div className="flex flex-wrap gap-2 pt-1 text-[11px]">
+                    {Object.entries(gasTestResult.spreadsheets).map(([key, url]) => (
+                      <a
+                        key={key}
+                        href={url as string}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 px-2 py-0.5 bg-black/40 hover:bg-black/60 rounded border border-emerald-500/30 text-emerald-300"
+                      >
+                        <span>{key}</span>
+                        <ExternalLink className="w-2.5 h-2.5" />
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* GAS Code Setup Modal */}
+      {showGasCodeModal && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#121214] border border-slate-800 rounded-3xl max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in-95">
+            <div className="p-5 border-b border-slate-800 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                  <Code2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Kode Backend Google Apps Script (Code.gs)</h3>
+                  <p className="text-xs text-slate-400">Ikuti panduan mudah 3 langkah berikut untuk men-deploy backend.</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowGasCodeModal(false)}
+                className="w-8 h-8 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto space-y-4 text-xs text-slate-300">
+              <div className="p-4 bg-emerald-950/20 border border-emerald-800/40 rounded-2xl space-y-2">
+                <span className="text-xs font-bold text-emerald-300 block">Langkah Pemasangan di Google Apps Script:</span>
+                <ol className="list-decimal list-inside space-y-1 text-slate-200 text-xs">
+                  <li>Buka <a href="https://script.google.com" target="_blank" rel="noreferrer" className="text-emerald-400 underline font-semibold">script.google.com</a> lalu buat <strong>New Project</strong>.</li>
+                  <li>Beri nama proyek, misalnya <code>SlideExam CBT Database</code>.</li>
+                  <li>Hapus isi default di <code>Code.gs</code>, lalu klik tombol <strong>"Salin Seluruh Kode Code.gs"</strong> di bawah dan tempelkan ke editor Apps Script.</li>
+                  <li>Klik menu <strong>Deploy</strong> &gt; <strong>New Deployment</strong>.</li>
+                  <li>Pilih jenis <strong>Web app</strong>, atur <em>Execute as: Me</em> dan <em>Who has access: Anyone</em>, lalu klik <strong>Deploy</strong>.</li>
+                  <li>Salin Web App URL yang dihasilkan dan tempelkan ke kolom URL Web App di atas.</li>
+                </ol>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-200">Pratinjau Kode (Code.gs):</span>
+                  <button
+                    onClick={handleCopyGasCode}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer"
+                  >
+                    {isCopiedGasCode ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{isCopiedGasCode ? "Berhasil Disalin!" : "Salin Seluruh Kode Code.gs"}</span>
+                  </button>
+                </div>
+
+                <div className="relative">
+                  {isLoadingGasCode ? (
+                    <div className="h-64 bg-[#0a0a0c] border border-slate-800 rounded-xl flex items-center justify-center text-slate-400 gap-2">
+                      <RefreshCw className="w-4 h-4 animate-spin text-emerald-400" />
+                      <span>Memuat kode script...</span>
+                    </div>
+                  ) : (
+                    <textarea
+                      readOnly
+                      value={gasCodeContent}
+                      rows={14}
+                      className="w-full p-3 bg-[#0a0a0c] border border-slate-800 rounded-xl font-mono text-[11px] text-emerald-300 leading-relaxed focus:outline-none resize-none"
+                    />
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-slate-800 bg-[#0e0e10] flex items-center justify-between">
+              <span className="text-[11px] text-slate-400">
+                100% aman: kode berjalan langsung di akun Google Drive pribadi Anda tanpa perantara server pihak ketiga.
+              </span>
+              <button
+                onClick={() => setShowGasCodeModal(false)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Auto-Sync Cloud Status Card */}
       <div className="bg-[#18181c] border border-slate-800 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">

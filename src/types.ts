@@ -142,9 +142,77 @@ export interface StudentExamSession {
   status: "in_progress" | "submitted" | "timed_out";
   shuffledQuestions?: Question[];
   aiRemediation?: string;
+  aiEnrichment?: string;
+  aiDiagnosis?: string;
+  aiStructuredAnalysis?: AiDiagnosticResult;
   deviceInfo?: string;
   cheatViolations?: CheatingViolationLog[];
   violationCount?: number;
+}
+
+export interface AiHotsChallenge {
+  question: string;
+  guidance: string;
+}
+
+export interface AiGuidedQuestion {
+  question: string;
+  hint: string;
+  answer?: string;
+}
+
+export interface AiEnrichmentPlan {
+  title: string;
+  targetCompetencies: string[];
+  advancedMaterials: string;
+  creativeTask: string;
+  hotsChallenges?: AiHotsChallenge[];
+}
+
+export interface AiRemediationPlan {
+  title: string;
+  targetDeficits: string[];
+  conceptClarification: string;
+  remedialSteps: string[];
+  guidedQuestions?: AiGuidedQuestion[];
+}
+
+export interface AiDiagnosticResult {
+  passed: boolean;
+  score: number;
+  maxScore: number;
+  percentage: number;
+  diagnosis: string;
+  misconceptions: string[];
+  recommendedTopics: string[];
+  enrichment: AiEnrichmentPlan;
+  remediation: AiRemediationPlan;
+  motivation: string;
+  generatedAt?: string;
+}
+
+export interface GasFolderItem {
+  id: string;
+  name: string;
+  url: string;
+}
+
+export interface GasConfig {
+  webAppUrl: string;
+  connected: boolean;
+  lastTestedAt?: string;
+  lastSyncedAt?: string;
+  folders?: {
+    master?: GasFolderItem;
+    siswaKelas?: GasFolderItem;
+    analisisNilai?: GasFolderItem;
+    soal?: GasFolderItem;
+  };
+  sheets?: {
+    siswa?: GasFolderItem;
+    analisis?: GasFolderItem;
+    soal?: GasFolderItem;
+  };
 }
 
 export interface ItemAnalysisSummary {

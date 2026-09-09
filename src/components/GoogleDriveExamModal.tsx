@@ -37,13 +37,13 @@ import {
   googleSignOut,
   initAuth,
   getCachedAccessToken,
-  getFirebaseConfigData,
   requestGoogleTokenViaGIS,
   onGoogleAuthExpired,
   isAuthExpiredError,
   formatGoogleAuthErrorMessage,
+  GoogleUser,
+  User,
 } from "../utils/googleAuth";
-import { User } from "firebase/auth";
 
 import {
   isDriveAutoSyncEnabled,
@@ -177,27 +177,24 @@ export const GoogleDriveExamModal: React.FC<GoogleDriveExamModalProps> = ({
         err?.message?.includes("unauthorized-domain");
 
       if (isUnauth) {
-        const config = getFirebaseConfigData();
-        if (config.oAuthClientId) {
-          try {
-            const gisRes = await requestGoogleTokenViaGIS(config.oAuthClientId);
-            if (gisRes) {
-              setCurrentUser(gisRes.user);
-              setDriveToken(gisRes.accessToken);
-              setStatusMsg({
-                type: "success",
-                text: `Berhasil terhubung via Google Identity Services sebagai ${gisRes.user.displayName || "Pengguna"}!`,
-              });
-              await fetchDriveExams(gisRes.accessToken);
-              return;
-            }
-          } catch (gisErr: any) {
+        try {
+          const gisRes = await requestGoogleTokenViaGIS();
+          if (gisRes) {
+            setCurrentUser(gisRes.user);
+            setDriveToken(gisRes.accessToken);
             setStatusMsg({
-              type: "error",
-              text: gisErr.message || "Gagal otentikasi Google Drive via GIS.",
+              type: "success",
+              text: `Berhasil terhubung via Google Identity Services sebagai ${gisRes.user.displayName || "Pengguna"}!`,
             });
+            await fetchDriveExams(gisRes.accessToken);
             return;
           }
+        } catch (gisErr: any) {
+          setStatusMsg({
+            type: "error",
+            text: gisErr.message || "Gagal otentikasi Google Drive via GIS.",
+          });
+          return;
         }
       }
 

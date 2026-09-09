@@ -1,6 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { getCustomGeminiApiKey, getGeminiRequestHeaders } from "./storage";
-import { Question, QuestionType } from "../types";
+import { Question, QuestionType, AiDiagnosticResult } from "../types";
 
 /**
  * Format friendly Gemini error message
@@ -609,5 +609,183 @@ Tugas Anda:
   }
 
   throw new Error("Koneksi ke Gemini AI belum siap. Pastikan Kunci API Gemini telah aktif.");
+}
+
+/**
+ * Generate comprehensive AI Diagnostic, Enrichment & Remedial materials for student exam results
+ */
+export async function generateStudentEnrichmentAndRemediation(params: {
+  studentName: string;
+  nisn?: string;
+  className?: string;
+  subject?: string;
+  score: number;
+  maxScore?: number;
+  passingGrade?: number;
+  passed?: boolean;
+  wrongQuestions?: any[];
+  correctQuestions?: any[];
+  totalQuestions?: number;
+}): Promise<AiDiagnosticResult> {
+  const customKey = getCustomGeminiApiKey();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (customKey) {
+    headers["x-gemini-api-key"] = customKey;
+  }
+
+  // 1. Try server endpoint first
+  try {
+    const res = await fetch("/api/gemini/analyze-student-enrichment-remediation", {
+      method: "POST",
+      headers,
+      body: JSON.stringify(params),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.success && data.analysis) {
+        return data.analysis as AiDiagnosticResult;
+      }
+    }
+  } catch (err) {
+    console.warn("[geminiApi] Server enrichment endpoint error, trying client fallback:", err);
+  }
+
+  // 2. Client fallback with @google/genai if custom key exists
+  if (customKey) {
+    try {
+      const ai = new GoogleGenAI({ apiKey: customKey });
+      const score = params.score;
+      const maxScore = params.maxScore || 100;
+      const percentage = Math.round((score / maxScore) * 100);
+      const isPassed = params.passed !== undefined ? params.passed : score >= (params.passingGrade || 75);
+
+      const prompt = `Analisis hasil ujian siswa untuk Program Pengayaan & Remidi:
+Siswa: ${params.studentName} | Kelas: ${params.className || "-"} | Mapel: ${params.subject || "Umum"}
+Nilai: ${score}/${maxScore} (${percentage}%) | Status: ${isPassed ? "TUNTAS (PENGAYAAN)" : "BELUM TUNTAS (REMIDI)"}
+Soal Salah: ${(params.wrongQuestions || []).map((q, i) => `${i+1}. [${q.topicTag || "Materi"}] ${q.questionText} (Kunci: ${q.correctAnswer}, Siswa: ${q.studentAnswer})`).join("; ") || "Tidak ada, sempurna"}
+Susun: diagnosis pemahaman, program pengayaan (materi advance, tugas kreatif, tantangan HOTS), program remidi (klarifikasi konsep, langkah perbaikan, soal latihan terarah), dan motivasi.`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.6-flash",
+        contents: prompt,
+        config: {
+          systemInstruction: "Anda adalah konselor dan guru evaluator kurikulum merdeka.",
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              passed: { type: Type.BOOLEAN },
+              diagnosis: { type: Type.STRING },
+              misconceptions: { type: Type.ARRAY, items: { type: Type.STRING } },
+              recommendedTopics: { type: Type.ARRAY, items: { type: Type.STRING } },
+              enrichment: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  targetCompetencies: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  advancedMaterials: { type: Type.STRING },
+                  creativeTask: { type: Type.STRING },
+                  hotsChallenges: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        question: { type: Type.STRING },
+                        guidance: { type: Type.STRING },
+                      },
+                      required: ["question", "guidance"],
+                    },
+                  },
+                },
+                required: ["title", "targetCompetencies", "advancedMaterials", "creativeTask"],
+              },
+              remediation: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  targetDeficits: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  conceptClarification: { type: Type.STRING },
+                  remedialSteps: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  guidedQuestions: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        question: { type: Type.STRING },
+                        hint: { type: Type.STRING },
+                        answer: { type: Type.STRING },
+                      },
+                      required: ["question", "hint"],
+                    },
+                  },
+                },
+                required: ["title", "targetDeficits", "conceptClarification", "remedialSteps"],
+              },
+              motivation: { type: Type.STRING },
+            },
+            required: ["passed", "diagnosis", "enrichment", "remediation", "motivation"],
+          },
+        },
+      });
+
+      const parsed = JSON.parse(response.text?.trim() || "{}");
+      return {
+        ...parsed,
+        score,
+        maxScore,
+        percentage,
+        passed: isPassed,
+        generatedAt: new Date().toISOString(),
+      } as AiDiagnosticResult;
+    } catch (e: any) {
+      throw new Error(formatGeminiClientError(e));
+    }
+  }
+
+  // 3. Deterministic pedagogical fallback if no API key is available
+  const isPassed = params.passed !== undefined ? params.passed : params.score >= (params.passingGrade || 75);
+  return {
+    passed: isPassed,
+    score: params.score,
+    maxScore: params.maxScore || 100,
+    percentage: Math.round((params.score / (params.maxScore || 100)) * 100),
+    diagnosis: isPassed
+      ? `Ananda ${params.studentName} telah menunjukkan penguasaan kompetensi dasar yang sangat baik pada mata pelajaran ${params.subject || "ini"}. Konsep-konsep esensial dipahami secara tepat.`
+      : `Ananda ${params.studentName} perlu memperkuat beberapa konsep kunci pada materi yang diujikan, terutama pada butir soal yang belum terjawab dengan tepat.`,
+    misconceptions: (params.wrongQuestions || []).map((q) => `Perlu pemahaman lebih lanjut pada topik: ${q.topicTag || q.questionText?.slice(0, 40) + "..."}`),
+    recommendedTopics: Array.from(new Set((params.wrongQuestions || []).map((q) => q.topicTag || "Materi Ujian"))),
+    enrichment: {
+      title: "Program Pengayaan: Eksplorasi Konseptual Lanjutan",
+      targetCompetencies: ["Menganalisis keterkaitan konsep dalam studi kasus nyata", "Pemecahan masalah aplikatif"],
+      advancedMaterials: "Pelajari bagaimana konsep dalam mata pelajaran ini diterapkan pada fenomena kehidupan sehari-hari dan teknologi modern.",
+      creativeTask: "Buatlah ringkasan grafis atau infografis sederhana mengenai penerapan konsep ini dalam kehidupan sehari-hari.",
+      hotsChallenges: [
+        {
+          question: "Bagaimana Anda memecahkan permasalahan jika kondisi awal soal diubah dengan parameter yang berlawanan?",
+          guidance: "Analisis perubahan hubungan sebab-akibat antar variabel.",
+        },
+      ],
+    },
+    remediation: {
+      title: "Program Remidi: Penguatan Konsep Dasar",
+      targetDeficits: (params.wrongQuestions || []).map((q) => q.topicTag || "Konsep Dasar").slice(0, 3),
+      conceptClarification: "Tinjau kembali definisi dan langkah-langkah dasar pada butir soal yang keliru. Ingat kembali rumus dan kata kunci utamanya.",
+      remedialSteps: [
+        "Membaca kembali catatan atau buku teks pada bab terkait.",
+        "Mendiskusikan kembali soal yang keliru dengan guru atau teman belajar.",
+        "Mencoba mengerjakan ulang butir latihan dengan tenang dan teliti.",
+      ],
+      guidedQuestions: (params.wrongQuestions || []).slice(0, 2).map((q) => ({
+        question: `Latihan: Tuliskan kembali konsep utama dari: ${q.questionText}`,
+        hint: q.explanation || "Perhatikan kata kunci pertanyaan",
+        answer: q.correctAnswer,
+      })),
+    },
+    motivation: isPassed
+      ? "Luar biasa! Pertahankan semangat eksplorasi belajarmu dan teruslah menantang diri dengan hal-hal baru."
+      : "Jangan patah semangat! Setiap kesalahan adalah petunjuk berharga untuk melangkah lebih maju. Kamu pasti bisa lebih baik lagi!",
+    generatedAt: new Date().toISOString(),
+  };
 }
 

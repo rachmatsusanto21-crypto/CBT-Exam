@@ -584,30 +584,21 @@ app.get("/api/exams", (req, res) => {
   res.json({ success: true, exams: examsList });
 });
 
-// Helper to decode Firestore REST document fields to standard JSON
-function decodeFirestoreValue(val: any): any {
-  if (!val || typeof val !== "object") return val;
-  if ("stringValue" in val) return val.stringValue;
-  if ("integerValue" in val) return parseInt(val.integerValue, 10);
-  if ("doubleValue" in val) return parseFloat(val.doubleValue);
-  if ("booleanValue" in val) return val.booleanValue;
-  if ("nullValue" in val) return null;
-  if ("mapValue" in val) {
-    const res: Record<string, any> = {};
-    const fields = val.mapValue.fields || {};
-    for (const k of Object.keys(fields)) {
-      res[k] = decodeFirestoreValue(fields[k]);
+// Endpoint to get Google Apps Script Code.gs content
+app.get("/api/gas/code", (req, res) => {
+  try {
+    const codePath = path.join(process.cwd(), "google-apps-script", "Code.gs");
+    if (fs.existsSync(codePath)) {
+      const code = fs.readFileSync(codePath, "utf-8");
+      return res.json({ success: true, code });
     }
-    return res;
+    return res.status(404).json({ success: false, message: "Code.gs tidak ditemukan" });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message });
   }
-  if ("arrayValue" in val) {
-    const values = val.arrayValue.values || [];
-    return values.map(decodeFirestoreValue);
-  }
-  return val;
-}
+});
 
-// Retrieve shared exam package by code or ID (with fallback to custom Firestore database)
+// Retrieve shared exam package by code or ID
 const handleGetExamByCode = async (req: any, res: any) => {
   const code = (req.params.code || req.params.codeOrId || "").trim();
   const upperCode = code.toUpperCase();
@@ -660,51 +651,8 @@ const handleGetExamByCode = async (req: any, res: any) => {
     }
   }
 
-  // Fallback to custom Firestore database (ai-studio-slideexamcbtujia-337b5171-4150-47ed-a493-fc87b19bc190)
   if (!record) {
-    try {
-      const cfgPath = path.join(process.cwd(), "firebase-applet-config.json");
-      if (fs.existsSync(cfgPath)) {
-        const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
-        const customDbId = cfg.firestoreDatabaseId || "ai-studio-slideexamcbtujia-337b5171-4150-47ed-a493-fc87b19bc190";
-        const projectId = cfg.projectId || "gen-lang-client-0464440670";
-        const apiKey = cfg.apiKey;
-
-        const codesToCheck = [upperCode, code];
-        for (const queryCode of codesToCheck) {
-          const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/${customDbId}/documents/examCodes/${encodeURIComponent(queryCode)}?key=${apiKey}`;
-          const fsRes = await fetch(url);
-          if (fsRes.ok) {
-            const fsData: any = await fsRes.json();
-            if (fsData.fields) {
-              const decodedFields: Record<string, any> = {};
-              for (const k of Object.keys(fsData.fields)) {
-                decodedFields[k] = decodeFirestoreValue(fsData.fields[k]);
-              }
-              if (decodedFields.exam) {
-                record = {
-                  exam: decodedFields.exam,
-                  token: decodedFields.sessionToken || decodedFields.exam.sessionToken,
-                  tokens: decodedFields.exam.tokens || [],
-                  gdriveFileId: decodedFields.exam.gdriveFileId,
-                  gdriveFileName: decodedFields.exam.gdriveFileName,
-                };
-                // Cache into sharedExamsRegistry
-                sharedExamsRegistry.set(queryCode, record);
-                if (record.exam.code) sharedExamsRegistry.set(record.exam.code, record);
-                break;
-              }
-            }
-          }
-        }
-      }
-    } catch (e) {
-      console.error("[server] Firestore fallback lookup error:", e);
-    }
-  }
-
-  if (!record) {
-    return res.status(404).json({ success: false, message: `Naskah soal dengan kode atau ID '${code}' belum ditemukan di server maupun Cloud Firestore.` });
+    return res.status(404).json({ success: false, message: `Naskah soal dengan kode atau ID '${code}' belum ditemukan di server.` });
   }
 
   res.json({ success: true, ...record });
@@ -1236,6 +1184,184 @@ Berikan:
   }
 });
 
+// Comprehensive AI Diagnostic, Enrichment & Remedial Generator
+app.post("/api/gemini/analyze-student-enrichment-remediation", async (req, res) => {
+  try {
+    const customKey = (req.headers["x-gemini-api-key"] as string) || req.body?.apiKey;
+    const {
+      studentName,
+      nisn,
+      className,
+      subject,
+      score,
+      maxScore = 100,
+      passingGrade = 75,
+      passed,
+      wrongQuestions = [],
+      correctQuestions = [],
+      totalQuestions = 10,
+    } = req.body;
+
+    const ai = getGeminiClient(customKey);
+    const percentage = Math.round((Number(score) / (Number(maxScore) || 100)) * 100);
+    const isPassed = passed !== undefined ? Boolean(passed) : score >= passingGrade;
+
+    const prompt = `Anda adalah seorang pakar kurikulum, psikolog pendidikan, dan evaluator pembelajaran terkemuka.
+Analisis hasil ujian siswa berikut untuk menyusun "Program Pengayaan" dan "Program Remidi":
+- Nama Siswa: ${studentName || "Siswa"}
+- NISN: ${nisn || "-"}
+- Kelas: ${className || "-"}
+- Mata Pelajaran: ${subject || "Umum"}
+- Nilai Diperoleh: ${score} dari ${maxScore} (${percentage}%)
+- Batas Kelulusan KKM: ${passingGrade} (Status: ${isPassed ? "TUNTAS / LULUS" : "BELUM TUNTAS / PERLU REMIDIAL"})
+- Total Soal: ${totalQuestions} Butir
+
+Rincian Butir Soal yang Salah (${wrongQuestions.length} butir):
+${
+  wrongQuestions.length > 0
+    ? wrongQuestions
+        .slice(0, 10)
+        .map(
+          (q: any, i: number) =>
+            `${i + 1}. [${q.topicTag || "Materi"}] ${q.questionText} | Jawaban Siswa: "${q.studentAnswer}" | Kunci: "${q.correctAnswer}" | Pembahasan: ${q.explanation}`
+        )
+        .join("\n")
+    : "(Tidak ada soal yang salah, siswa meraih nilai sempurna)"
+}
+
+Rincian Butir Soal yang Dijawab Benar (${correctQuestions.length} butir):
+${
+  correctQuestions.length > 0
+    ? correctQuestions
+        .slice(0, 5)
+        .map((q: any, i: number) => `${i + 1}. [${q.topicTag || "Materi"}] ${q.questionText}`)
+        .join("\n")
+    : "(Belum ada yang benar)"
+}
+
+Instruksi Analisis:
+1. Diagnosis Miskonsepsi & Evaluasi: Analisis pola kesalahan siswa atau kekuatan pemahaman konsepnya.
+2. Program Pengayaan (Enrichment):
+   - Jika siswa TUNTAS (${isPassed}), berikan materi pengayaan mendalam, perluasan wawasan konsep, tugas tantangan kontekstual di dunia nyata, serta 2 soal tantangan penalaran tingkat tinggi (HOTS).
+   - Jika siswa belum tuntas, tetap berikan arahan pengayaan motivasional untuk dicapai setelah remedial.
+3. Program Remidi (Remedial):
+   - Rincikan materi spesifik yang belum dipahami siswa.
+   - Berikan klarifikasi konsep inti yang mudah dipahami (dengan analogi atau langkah logis).
+   - Susun langkah-langkah perbaikan belajar konkret.
+   - Sediakan 2 butir soal latihan pemantapan beserta petunjuk (hint) dan kunci jawaban.
+4. Motivasi: Pesan penyemangat yang hangat, suportif, dan membangun growth mindset.
+
+Kembalikan respon DALAM FORMAT JSON PERSIS SESUAI SKEMA.`;
+
+    const { response, modelUsed } = await callGeminiWithResilience(ai, {
+      preferredModel: "gemini-3.6-flash",
+      fallbackModels: ["gemini-3.7-flash", "gemini-flash-latest", "gemini-3.1-flash-lite"],
+      contents: prompt,
+      config: {
+        systemInstruction:
+          "Anda adalah guru evaluator pembelajaran profesional yang merumuskan diagnosis belajar, program pengayaan, dan program remedial berbasis data hasil ujian siswa.",
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            passed: { type: Type.BOOLEAN, description: "Status kelulusan KKM" },
+            score: { type: Type.NUMBER },
+            maxScore: { type: Type.NUMBER },
+            percentage: { type: Type.NUMBER },
+            diagnosis: { type: Type.STRING, description: "Diagnosis mendalam pola pemahaman siswa dan evaluasi pedagogis" },
+            misconceptions: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: "Daftar miskonsepsi atau materi yang keliru dipahami",
+            },
+            recommendedTopics: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: "Topik-topik yang perlu dipelajari kembali atau diperdalam",
+            },
+            enrichment: {
+              type: Type.OBJECT,
+              properties: {
+                title: { type: Type.STRING, description: "Judul Program Pengayaan" },
+                targetCompetencies: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING },
+                  description: "Kompetensi lanjutan yang dibidik",
+                },
+                advancedMaterials: { type: Type.STRING, description: "Uraian materi pengayaan tingkat lanjut" },
+                creativeTask: { type: Type.STRING, description: "Aktivitas proyek / studi kasus nyata aplikatif" },
+                hotsChallenges: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      question: { type: Type.STRING, description: "Soal tantangan penalaran HOTS" },
+                      guidance: { type: Type.STRING, description: "Petunjuk pemecahan masalah" },
+                    },
+                    required: ["question", "guidance"],
+                  },
+                  description: "Soal tantangan pengayaan HOTS",
+                },
+              },
+              required: ["title", "targetCompetencies", "advancedMaterials", "creativeTask"],
+            },
+            remediation: {
+              type: Type.OBJECT,
+              properties: {
+                title: { type: Type.STRING, description: "Judul Program Remidi" },
+                targetDeficits: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING },
+                  description: "Daftar materi defisit / butir yang perlu remedial",
+                },
+                conceptClarification: { type: Type.STRING, description: "Klarifikasi dan penjelasan ulang konsep yang keliru" },
+                remedialSteps: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING },
+                  description: "Langkah-langkah terarah perbaikan belajar siswa",
+                },
+                guidedQuestions: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      question: { type: Type.STRING, description: "Soal latihan perbaikan konsep" },
+                      hint: { type: Type.STRING, description: "Petunjuk berpikir" },
+                      answer: { type: Type.STRING, description: "Kunci / solusi ringkas" },
+                    },
+                    required: ["question", "hint"],
+                  },
+                  description: "Latihan soal terarah remedial",
+                },
+              },
+              required: ["title", "targetDeficits", "conceptClarification", "remedialSteps"],
+            },
+            motivation: { type: Type.STRING, description: "Kalimat motivasi apresiatif untuk siswa" },
+          },
+          required: ["passed", "diagnosis", "enrichment", "remediation", "motivation"],
+        },
+      },
+    });
+
+    const parsed = JSON.parse(response.text?.trim() || "{}");
+    res.json({
+      success: true,
+      analysis: {
+        ...parsed,
+        score,
+        maxScore,
+        percentage,
+        passed: isPassed,
+        generatedAt: new Date().toISOString(),
+      },
+      modelUsed,
+    });
+  } catch (error: any) {
+    console.error("Error generating enrichment and remediation:", error);
+    res.status(500).json({ success: false, error: formatGeminiError(error) });
+  }
+});
+
 // AI Essay Auto-Grading based on rubric or answer key
 app.post("/api/gemini/grade-essay", async (req, res) => {
   try {
@@ -1291,6 +1417,20 @@ Tugas Anda:
   } catch (error: any) {
     console.error("Error grading essay:", error);
     res.status(500).json({ success: false, error: formatGeminiError(error) });
+  }
+});
+
+// Endpoint to retrieve the Google Apps Script backend template (Code.gs)
+app.get("/api/gas-code", (req, res) => {
+  try {
+    const filePath = path.join(process.cwd(), "google-apps-script", "Code.gs");
+    if (fs.existsSync(filePath)) {
+      const code = fs.readFileSync(filePath, "utf-8");
+      return res.json({ success: true, code });
+    }
+    return res.status(404).json({ success: false, error: "File Code.gs tidak ditemukan." });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 

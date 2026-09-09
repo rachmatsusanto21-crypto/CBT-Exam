@@ -23,10 +23,19 @@ import {
   Users,
   RotateCcw,
   FlaskConical,
-  AlertCircle
+  AlertCircle,
+  FileSpreadsheet,
+  Check,
+  ExternalLink,
+  Compass,
+  Layers,
+  HelpCircle,
+  Lightbulb,
+  Target
 } from "lucide-react";
-import { ExamPackage, StudentExamSession } from "../types";
-import { generateStudentRemediation } from "../utils/geminiApi";
+import { ExamPackage, StudentExamSession, AiDiagnosticResult } from "../types";
+import { generateStudentEnrichmentAndRemediation, generateStudentRemediation } from "../utils/geminiApi";
+import { saveAiPengayaanRemidiToGAS, getGasConfig } from "../utils/gasService";
 import { getExamHistory } from "../utils/storage";
 
 interface StudentResultViewProps {
@@ -48,6 +57,13 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
 }) => {
   const [isAnalyzingAi, setIsAnalyzingAi] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(session.aiRemediation || null);
+  const [structuredAnalysis, setStructuredAnalysis] = useState<AiDiagnosticResult | null>(
+    session.aiStructuredAnalysis || null
+  );
+  const [activeAiTab, setActiveAiTab] = useState<"pengayaan" | "remidi">(
+    session.passed ? "pengayaan" : "remidi"
+  );
+  const [gasSavedSheetUrl, setGasSavedSheetUrl] = useState<string | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"summary" | "review">("summary");
   const [showFinishedAlert, setShowFinishedAlert] = useState(false);
@@ -80,25 +96,55 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
       topicTag: q.topicTag,
     }));
 
-  const handleGenerateAiRemediation = async () => {
+  const correctQuestions = questionsList
+    .filter((q) => {
+      const ans = session.answers[q.id];
+      return ans && ans.isCorrect;
+    })
+    .map((q) => ({
+      questionText: q.questionText,
+      topicTag: q.topicTag,
+    }));
+
+  const handleGenerateAiDiagnostic = async () => {
     setIsAnalyzingAi(true);
     setAiError(null);
     try {
-      const result = await generateStudentRemediation({
+      const result = await generateStudentEnrichmentAndRemediation({
         studentName: session.studentName,
+        nisn: session.nisn,
+        className: session.className,
         subject: exam.teacherProfile.subject,
         score: session.totalScoreEarned,
         maxScore: session.maxScore,
+        passingGrade: exam.teacherProfile.passingGrade,
+        passed: session.passed,
         wrongQuestions,
+        correctQuestions,
         totalQuestions: exam.questions.length,
       });
 
       if (result) {
-        setAiAnalysis(result);
+        setStructuredAnalysis(result);
+        setAiAnalysis(result.diagnosis);
+        session.aiStructuredAnalysis = result;
+        session.aiDiagnosis = result.diagnosis;
+        session.aiEnrichment = JSON.stringify(result.enrichment);
+        session.aiRemediation = JSON.stringify(result.remediation);
+
+        // Otomatis simpan ke Google Sheets (Data Analisis dan Nilai)
+        try {
+          const saveRes = await saveAiPengayaanRemidiToGAS(session, result);
+          if (saveRes && saveRes.sheetUrl) {
+            setGasSavedSheetUrl(saveRes.sheetUrl);
+          }
+        } catch (saveErr) {
+          console.warn("Auto-save AI to GAS failed:", saveErr);
+        }
       }
     } catch (e: any) {
-      console.error("AI Remediation failed", e);
-      setAiError(e?.message || "Gagal mendapatkan analisis remedial dari AI. Silakan coba beberapa saat lagi.");
+      console.error("AI Diagnostic & Remediation failed", e);
+      setAiError(e?.message || "Gagal mendapatkan analisis pengayaan dan remidi dari AI. Silakan coba beberapa saat lagi.");
     } finally {
       setIsAnalyzingAi(false);
     }
@@ -458,31 +504,52 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
             </div>
           </div>
 
-          {/* Gemini AI Remediation Card */}
-          <div className="bg-[#121214] rounded-2xl p-6 border border-indigo-900/40 shadow-sm space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-indigo-400 font-bold text-sm">
-                <Sparkles className="w-4 h-4 animate-pulse" />
-                <span>Diagnosis Remedial & Rekomendasi Belajar AI</span>
+          {/* Gemini AI Remediation & Enrichment Card */}
+          <div className="bg-[#121214] rounded-2xl p-6 border border-indigo-900/50 shadow-xl space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2 text-indigo-400 font-bold text-sm">
+                  <Sparkles className="w-4 h-4 text-indigo-400 animate-pulse" />
+                  <span>Program Pengayaan & Remidi AI (Google Sheets & Gemini)</span>
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  Diagnosis hasil pengerjaan, materi remedial terarah, serta tantangan pengayaan otomatis tersimpan di spreadsheet database.
+                </p>
               </div>
 
-              <button
-                onClick={handleGenerateAiRemediation}
-                disabled={isAnalyzingAi}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 rounded-xl text-xs font-bold transition-all cursor-pointer disabled:opacity-50"
-              >
-                {isAnalyzingAi ? (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    <span>Menganalisis...</span>
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>{aiAnalysis ? "Analisis Ulang AI" : "Generate Analisis AI"}</span>
-                  </>
+              <div className="flex items-center gap-2 shrink-0">
+                {gasSavedSheetUrl && (
+                  <a
+                    href={gasSavedSheetUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-xl text-[11px] font-medium transition-all"
+                    title="Buka Spreadsheet Database Analisis & Nilai"
+                  >
+                    <FileSpreadsheet className="w-3.5 h-3.5" />
+                    <span>Buka Spreadsheet</span>
+                    <ExternalLink className="w-2.5 h-2.5" />
+                  </a>
                 )}
-              </button>
+
+                <button
+                  onClick={handleGenerateAiDiagnostic}
+                  disabled={isAnalyzingAi}
+                  className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-indigo-950 cursor-pointer disabled:opacity-50"
+                >
+                  {isAnalyzingAi ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Menganalisis Soal...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>{structuredAnalysis || aiAnalysis ? "Analisis Ulang AI" : "Generate Analisis AI"}</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
 
             {aiError && (
@@ -493,7 +560,7 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
                 </div>
                 <button
                   type="button"
-                  onClick={handleGenerateAiRemediation}
+                  onClick={handleGenerateAiDiagnostic}
                   disabled={isAnalyzingAi}
                   className="px-2.5 py-1 bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-200 rounded-lg text-[11px] font-semibold shrink-0 cursor-pointer disabled:opacity-50"
                 >
@@ -502,13 +569,207 @@ export const StudentResultView: React.FC<StudentResultViewProps> = ({
               </div>
             )}
 
-            {aiAnalysis ? (
-              <div className="p-4 bg-[#161618] rounded-xl border border-slate-800 text-xs text-slate-300 leading-relaxed whitespace-pre-line">
-                {aiAnalysis}
+            {structuredAnalysis ? (
+              <div className="space-y-4">
+                {/* Diagnosis Summary */}
+                <div className="p-4 bg-indigo-950/20 border border-indigo-800/40 rounded-xl space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-400 flex items-center gap-1.5">
+                      <Target className="w-3.5 h-3.5" />
+                      Diagnosis Pemahaman Siswa
+                    </span>
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${
+                      session.passed ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" : "bg-rose-500/20 text-rose-300 border border-rose-500/30"
+                    }`}>
+                      {session.passed ? "Mencapai KKM / Tuntas" : "Belum Tuntas KKM"}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-200 leading-relaxed">
+                    {structuredAnalysis.diagnosis}
+                  </p>
+                </div>
+
+                {/* Tab Switcher: Pengayaan vs Remidi */}
+                <div className="flex items-center gap-2 p-1 bg-[#161618] rounded-xl border border-slate-800">
+                  <button
+                    onClick={() => setActiveAiTab("pengayaan")}
+                    className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      activeAiTab === "pengayaan"
+                        ? "bg-emerald-600 text-white shadow-sm"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    <Compass className="w-3.5 h-3.5" />
+                    <span>Program Pengayaan (Materi Lanjutan)</span>
+                  </button>
+                  <button
+                    onClick={() => setActiveAiTab("remidi")}
+                    className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      activeAiTab === "remidi"
+                        ? "bg-rose-600 text-white shadow-sm"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    <Lightbulb className="w-3.5 h-3.5" />
+                    <span>Program Remidi (Pemulihan Konsep)</span>
+                  </button>
+                </div>
+
+                {/* Program Pengayaan Content */}
+                {activeAiTab === "pengayaan" && structuredAnalysis.enrichment && (
+                  <div className="p-4 bg-emerald-950/10 border border-emerald-800/30 rounded-xl space-y-3.5 animate-in fade-in">
+                    <div>
+                      <h4 className="text-sm font-bold text-emerald-300 flex items-center gap-1.5">
+                        <Compass className="w-4 h-4 text-emerald-400" />
+                        {structuredAnalysis.enrichment.title}
+                      </h4>
+                      <p className="text-[11px] text-slate-300 mt-1">
+                        <strong>Target Kompetensi:</strong> {structuredAnalysis.enrichment.competencyTarget}
+                      </p>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <span className="text-[11px] font-semibold text-emerald-400 flex items-center gap-1">
+                        <Layers className="w-3 h-3" />
+                        Topik & Konsep Pengayaan
+                      </span>
+                      <ul className="list-disc list-inside space-y-1 text-xs text-slate-300 pl-1">
+                        {structuredAnalysis.enrichment.topics.map((t, idx) => (
+                          <li key={idx}>{t}</li>
+                        ))}
+                      </ul>
+                    </div>
+
+                    <div className="p-3 bg-[#161618] rounded-lg border border-emerald-900/40 text-xs text-slate-200 space-y-1">
+                      <strong className="text-emerald-400 block text-[11px] uppercase tracking-wider">Aktivitas / Tugas Eksplorasi Mandiri:</strong>
+                      <p className="leading-relaxed">{structuredAnalysis.enrichment.projectTask}</p>
+                    </div>
+
+                    {structuredAnalysis.enrichment.higherOrderQuestion && (
+                      <div className="p-3 bg-amber-950/20 rounded-lg border border-amber-800/40 text-xs text-amber-200 space-y-1">
+                        <strong className="text-amber-400 block text-[11px] uppercase tracking-wider flex items-center gap-1">
+                          <HelpCircle className="w-3.5 h-3.5" />
+                          Tantangan Penalaran Tingkat Tinggi (HOTS):
+                        </strong>
+                        <p className="leading-relaxed">{structuredAnalysis.enrichment.higherOrderQuestion}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Program Remidi Content */}
+                {activeAiTab === "remidi" && structuredAnalysis.remediation && (
+                  <div className="p-4 bg-rose-950/10 border border-rose-800/30 rounded-xl space-y-3.5 animate-in fade-in">
+                    <div>
+                      <h4 className="text-sm font-bold text-rose-300 flex items-center gap-1.5">
+                        <Lightbulb className="w-4 h-4 text-rose-400" />
+                        {structuredAnalysis.remediation.title}
+                      </h4>
+                      <p className="text-xs text-slate-300 leading-relaxed mt-1">
+                        {structuredAnalysis.remediation.conceptExplanation}
+                      </p>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <span className="text-[11px] font-semibold text-rose-400 flex items-center gap-1">
+                        <Target className="w-3 h-3" />
+                        Fokus Topik yang Perlu Diperbaiki
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {structuredAnalysis.remediation.focusTopics.map((topik, idx) => (
+                          <span
+                            key={idx}
+                            className="px-2.5 py-1 bg-rose-900/30 border border-rose-800/50 text-rose-200 rounded-lg text-xs font-medium"
+                          >
+                            {topik}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <span className="text-[11px] font-semibold text-slate-300">Langkah-Langkah Perbaikan Mandiri:</span>
+                      <ol className="list-decimal list-inside space-y-1 text-xs text-slate-300 pl-1">
+                        {structuredAnalysis.remediation.practiceSteps.map((step, idx) => (
+                          <li key={idx}>{step}</li>
+                        ))}
+                      </ol>
+                    </div>
+
+                    {structuredAnalysis.remediation.drillQuestions && structuredAnalysis.remediation.drillQuestions.length > 0 && (
+                      <div className="space-y-2 pt-2 border-t border-slate-800">
+                        <span className="text-[11px] font-bold text-amber-300 uppercase tracking-wider block">
+                          Soal Latihan Remidi Mandiri:
+                        </span>
+                        {structuredAnalysis.remediation.drillQuestions.map((dq, idx) => (
+                          <div key={idx} className="p-3 bg-[#161618] rounded-lg border border-slate-800 space-y-1.5 text-xs">
+                            <p className="font-semibold text-slate-200">
+                              {idx + 1}. {dq.question}
+                            </p>
+                            {dq.hint && (
+                              <p className="text-slate-400 text-[11px] italic">
+                                💡 Petunjuk: {dq.hint}
+                              </p>
+                            )}
+                            {dq.solution && (
+                              <details className="text-[11px] text-emerald-400 mt-1 cursor-pointer">
+                                <summary className="font-medium hover:underline">Lihat Kunci & Pembahasan</summary>
+                                <p className="mt-1 text-slate-300 bg-black/40 p-2 rounded border border-slate-800">
+                                  {dq.solution}
+                                </p>
+                              </details>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Motivational Quote */}
+                {structuredAnalysis.motivationalMessage && (
+                  <div className="p-3 bg-indigo-950/30 border border-indigo-800/30 rounded-xl text-xs text-indigo-300 italic flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 shrink-0 text-indigo-400" />
+                    <span>"{structuredAnalysis.motivationalMessage}"</span>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1">
+                  <span className="flex items-center gap-1.5 text-emerald-400">
+                    <Check className="w-3.5 h-3.5" />
+                    Tersimpan di Google Sheets (Subfolder 'Data Analisis dan Nilai')
+                  </span>
+                  <button
+                    onClick={handlePrintResult}
+                    className="inline-flex items-center gap-1 text-slate-300 hover:text-white transition-colors cursor-pointer"
+                  >
+                    <Printer className="w-3 h-3" />
+                    <span>Cetak Lembar Hasil & Program</span>
+                  </button>
+                </div>
+              </div>
+            ) : aiAnalysis ? (
+              <div className="space-y-3">
+                <div className="p-4 bg-[#161618] rounded-xl border border-slate-800 text-xs text-slate-300 leading-relaxed whitespace-pre-line">
+                  {aiAnalysis}
+                </div>
+                <div className="flex items-center justify-between text-[11px] text-slate-400">
+                  <span className="flex items-center gap-1.5 text-emerald-400">
+                    <Check className="w-3.5 h-3.5" />
+                    Tersimpan di Google Sheets (Subfolder 'Data Analisis dan Nilai')
+                  </span>
+                  <button
+                    onClick={handlePrintResult}
+                    className="inline-flex items-center gap-1 text-slate-300 hover:text-white transition-colors cursor-pointer"
+                  >
+                    <Printer className="w-3 h-3" />
+                    <span>Cetak Lembar Hasil</span>
+                  </button>
+                </div>
               </div>
             ) : !aiError && (
-              <p className="text-xs text-slate-400">
-                Klik tombol di atas untuk mendapatkan evaluasi kelemahan konsep dan rekomendasi materi yang perlu dipelajari kembali berdasarkan butir soal yang dijawab salah.
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Klik tombol <strong>Generate Analisis AI</strong> di atas untuk mendapatkan evaluasi kelemahan konsep, program remidi terarah, serta tantangan materi pengayaan yang otomatis tersinkronisasi ke spreadsheet subfolder <em>'Data Analisis dan Nilai'</em>.
               </p>
             )}
           </div>
