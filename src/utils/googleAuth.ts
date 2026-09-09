@@ -3,6 +3,8 @@
  * Uses Google Identity Services (GIS) directly without Firebase dependencies.
  */
 
+import firebaseConfig from "../../firebase-applet-config.json";
+
 export interface GoogleUser {
   displayName?: string;
   email?: string;
@@ -211,23 +213,54 @@ const loadGISScript = (): Promise<void> => {
 
 /**
  * Get configured OAuth Client ID
+ * Prioritizes custom user override, then VITE_GOOGLE_CLIENT_ID, then firebase-applet-config.json
  */
 export const getOAuthClientId = (): string => {
   try {
     if (typeof window !== "undefined") {
       const custom = localStorage.getItem(CLIENT_ID_STORAGE_KEY);
-      if (custom) return custom;
+      if (custom && custom.trim().length > 0) return custom.trim();
     }
   } catch {}
+
+  const envClientId = (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID;
+  if (envClientId && typeof envClientId === "string" && envClientId.trim().length > 0) {
+    return envClientId.trim();
+  }
+
+  if (
+    firebaseConfig?.oAuthClientId &&
+    typeof firebaseConfig.oAuthClientId === "string" &&
+    firebaseConfig.oAuthClientId.trim().length > 0
+  ) {
+    return firebaseConfig.oAuthClientId.trim();
+  }
+
   return "";
 };
 
 export const setOAuthClientId = (clientId: string): void => {
   try {
     if (typeof window !== "undefined") {
-      localStorage.setItem(CLIENT_ID_STORAGE_KEY, clientId.trim());
+      if (clientId && clientId.trim().length > 0) {
+        localStorage.setItem(CLIENT_ID_STORAGE_KEY, clientId.trim());
+      } else {
+        localStorage.removeItem(CLIENT_ID_STORAGE_KEY);
+      }
     }
   } catch {}
+};
+
+/**
+ * Reset OAuth Client ID to default from firebase-applet-config.json
+ */
+export const resetOAuthClientIdToDefault = (): string => {
+  try {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem(CLIENT_ID_STORAGE_KEY);
+    }
+  } catch {}
+  return getOAuthClientId();
 };
 
 /**
@@ -239,7 +272,9 @@ export const requestGoogleTokenViaGIS = async (
 ): Promise<{ user: GoogleUser; accessToken: string }> => {
   const effectiveClientId = clientId || getOAuthClientId();
   if (!effectiveClientId) {
-    throw new Error("Client ID Google belum disetel. Hubungkan akun Anda atau gunakan Google Apps Script.");
+    throw new Error(
+      "Client ID Google belum disetel. Hubungkan akun Anda atau gunakan integrasi Google Apps Script & Google Sheets."
+    );
   }
 
   await loadGISScript();
@@ -247,6 +282,11 @@ export const requestGoogleTokenViaGIS = async (
   return new Promise((resolve, reject) => {
     try {
       const google = (window as any).google;
+      if (!google?.accounts?.oauth2) {
+        reject(new Error("Pustaka Google Identity Services belum siap. Silakan coba beberapa saat lagi."));
+        return;
+      }
+
       const client = google.accounts.oauth2.initTokenClient({
         client_id: effectiveClientId,
         scope: DRIVE_SCOPES.join(' ') + ' email profile openid',
@@ -279,11 +319,19 @@ export const requestGoogleTokenViaGIS = async (
             saveAuthSession(customUser, tokenResponse.access_token);
             resolve({ user: customUser, accessToken: tokenResponse.access_token });
           } else {
-            reject(new Error("Tidak menerima token akses dari Google."));
+            const errorDesc =
+              tokenResponse?.error_description ||
+              tokenResponse?.error ||
+              "Tidak menerima token akses dari Google. Pastikan izin akses Drive disetujui.";
+            reject(new Error(errorDesc));
           }
         },
         error_callback: (err: any) => {
-          reject(err);
+          const errMsg =
+            err?.message ||
+            err?.type ||
+            (typeof err === "string" ? err : "Otentikasi Google ditolak atau jendela pop-up ditutup.");
+          reject(new Error(errMsg));
         },
       });
       client.requestAccessToken({ prompt: silent ? '' : 'select_account' });

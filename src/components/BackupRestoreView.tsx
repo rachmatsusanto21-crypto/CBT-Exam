@@ -56,6 +56,9 @@ import {
   initAuth,
   getCachedAccessToken,
   requestGoogleTokenViaGIS,
+  getOAuthClientId,
+  setOAuthClientId,
+  resetOAuthClientIdToDefault,
   onGoogleAuthExpired,
   isAuthExpiredError,
   formatGoogleAuthErrorMessage,
@@ -125,7 +128,25 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
   const [isLoadingGasCode, setIsLoadingGasCode] = useState(false);
   const [isCopiedGasCode, setIsCopiedGasCode] = useState(false);
 
+  const [googleClientIdInput, setGoogleClientIdInput] = useState<string>(() => getOAuthClientId());
+  const [showClientIdConfig, setShowClientIdConfig] = useState(false);
+  const [clientIdSavedMsg, setClientIdSavedMsg] = useState(false);
+
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleSaveGoogleClientId = () => {
+    setOAuthClientId(googleClientIdInput.trim());
+    setGoogleClientIdInput(getOAuthClientId());
+    setClientIdSavedMsg(true);
+    setTimeout(() => setClientIdSavedMsg(false), 3500);
+  };
+
+  const handleResetGoogleClientId = () => {
+    const def = resetOAuthClientIdToDefault();
+    setGoogleClientIdInput(def);
+    setClientIdSavedMsg(true);
+    setTimeout(() => setClientIdSavedMsg(false), 3500);
+  };
 
   const handleSaveGasUrl = () => {
     saveGasConfig({ webAppUrl: gasUrlInput.trim() });
@@ -952,6 +973,89 @@ export const BackupRestoreView: React.FC<BackupRestoreViewProps> = ({ onDataRest
         <p className="text-xs text-slate-300 leading-relaxed max-w-2xl">
           Aplikasi hanya menyimpan data cadangan ke folder khusus bernama <strong className="text-indigo-300 font-mono">{GOOGLE_DRIVE_BACKUP_FOLDER_NAME}</strong> di Google Drive Anda. Aplikasi tidak akan membuat folder lain untuk menjaga kerapian penyimpanan Drive Anda.
         </p>
+
+        {/* Google OAuth Client ID Configuration Toggle & Panel */}
+        <div className="pt-2 border-t border-slate-800">
+          <div className="flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => setShowClientIdConfig(!showClientIdConfig)}
+              className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+            >
+              <Key className="w-3.5 h-3.5" />
+              <span>{showClientIdConfig ? "Sembunyikan Pengaturan Client ID Google" : "Pengaturan Client ID Google (OAuth)"}</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 font-mono">
+                {googleClientIdInput ? "Tersedia" : "Belum Disetel"}
+              </span>
+            </button>
+
+            {googleClientIdInput && (
+              <span className="text-[11px] text-slate-400 font-mono truncate max-w-xs hidden sm:inline">
+                ID: {googleClientIdInput.slice(0, 20)}...
+              </span>
+            )}
+          </div>
+
+          {showClientIdConfig && (
+            <div className="mt-3 p-4 bg-[#161618] border border-slate-800 rounded-2xl space-y-3 animate-in fade-in">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-xs font-bold text-slate-200">Google Cloud OAuth 2.0 Client ID</div>
+                  <div className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
+                    Client ID digunakan oleh Google Identity Services (GIS) untuk otorisasi akses Google Drive.
+                    Aplikasi telah dilengkapi Client ID bawaan, atau Anda dapat menggunakan Client ID dari Google Cloud Console Anda sendiri.
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <input
+                  type="text"
+                  value={googleClientIdInput}
+                  onChange={(e) => setGoogleClientIdInput(e.target.value)}
+                  placeholder="Contoh: 123456789-abc.apps.googleusercontent.com"
+                  className="w-full px-3 py-2 bg-[#101012] border border-slate-700 rounded-xl text-xs text-slate-200 font-mono focus:border-indigo-500 focus:outline-none transition-colors"
+                />
+
+                <div className="flex items-center justify-between gap-2 flex-wrap pt-1">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleSaveGoogleClientId}
+                      className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+                    >
+                      Simpan Client ID
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleResetGoogleClientId}
+                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+                    >
+                      Reset ke Bawaan
+                    </button>
+                  </div>
+
+                  {clientIdSavedMsg && (
+                    <span className="text-xs text-emerald-400 flex items-center gap-1">
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Client ID berhasil diperbarui!</span>
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="p-2.5 bg-slate-900 border border-slate-800 rounded-xl text-[11px] text-slate-400 space-y-1">
+                <div className="font-semibold text-slate-300 flex items-center gap-1.5">
+                  <Info className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Solusi Paling Direkomendasikan:</span>
+                </div>
+                <p>
+                  Untuk kemudahan tanpa batasan domain atau otorisasi Client ID yang rumit, Anda dapat langsung mengaktifkan <strong className="text-emerald-400">Integrasi Google Apps Script & Google Sheets</strong> di panel atas. Seluruh naskah soal dan nilai siswa tersimpan otomatis di Google Drive dan Google Sheets guru.
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Cloud Backups File List */}
         <div className="pt-2 border-t border-slate-800 space-y-3">
