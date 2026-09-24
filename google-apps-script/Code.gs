@@ -65,6 +65,8 @@ function doGet(e) {
         break;
 
       case "getExam":
+      case "getQuestion":
+      case "getQuestions":
         var code = e.parameter.code || "";
         var driveId = e.parameter.driveId || e.parameter.fileId || "";
         result = getExam(code, driveId);
@@ -125,7 +127,12 @@ function doPost(e) {
 
       case "saveSession":
       case "submitExam":
-        result = saveStudentSession(payload.session, payload.aiAnalysis);
+      case "anti_gagal":
+      case "submitAntiGagal":
+      case "saveResult":
+      case "submitResult":
+        var sessionToSave = payload.session || payload;
+        result = saveStudentSession(sessionToSave, payload.aiAnalysis);
         break;
 
       case "saveAiAnalysis":
@@ -145,14 +152,28 @@ function doPost(e) {
         break;
 
       default:
-        result = { success: false, error: "Action '" + action + "' tidak dikenali pada POST." };
+        // Cek jika payload langsung berupa data sesi siswa (Paket Anti Gagal)
+        if (payload && (payload.studentName || payload.nisn || payload.examCode || payload.answers || payload.session)) {
+          var directSessionData = payload.session || payload;
+          result = saveStudentSession(directSessionData, payload.aiAnalysis);
+        } else {
+          result = { success: false, status: "error", error: "Action '" + action + "' tidak dikenali pada POST." };
+        }
         break;
     }
   } catch (err) {
-    result = { success: false, error: err.toString(), stack: err.stack };
+    result = { success: false, status: "error", error: err.toString(), stack: err.stack };
   }
 
-  return createJsonResponse(result);
+  // Pastikan status: "success" selalu ada saat berhasil (Paket Anti Gagal)
+  if (result && result.success !== false) {
+    result.status = "success";
+    result.success = true;
+  }
+
+  return ContentService
+    .createTextOutput(JSON.stringify(result))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 /**
@@ -740,8 +761,10 @@ function getExam(code, driveId) {
         var directContent = directFile.getBlob().getDataAsString();
         var directExam = JSON.parse(directContent);
         return {
+          status: "success",
           success: true,
           exam: directExam,
+          questions: directExam.questions || [],
           fileId: directFile.getId(),
           fileName: directFile.getName(),
           fileUrl: directFile.getUrl(),
@@ -764,8 +787,10 @@ function getExam(code, driveId) {
         var fbContent = fallbackDirect.getBlob().getDataAsString();
         var fbExam = JSON.parse(fbContent);
         return {
+          status: "success",
           success: true,
           exam: fbExam,
+          questions: fbExam.questions || [],
           fileId: fallbackDirect.getId(),
           fileName: fallbackDirect.getName(),
           fileUrl: fallbackDirect.getUrl(),
@@ -887,8 +912,10 @@ function getExam(code, driveId) {
   var examData = JSON.parse(content);
 
   return {
+    status: "success",
     success: true,
     exam: examData,
+    questions: examData.questions || [],
     fileId: matchedFile.getId(),
     fileName: matchedFile.getName(),
     fileUrl: matchedFile.getUrl()

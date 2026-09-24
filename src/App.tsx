@@ -204,10 +204,21 @@ export default function App() {
     }
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
+      const isStudent = params.get("mode") === "student";
       const driveParam = params.get("driveId") || params.get("gdriveId");
+      const gasParam = params.get("gasUrl");
       const examParam = params.get("examId") || params.get("code");
       const tokenParam = params.get("token");
       const all = getExamPackages();
+
+      // In student mode with remote cloud params (driveId/gasUrl), do not prematurely select local dummy exam
+      if (isStudent && (driveParam || gasParam)) {
+        if (driveParam) {
+          const matchDrive = all.find((e) => e.gdriveFileId === driveParam);
+          if (matchDrive) return matchDrive.id;
+        }
+        return "";
+      }
 
       if (driveParam) {
         const found = all.find((e) => e.gdriveFileId === driveParam);
@@ -267,9 +278,17 @@ export default function App() {
     if (typeof window === "undefined") return false;
     if (sharedPayload) return false;
     const params = new URLSearchParams(window.location.search);
+    const isStudent = params.get("mode") === "student";
     const code = params.get("code") || params.get("examId");
-    const driveId = params.get("driveId") || params.get("gdriveId");
-    if (!code && !driveId) return false;
+    const driveId = params.get("driveId") || params.get("gdriveId") || params.get("fileId");
+    const gasUrl = params.get("gasUrl");
+    if (!code && !driveId && !gasUrl) return false;
+
+    // In student mode with driveId or gasUrl, ALWAYS force fetch from Cloud first!
+    if (isStudent && (driveId || gasUrl)) {
+      return true;
+    }
+
     const all = getExamPackages();
     return !all.some((e) =>
       (code && (e.id === code || e.code.toUpperCase() === code.toUpperCase())) ||
@@ -312,6 +331,9 @@ export default function App() {
   const executeRemoteExamFetch = async (targetCode?: string | null, targetDriveId?: string | null) => {
     let code = (targetCode ?? requestedExamCode ?? "").trim();
     let driveId = (targetDriveId ?? requestedDriveId ?? "").trim();
+    const urlParams = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : new URLSearchParams();
+    const isStudentMode = urlParams.get("mode") === "student";
+    const gasUrl = urlParams.get("gasUrl");
 
     // Check if code input is actually a Google Drive link or file ID
     if (code && !driveId) {
@@ -325,7 +347,7 @@ export default function App() {
       }
     }
 
-    if (!code && !driveId) {
+    if (!code && !driveId && !gasUrl) {
       setIsFetchingRemoteExam(false);
       return;
     }
@@ -333,41 +355,140 @@ export default function App() {
     setIsFetchingRemoteExam(true);
     setRemoteFetchError(null);
 
+    // 1. JIKA MODE SISWA & ADA driveId ATAU gasUrl:
+    // PAKSA FETCH dari Google Apps Script (GAS) / Cloud First!
+    // Jangan periksa localStorage dulu jika driveId / gasUrl ada dalam URL!
+    if (isStudentMode && (driveId || gasUrl)) {
+      try {
+        // A. Mengambil soal lewat Google Apps Script Web App untuk menghindari CORS
+        if (gasUrl) {
+          const cleanGas = decodeURIComponent(gasUrl).trim();
+          try {
+            let response = await fetch(
+              `${cleanGas}?action=getQuestion&driveId=${encodeURIComponent(driveId)}&code=${encodeURIComponent(code)}`,
+              { headers: { Accept: "application/json" } }
+            );
+            if (!response.ok) {
+              response = await fetch(
+                `${cleanGas}?action=getExam&driveId=${encodeURIComponent(driveId)}&code=${encodeURIComponent(code)}`,
+                { headers: { Accept: "application/json" } }
+              );
+            }
+            if (response.ok) {
+              const resJson = await response.json();
+              const examCandidate = resJson.exam || (Array.isArray(resJson.questions) ? resJson : null);
+              if (examCandidate && Array.isArray(examCandidate.questions) && examCandidate.questions.length > 0) {
+                const validatedExam: ExamPackage = {
+                  ...examCandidate,
+                  id: examCandidate.id || `exam-${Date.now()}`,
+                  code: examCandidate.code || code || "CBT-EXAM",
+                  title: examCandidate.title || "Naskah Soal CBT",
+                  gdriveFileId: driveId || examCandidate.gdriveFileId,
+                  updatedAt: new Date().toISOString(),
+                };
+                applyLoadedRemoteExam(validatedExam, resJson.token || validatedExam.sessionToken, resJson.tokens || validatedExam.tokens);
+                return;
+              }
+            }
+          } catch (gasErr) {
+            console.warn("GAS Web App getQuestion fetch error:", gasErr);
+          }
+        }
+
+        // B. Direct fetch alternatif & backend proxy jika gasUrl tidak ada atau gagal
+        if (driveId) {
+          // B1. Server-side proxy untuk melewati pembatasan CORS pada browser HP
+          try {
+            const proxyRes = await fetch(`/api/gdrive/exam/${encodeURIComponent(driveId)}`);
+            if (proxyRes.ok) {
+              const proxyJson = await proxyRes.json();
+              if (proxyJson.success && proxyJson.exam && Array.isArray(proxyJson.exam.questions) && proxyJson.exam.questions.length > 0) {
+                applyLoadedRemoteExam(proxyJson.exam, proxyJson.exam.sessionToken, proxyJson.exam.tokens);
+                return;
+              }
+            }
+          } catch (pErr) {
+            console.warn("Backend drive proxy error:", pErr);
+          }
+
+          // B2. Direct fetch alternatif (docs.google.com / drive.google.com)
+          const publicDriveEndpoints = [
+            `https://docs.google.com/uc?export=download&id=${encodeURIComponent(driveId)}`,
+            `https://drive.google.com/uc?export=download&id=${encodeURIComponent(driveId)}&confirm=t`,
+            `https://drive.usercontent.google.com/download?id=${encodeURIComponent(driveId)}&export=download&confirm=t`,
+          ];
+
+          for (const dUrl of publicDriveEndpoints) {
+            try {
+              const directResponse = await fetch(dUrl);
+              if (directResponse.ok) {
+                const dJson = await directResponse.json();
+                const dExam = dJson.exam || (Array.isArray(dJson.questions) ? dJson : null);
+                if (dExam && Array.isArray(dExam.questions) && dExam.questions.length > 0) {
+                  const validatedExam: ExamPackage = {
+                    ...dExam,
+                    id: dExam.id || `exam-${Date.now()}`,
+                    code: dExam.code || code || "CBT-EXAM",
+                    title: dExam.title || "Naskah Soal CBT",
+                    gdriveFileId: driveId,
+                    updatedAt: new Date().toISOString(),
+                  };
+                  applyLoadedRemoteExam(validatedExam, validatedExam.sessionToken, validatedExam.tokens);
+                  return;
+                }
+              }
+            } catch {}
+          }
+
+          // B3. Helper loadExamFromGoogleDrive
+          try {
+            const driveExam = await loadExamFromGoogleDrive(null, driveId);
+            if (driveExam && Array.isArray(driveExam.questions) && driveExam.questions.length > 0) {
+              applyLoadedRemoteExam(driveExam, driveExam.sessionToken, driveExam.tokens);
+              return;
+            }
+          } catch {}
+        }
+      } catch (cloudErr) {
+        console.error("Gagal mengambil soal dari Cloud:", cloudErr);
+      }
+    }
+
+    // --- FALLBACK LOGIC: HANYA GUNAKAN LOCALSTORAGE JIKA BUKAN MODE SISWA / TIDAK ADA driveId / JIKA CLOUD GAGAL ---
     try {
-      // 1. Direct check in current state or localStorage
       const allLocal = getExamPackages();
       const localMatch = allLocal.find((e) =>
         (code && (e.id === code || e.code.toUpperCase() === code.toUpperCase())) ||
         (driveId && e.gdriveFileId === driveId)
       );
-      if (localMatch && Array.isArray(localMatch.questions) && localMatch.questions.length > 0) {
-        applyLoadedRemoteExam(localMatch, localMatch.sessionToken);
+
+      // Cek juga direct item `exam_${code}` di localStorage
+      let directLocalExam: ExamPackage | null = null;
+      if (code && typeof window !== "undefined") {
+        try {
+          const raw = localStorage.getItem(`exam_${code}`) || localStorage.getItem(code);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && Array.isArray(parsed.questions) && parsed.questions.length > 0) {
+              directLocalExam = parsed;
+            }
+          }
+        } catch {}
+      }
+
+      const effectiveLocal = localMatch || directLocalExam;
+
+      if (effectiveLocal && Array.isArray(effectiveLocal.questions) && effectiveLocal.questions.length > 0) {
+        console.info("Memuat soal dari cadangan LocalStorage.");
+        applyLoadedRemoteExam(effectiveLocal, effectiveLocal.sessionToken);
         return;
       }
 
-      // 2. If driveId provided, load via multi-tier Google Drive loader
-      if (driveId) {
-        try {
-          const driveExam = await loadExamFromGoogleDrive(null, driveId);
-          if (driveExam && Array.isArray(driveExam.questions) && driveExam.questions.length > 0) {
-            applyLoadedRemoteExam(driveExam, driveExam.sessionToken);
-            return;
-          }
-        } catch (driveErr) {
-          console.warn("Direct Drive ID load attempt:", driveErr);
-        }
-      }
-
-      // 2. Query Express backend registry (Server CBT Aplikasi)
+      // Query Express backend registry jika tersedia
       if (code) {
         let res = await fetch(`/api/exams/by-code/${encodeURIComponent(code)}`);
-        if (!res.ok) {
-          res = await fetch(`/api/exams/share/${encodeURIComponent(code)}`);
-        }
-        if (!res.ok) {
-          res = await fetch(`/api/exams/${encodeURIComponent(code)}`);
-        }
-
+        if (!res.ok) res = await fetch(`/api/exams/share/${encodeURIComponent(code)}`);
+        if (!res.ok) res = await fetch(`/api/exams/${encodeURIComponent(code)}`);
         if (res.ok) {
           const data = await res.json();
           if (data.success && data.exam && Array.isArray(data.exam.questions) && data.exam.questions.length > 0) {
@@ -377,29 +498,7 @@ export default function App() {
         }
       }
 
-      // 3. Query Google Apps Script / Google Sheets (Folder 'Data Soal')
-      if (code) {
-        const gasResult = await fetchExamFromGAS(code);
-        if (gasResult.success && gasResult.exam && Array.isArray(gasResult.exam.questions) && gasResult.exam.questions.length > 0) {
-          applyLoadedRemoteExam(gasResult.exam, gasResult.token, gasResult.tokens);
-          return;
-        }
-      }
-
-      // 4. If driveId provided, load via multi-tier Google Drive loader
-      if (driveId) {
-        try {
-          const driveExam = await loadExamFromGoogleDrive(null, driveId);
-          if (driveExam && Array.isArray(driveExam.questions) && driveExam.questions.length > 0) {
-            applyLoadedRemoteExam(driveExam, driveExam.sessionToken);
-            return;
-          }
-        } catch (driveErr) {
-          console.warn("Direct Drive ID load attempt:", driveErr);
-        }
-      }
-
-      // 5. Search Google Drive by Code / Filename (Backup_Data_Aplikasi)
+      // Search Google Drive by Code / Filename
       if (code) {
         const driveResult = await findAndLoadExamFromDriveByCode(code);
         if (driveResult && Array.isArray(driveResult.questions) && driveResult.questions.length > 0) {
@@ -409,7 +508,9 @@ export default function App() {
       }
 
       setRemoteFetchError(
-        `Naskah soal dengan kode "${code || driveId}" tidak ditemukan di server CBT aplikasi atau Google Drive. Silakan periksa kembali kode soal atau minta guru membagikan file/link naskah.`
+        isStudentMode
+          ? "Soal tidak ditemukan di Cloud atau akses Drive dibatasi. Pastikan link ujian benar dan akses file Google Drive terbuka publik ('Siapa saja yang memiliki link')."
+          : `Naskah soal dengan kode "${code || driveId}" tidak ditemukan!`
       );
     } catch (err: any) {
       console.warn("Could not fetch remote exam:", err);
@@ -426,18 +527,25 @@ export default function App() {
       return;
     }
 
-    const isAlreadyLoaded = exams.find((e) =>
-      (requestedExamCode && (e.id === requestedExamCode || e.code.toUpperCase() === requestedExamCode.toUpperCase())) ||
-      (requestedDriveId && e.gdriveFileId === requestedDriveId)
-    );
+    const params = new URLSearchParams(window.location.search);
+    const isStudent = params.get("mode") === "student";
+    const hasDriveOrGas = Boolean(requestedDriveId || params.get("gasUrl"));
 
-    if (isAlreadyLoaded) {
-      if (activeExamId !== isAlreadyLoaded.id) {
-        setActiveExamIdState(isAlreadyLoaded.id);
-        saveActiveExamId(isAlreadyLoaded.id);
+    // In student mode with driveId or gasUrl, DO NOT skip remote fetch even if localStorage has matching code!
+    if (!isStudent || !hasDriveOrGas) {
+      const isAlreadyLoaded = exams.find((e) =>
+        (requestedExamCode && (e.id === requestedExamCode || e.code.toUpperCase() === requestedExamCode.toUpperCase())) ||
+        (requestedDriveId && e.gdriveFileId === requestedDriveId)
+      );
+
+      if (isAlreadyLoaded && Array.isArray(isAlreadyLoaded.questions) && isAlreadyLoaded.questions.length > 0) {
+        if (activeExamId !== isAlreadyLoaded.id) {
+          setActiveExamIdState(isAlreadyLoaded.id);
+          saveActiveExamId(isAlreadyLoaded.id);
+        }
+        setIsFetchingRemoteExam(false);
+        return;
       }
-      setIsFetchingRemoteExam(false);
-      return;
     }
 
     executeRemoteExamFetch(requestedExamCode, requestedDriveId);

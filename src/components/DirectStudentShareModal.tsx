@@ -215,7 +215,8 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
     currentExam,
     includeTokenInLink ? currentToken : undefined,
     availableTokens,
-    true
+    true,
+    currentGasUrl
   );
 
   // 3. Alternative Direct Google Drive File Link (Raw JSON file for teacher archive)

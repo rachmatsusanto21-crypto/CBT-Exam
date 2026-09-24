@@ -241,20 +241,23 @@ export const generateStudentShareUrl = (
   exam: ExamPackage,
   token?: string,
   tokens?: StudentTokenItem[],
-  includePackageData: boolean = true
+  includePackageData: boolean = true,
+  customGasUrl?: string
 ): string => {
   const cleanBase = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
   const tokenQuery = token ? `&token=${encodeURIComponent(token)}` : "";
+  const driveParam = exam.gdriveFileId ? `&driveId=${encodeURIComponent(exam.gdriveFileId)}` : "";
+  const gasParam = customGasUrl ? `&gasUrl=${encodeURIComponent(customGasUrl)}` : "";
 
   if (includePackageData) {
     const payload = encodeExamToSharePayload(exam, token, tokens);
     if (payload) {
-      return `${cleanBase}?mode=student&code=${encodeURIComponent(exam.code)}${tokenQuery}&pkg=${payload}`;
+      return `${cleanBase}?mode=student&code=${encodeURIComponent(exam.code)}${driveParam}${tokenQuery}${gasParam}&pkg=${payload}`;
     }
   }
 
   // Short URL (Ideal for QR Code & projector display)
-  return `${cleanBase}?mode=student&code=${encodeURIComponent(exam.code)}&examId=${encodeURIComponent(exam.id)}${tokenQuery}`;
+  return `${cleanBase}?mode=student&code=${encodeURIComponent(exam.code)}&examId=${encodeURIComponent(exam.id)}${driveParam}${tokenQuery}${gasParam}`;
 };
 
 /**
