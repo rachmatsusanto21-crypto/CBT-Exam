@@ -68,6 +68,7 @@ import {
   findAndLoadExamFromDriveByCode,
   extractGoogleDriveFileId,
   autoScanDataSoalFolder,
+  fetchGoogleDriveJsonViaProxy,
 } from "./utils/googleDrive";
 import { getCachedAccessToken } from "./utils/googleAuth";
 import { fetchExamFromGAS, syncExamToGAS, syncStudentSessionToGAS, saveGasConfig } from "./utils/gasService";
@@ -399,13 +400,10 @@ export default function App() {
         if (driveId) {
           // B1. Server-side proxy untuk melewati pembatasan CORS pada browser HP
           try {
-            const proxyRes = await fetch(`/api/gdrive/exam/${encodeURIComponent(driveId)}`);
-            if (proxyRes.ok) {
-              const proxyJson = await proxyRes.json();
-              if (proxyJson.success && proxyJson.exam && Array.isArray(proxyJson.exam.questions) && proxyJson.exam.questions.length > 0) {
-                applyLoadedRemoteExam(proxyJson.exam, proxyJson.exam.sessionToken, proxyJson.exam.tokens);
-                return;
-              }
+            const proxyExam = await fetchGoogleDriveJsonViaProxy<ExamPackage>(driveId);
+            if (proxyExam && Array.isArray(proxyExam.questions) && proxyExam.questions.length > 0) {
+              applyLoadedRemoteExam(proxyExam, proxyExam.sessionToken, proxyExam.tokens);
+              return;
             }
           } catch (pErr) {
             console.warn("Backend drive proxy error:", pErr);

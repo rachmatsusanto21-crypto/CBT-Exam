@@ -289,8 +289,8 @@ app.post("/api/gdrive/register-exam", (req, res) => {
 });
 
 // Proxy download exam directly from Google Drive without CORS or cookie issues
-app.get("/api/gdrive/exam/:fileId", async (req, res) => {
-  const fileId = (req.params.fileId || "").trim();
+app.get(["/api/gdrive/exam/:fileId", "/api/gdrive/proxy/:fileId", "/api/gdrive/proxy"], async (req, res) => {
+  const fileId = (req.params.fileId || (req.query.fileId as string) || (req.query.id as string) || "").trim();
   if (!fileId) {
     return res.status(400).json({ success: false, message: "Missing Google Drive file ID" });
   }
