@@ -598,6 +598,51 @@ app.get("/api/gas/code", (req, res) => {
   }
 });
 
+// Persistent GAS configuration for shared access across student devices
+const GAS_CONFIG_FILE = path.join(DATA_DIR, "gas_config.json");
+
+function loadGasConfigFromDisk(): any {
+  try {
+    if (fs.existsSync(GAS_CONFIG_FILE)) {
+      return JSON.parse(fs.readFileSync(GAS_CONFIG_FILE, "utf-8"));
+    }
+  } catch {}
+  return null;
+}
+
+function saveGasConfigToDisk(cfg: any) {
+  try {
+    fs.writeFileSync(GAS_CONFIG_FILE, JSON.stringify(cfg, null, 2), "utf-8");
+  } catch {}
+}
+
+let serverGasConfig: any = loadGasConfigFromDisk();
+
+app.get("/api/gas/config", (_req, res) => {
+  if (serverGasConfig && serverGasConfig.webAppUrl) {
+    return res.json({ success: true, ...serverGasConfig });
+  }
+  return res.json({ success: false, webAppUrl: "", message: "GAS Web App belum dikonfigurasi" });
+});
+
+app.post("/api/gas/config", (req, res) => {
+  try {
+    const { webAppUrl, folders } = req.body || {};
+    if (!webAppUrl || typeof webAppUrl !== "string") {
+      return res.status(400).json({ success: false, message: "webAppUrl diperlukan" });
+    }
+    serverGasConfig = {
+      webAppUrl: webAppUrl.trim(),
+      folders: folders || serverGasConfig?.folders || null,
+      updatedAt: new Date().toISOString(),
+    };
+    saveGasConfigToDisk(serverGasConfig);
+    return res.json({ success: true, ...serverGasConfig });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message });
+  }
+});
+
 // Retrieve shared exam package by code or ID
 const handleGetExamByCode = async (req: any, res: any) => {
   const code = (req.params.code || req.params.codeOrId || "").trim();
@@ -614,10 +659,15 @@ const handleGetExamByCode = async (req: any, res: any) => {
 
     if (!driveEntry) {
       for (const [_, entry] of gdriveExamsRegistry.entries()) {
+        const eCode = (entry?.code || "").toUpperCase();
+        const eName = (entry?.fileName || "").toUpperCase().replace(/\.JSON$/i, "");
         if (
           entry?.fileId === code ||
-          (entry?.code && entry.code.toUpperCase() === upperCode) ||
-          (entry?.fileName && entry.fileName.toUpperCase() === upperCode)
+          eCode === upperCode ||
+          eName === upperCode ||
+          eName.startsWith(`${upperCode}_`) ||
+          eName.includes(`[${upperCode}]`) ||
+          (upperCode.length >= 3 && eCode.includes(upperCode))
         ) {
           driveEntry = entry;
           break;

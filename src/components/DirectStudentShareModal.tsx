@@ -31,7 +31,7 @@ import {
 } from "../utils/examShareEncoder";
 import { getStudentTokens, saveExamPackages, getExamPackages } from "../utils/storage";
 import { deduplicateStudentTokens } from "../utils/tokenValidator";
-import { syncExamToGAS } from "../utils/gasService";
+import { syncExamToGAS, getGasConfig } from "../utils/gasService";
 import { saveExamToGoogleDrive, formatExamDriveFileName } from "../utils/googleDrive";
 import {
   getCachedAccessToken,
@@ -200,9 +200,13 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
   const currentUrl = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
   const baseUrl = currentUrl.endsWith("/") ? currentUrl.slice(0, -1) : currentUrl;
 
-  // 1. Primary Student Link (Murni Mode Siswa Aplikasi: ?mode=student&code=...)
-  const studentLinkWithToken = generateShortStudentUrl(baseUrl, currentExam, currentToken);
-  const studentLinkWithoutToken = generateShortStudentUrl(baseUrl, currentExam, undefined);
+  const gasCfg = getGasConfig();
+  const currentGasUrl = gasCfg?.connected && gasCfg.webAppUrl ? gasCfg.webAppUrl : undefined;
+
+  // 1. Primary Student Link (Mode Siswa Aplikasi: ?mode=student&code=...&driveId=...&gasUrl=...)
+  // Automatically carries driveId and gasUrl when available so student devices load directly from Drive/GAS!
+  const studentLinkWithToken = generateShortStudentUrl(baseUrl, currentExam, currentToken, true, currentGasUrl);
+  const studentLinkWithoutToken = generateShortStudentUrl(baseUrl, currentExam, undefined, true, currentGasUrl);
   const studentActiveLink = includeTokenInLink && currentToken ? studentLinkWithToken : studentLinkWithoutToken;
 
   // 2. Self-Contained Offline/Direct Package Link (100% Anti-Gagal - embeds compressed exam data in URL)
@@ -526,8 +530,10 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
               <div className="p-3 bg-indigo-950/20 border border-indigo-500/20 rounded-xl space-y-2 text-xs">
                 <p className="text-[11px] text-indigo-200 leading-relaxed">
                   <strong>Link Mode Siswa Aplikasi:</strong> Tautan resmi langsung membuka aplikasi dalam Mode Siswa{" "}
-                  <code className="text-amber-300 font-mono bg-amber-950/50 px-1 py-0.5 rounded">?mode=student&code={currentExam.code}</code>.
-                  Siswa langsung masuk ke antarmuka pengerjaan ujian secara aman tanpa akses ke dashboard guru dan tanpa memerlukan Firestore.
+                  <code className="text-amber-300 font-mono bg-amber-950/50 px-1 py-0.5 rounded">
+                    ?mode=student&code={currentExam.code}{currentExam.gdriveFileId ? `&driveId=...` : ""}
+                  </code>.
+                  Siswa langsung masuk ke antarmuka pengerjaan ujian tanpa akses ke dashboard guru.
                 </p>
                 {includeTokenInLink && currentToken && (
                   <p className="text-[11px] text-emerald-300 flex items-center gap-1 font-mono">
@@ -535,10 +541,32 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
                     <span>Token tersemat: {currentToken} (siswa tidak perlu mengetik token manual).</span>
                   </p>
                 )}
-                {currentExam.gdriveFileId && (
+                {currentExam.gdriveFileId ? (
                   <p className="text-[11px] text-cyan-300 flex items-center gap-1">
-                    <Cloud className="w-3 h-3 text-cyan-400 shrink-0" />
-                    <span>Terhubung ke backup Drive (ID: {currentExam.gdriveFileId.slice(0, 8)}...).</span>
+                    <Check className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                    <span>
+                      Direct Drive ID tersemat ({currentExam.gdriveFileId.slice(0, 10)}...). HP siswa langsung mengunduh dari Google Drive tanpa bergantung ke server lokal guru!
+                    </span>
+                  </p>
+                ) : (
+                  <div className="flex items-center justify-between p-2 rounded-lg bg-amber-950/30 border border-amber-500/30 text-amber-300">
+                    <span className="text-[10px]">
+                      Naskah belum di-backup ke Google Drive. Unggah agar link otomatis membawa parameter direct <code>driveId</code>.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleUploadCurrentExamToDrive}
+                      disabled={isUploadingToDrive}
+                      className="px-2.5 py-1 text-[10px] font-bold rounded-md bg-amber-600 hover:bg-amber-500 text-white shrink-0 ml-2 cursor-pointer transition-colors"
+                    >
+                      {isUploadingToDrive ? "Mengunggah..." : "Unggah ke Drive"}
+                    </button>
+                  </div>
+                )}
+                {currentGasUrl && (
+                  <p className="text-[10px] text-indigo-300 flex items-center gap-1">
+                    <Cloud className="w-3 h-3 text-indigo-400 shrink-0" />
+                    <span>Google Apps Script terintegrasi sebagai cloud proxy resmi (bebas CORS).</span>
                   </p>
                 )}
               </div>

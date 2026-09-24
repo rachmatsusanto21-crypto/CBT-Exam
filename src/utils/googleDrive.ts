@@ -89,31 +89,36 @@ export interface GoogleDriveExamItem extends GoogleDriveFileItem {
 
 /**
  * Generates standard Google Drive filename format:
- * kelas_mata pelajaran_kode soal.json
- * Contoh: "Kelas VI_Pendidikan Pancasila_PP-01.json"
+ * [KodeSoal]_[NamaMataPelajaran]_[Kelas].json
+ * Contoh: "PP-03_Pancasila_Kelas10.json" atau "MTK-12_Matematika_Kelas12.json"
  */
 export function formatExamDriveFileName(exam: ExamPackage): string {
-  const cleanKelas = (exam.teacherProfile?.gradeLevel || "Kelas VI")
-    .trim()
-    .replace(/[/\\?%*:|"<>]/g, "")
-    .replace(/\s+/g, " ");
-
-  const cleanMapel = (exam.teacherProfile?.subject || exam.title || "Mata Pelajaran")
-    .trim()
-    .replace(/[/\\?%*:|"<>]/g, "")
-    .replace(/\s+/g, " ");
-
   const cleanKode = (exam.code || "SOAL")
     .trim()
     .replace(/[/\\?%*:|"<>]/g, "")
     .replace(/\s+/g, "")
     .toUpperCase();
 
-  return `${cleanKelas}_${cleanMapel}_${cleanKode}.json`;
+  const cleanMapel = (exam.teacherProfile?.subject || exam.title || "MataPelajaran")
+    .trim()
+    .replace(/[/\\?%*:|"<>]/g, "")
+    .replace(/\s+/g, "_");
+
+  const cleanKelas = (exam.teacherProfile?.gradeLevel || "Kelas")
+    .trim()
+    .replace(/[/\\?%*:|"<>]/g, "")
+    .replace(/\s+/g, "_");
+
+  return `${cleanKode}_${cleanMapel}_${cleanKelas}.json`;
 }
 
 /**
  * Parses grade, subject, and exam code from a Google Drive file name
+ * Supports:
+ * 1. [KodeSoal]_[NamaMataPelajaran]_[Kelas].json (e.g. PP-03_Pancasila_Kelas10.json)
+ * 2. [KodeSoal].json (e.g. PP-03.json)
+ * 3. [KodeSoal]_[Rest]
+ * 4. Legacy: [Kelas]_[MataPelajaran]_[KodeSoal].json
  */
 export function parseExamInfoFromDriveFileName(fileName: string): {
   gradeLevel?: string;
@@ -123,12 +128,40 @@ export function parseExamInfoFromDriveFileName(fileName: string): {
 } {
   const cleanName = fileName.replace(/\.json$/i, "").trim();
 
-  // Pattern 1: kelas_mata pelajaran_kode soal (e.g. Kelas VI_Pendidikan Pancasila_PP-01)
+  // Pattern 1: Standalone code (e.g. PP-03 or [PP-03])
+  if (!cleanName.includes("_")) {
+    const code = cleanName.replace(/^[\[\(]|[\]\)]$/g, "").toUpperCase();
+    return {
+      examCode: code,
+      examTitle: `Ujian ${code}`,
+    };
+  }
+
   const parts = cleanName.split("_");
-  if (parts.length >= 3) {
+
+  // Pattern 2: [KodeSoal]_[NamaMataPelajaran]_[Kelas] (New standard format)
+  // When parts[0] is code (e.g. PP-03, MTK-12, IPA-01)
+  const firstPartClean = parts[0].replace(/^[\[\(]|[\]\)]$/g, "").toUpperCase();
+  const lastPartClean = parts[parts.length - 1].replace(/^[\[\(]|[\]\)]$/g, "").toUpperCase();
+
+  // If first part has typical code format (uppercase/numbers/dashes, e.g. PP-03)
+  if (/^[A-Z0-9-]{2,12}$/i.test(firstPartClean) && !firstPartClean.startsWith("KELAS")) {
+    const examCode = firstPartClean;
+    const subject = parts.length > 1 ? parts[1].replace(/_/g, " ").trim() : "";
+    const gradeLevel = parts.length > 2 ? parts.slice(2).join(" ").trim() : undefined;
+    return {
+      examCode,
+      subject: subject || undefined,
+      gradeLevel,
+      examTitle: subject ? `${subject} (${examCode})` : `Ujian ${examCode}`,
+    };
+  }
+
+  // Pattern 3: Legacy kelas_mata pelajaran_kode soal (e.g. Kelas VI_Pendidikan Pancasila_PP-01)
+  if (parts.length >= 3 && /^[A-Z0-9-]{2,12}$/i.test(lastPartClean)) {
     const gradeLevel = parts[0].trim();
     const subject = parts.slice(1, -1).join(" ").trim();
-    const examCode = parts[parts.length - 1].trim().toUpperCase();
+    const examCode = lastPartClean;
     return {
       gradeLevel,
       subject,
@@ -137,7 +170,7 @@ export function parseExamInfoFromDriveFileName(fileName: string): {
     };
   }
 
-  // Pattern 2: Legacy SOAL_[CODE]_[TITLE]
+  // Pattern 4: Legacy SOAL_[CODE]_[TITLE]
   if (cleanName.startsWith("SOAL_")) {
     const afterPrefix = cleanName.replace(/^SOAL_/i, "");
     const legacyParts = afterPrefix.split("_");
@@ -767,20 +800,25 @@ export async function loadExamFromGoogleDrive(
     console.warn("Server proxy download failed, trying Firestore and direct:", err);
   }
 
-  // Tier 3: Try Google Apps Script / Sheets lookup
+  // Tier 3: Try Google Apps Script / Sheets lookup (acts as official cloud proxy to Drive)
   try {
-    const gasResult = await fetchExamFromGAS(fileId);
-    if (gasResult.exam && Array.isArray(gasResult.exam.questions)) {
+    const gasResult = await fetchExamFromGAS("", fileId);
+    if (gasResult && gasResult.success && gasResult.exam && Array.isArray(gasResult.exam.questions)) {
       const result: ExamPackage = {
         ...gasResult.exam,
         gdriveFileId: fileId,
       };
       try {
         localStorage.setItem(`gdrive_cache_${fileId}`, JSON.stringify(result));
+        if (result.code) {
+          localStorage.setItem(`gdrive_code_${result.code.toUpperCase()}`, JSON.stringify(result));
+        }
       } catch {}
       return result;
     }
-  } catch {}
+  } catch (gasErr) {
+    console.warn("GAS lookup for fileId failed, continuing to next tier:", gasErr);
+  }
 
   // Tier 4: Direct fetch with token (if valid) or fallback to public proxy
   let json: any = null;

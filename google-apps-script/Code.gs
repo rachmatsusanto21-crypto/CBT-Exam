@@ -66,7 +66,8 @@ function doGet(e) {
 
       case "getExam":
         var code = e.parameter.code || "";
-        result = getExamByCode(code);
+        var driveId = e.parameter.driveId || e.parameter.fileId || "";
+        result = getExam(code, driveId);
         break;
 
       case "listExams":
@@ -364,7 +365,14 @@ function saveExamPackage(exam, tokens) {
   var examTitle = exam.title || "Ujian CBT";
 
   // 1. Simpan paket soal lengkap sebagai JSON file di subfolder 'Data Soal'
-  var fileName = "[" + examCode + "]_" + examTitle.replace(/[\/\\?%*:|"<>]/g, "_") + ".json";
+  // Format standar: [KodeSoal]_[NamaMataPelajaran]_[Kelas].json
+  var cleanSubject = (exam.teacherProfile && exam.teacherProfile.subject)
+    ? exam.teacherProfile.subject.replace(/[\/\\?%*:|"<>]/g, "_").replace(/\s+/g, "")
+    : examTitle.replace(/[\/\\?%*:|"<>]/g, "_").replace(/\s+/g, "");
+  var cleanGrade = (exam.teacherProfile && exam.teacherProfile.gradeLevel)
+    ? exam.teacherProfile.gradeLevel.replace(/[\/\\?%*:|"<>]/g, "_").replace(/\s+/g, "")
+    : "Kelas";
+  var fileName = examCode + "_" + cleanSubject + "_" + cleanGrade + ".json";
   var existingFiles = folders.soal.getFilesByName(fileName);
   var jsonFile;
   var jsonContent = JSON.stringify(exam, null, 2);
@@ -713,29 +721,165 @@ function saveAiPengayaanRemidi(session, aiAnalysis) {
 }
 
 /**
- * Ambil naskah ujian berdasarkan kode ujian dari subfolder 'Data Soal'
+ * Ambil naskah ujian berdasarkan Kode Ujian atau Google Drive File ID.
+ * Memeriksa:
+ * 1. driveId langsung jika diberikan (DriveApp.getFileById)
+ * 2. subfolder 'Data Soal' di CBT SlideExam Database
+ * 3. subfolder 'Backup_Data_Aplikasi' dan 'Data_Soal' di SlideExam_CBT
+ * 4. Pencarian global file di Google Drive dengan format nama [KodeSoal]_[Mapel]_[Kelas].json atau [KodeSoal].json
  */
-function getExamByCode(code) {
+function getExam(code, driveId) {
   var cleanCode = String(code || "").trim().toUpperCase();
-  if (!cleanCode) throw new Error("Kode ujian harus disertakan.");
+  var cleanDriveId = String(driveId || "").trim();
 
-  var folders = getSystemFolders();
-  var files = folders.soal.getFiles();
+  // 1. Jika driveId diberikan, buka file langsung dari Google Drive
+  if (cleanDriveId) {
+    try {
+      var directFile = DriveApp.getFileById(cleanDriveId);
+      if (directFile && !directFile.isTrashed()) {
+        var directContent = directFile.getBlob().getDataAsString();
+        var directExam = JSON.parse(directContent);
+        return {
+          success: true,
+          exam: directExam,
+          fileId: directFile.getId(),
+          fileName: directFile.getName(),
+          fileUrl: directFile.getUrl(),
+          source: "driveId"
+        };
+      }
+    } catch (idErr) {
+      // Jika driveId gagal/bukan ID valid, lanjutkan pencarian dengan code
+    }
+  }
+
+  // Jika kode berbentuk ID Google Drive (panjang 25-65 karakter alfanumerik)
+  if (!cleanCode && cleanDriveId) {
+    cleanCode = cleanDriveId;
+  }
+  if (/^[a-zA-Z0-9_-]{25,65}$/.test(cleanCode)) {
+    try {
+      var fallbackDirect = DriveApp.getFileById(cleanCode);
+      if (fallbackDirect && !fallbackDirect.isTrashed()) {
+        var fbContent = fallbackDirect.getBlob().getDataAsString();
+        var fbExam = JSON.parse(fbContent);
+        return {
+          success: true,
+          exam: fbExam,
+          fileId: fallbackDirect.getId(),
+          fileName: fallbackDirect.getName(),
+          fileUrl: fallbackDirect.getUrl(),
+          source: "directFileId"
+        };
+      }
+    } catch (e) {}
+  }
+
+  if (!cleanCode) {
+    throw new Error("Kode ujian atau Drive File ID harus disertakan.");
+  }
+
+  // Helper untuk cek apakah nama file cocok dengan kode ujian
+  function isMatchCode(fileName, targetCode) {
+    var fn = String(fileName || "").toUpperCase().replace(/\.JSON$/i, "").trim();
+    // Pola 1: [KodeSoal]_[NamaMapel]_[Kelas] (contoh: PP-03_Pancasila_Kelas10)
+    if (fn.indexOf(targetCode + "_") === 0) return true;
+    // Pola 2: [KodeSoal] (persis, contoh: PP-03.json)
+    if (fn === targetCode) return true;
+    // Pola 3: [KodeSoal]_ (dengan bracket, contoh: [PP-03]_...)
+    if (fn.indexOf("[" + targetCode + "]") !== -1) return true;
+    // Pola 4: Akhiran _[KodeSoal] (legacy: Kelas_Mapel_KodeSoal)
+    if (fn.lastIndexOf("_" + targetCode) === (fn.length - targetCode.length - 1)) return true;
+    // Pola 5: Mengandung kode
+    if (fn.indexOf(targetCode) !== -1) return true;
+    return false;
+  }
+
   var matchedFile = null;
 
-  while (files.hasNext()) {
-    var file = files.next();
-    var name = file.getName().toUpperCase();
-    if (name.indexOf("[" + cleanCode + "]") !== -1 || name.indexOf(cleanCode) !== -1) {
-      matchedFile = file;
-      break;
+  // 2. Cari di subfolder 'Data Soal' pada master folder
+  try {
+    var folders = getSystemFolders();
+    if (folders && folders.soal) {
+      var files = folders.soal.getFiles();
+      while (files.hasNext()) {
+        var f = files.next();
+        if (isMatchCode(f.getName(), cleanCode)) {
+          matchedFile = f;
+          break;
+        }
+      }
     }
+  } catch (err1) {}
+
+  // 3. Cari di folder 'SlideExam_CBT' -> 'Backup_Data_Aplikasi' / 'Data_Soal'
+  if (!matchedFile) {
+    try {
+      var slideFolders = DriveApp.getFoldersByName("SlideExam_CBT");
+      while (slideFolders.hasNext() && !matchedFile) {
+        var sFolder = slideFolders.next();
+        // Cek subfolder Backup_Data_Aplikasi
+        var subBackup = sFolder.getFoldersByName("Backup_Data_Aplikasi");
+        while (subBackup.hasNext() && !matchedFile) {
+          var bFolder = subBackup.next();
+          var bFiles = bFolder.getFiles();
+          while (bFiles.hasNext()) {
+            var bf = bFiles.next();
+            if (isMatchCode(bf.getName(), cleanCode)) {
+              matchedFile = bf;
+              break;
+            }
+          }
+        }
+        // Cek subfolder Data_Soal
+        if (!matchedFile) {
+          var subDataSoal = sFolder.getFoldersByName("Data_Soal");
+          while (subDataSoal.hasNext() && !matchedFile) {
+            var dsFolder = subDataSoal.next();
+            var dsFiles = dsFolder.getFiles();
+            while (dsFiles.hasNext()) {
+              var dsf = dsFiles.next();
+              if (isMatchCode(dsf.getName(), cleanCode)) {
+                matchedFile = dsf;
+                break;
+              }
+            }
+          }
+        }
+        // Cek file di root SlideExam_CBT
+        if (!matchedFile) {
+          var sFiles = sFolder.getFiles();
+          while (sFiles.hasNext()) {
+            var sf = sFiles.next();
+            if (isMatchCode(sf.getName(), cleanCode)) {
+              matchedFile = sf;
+              break;
+            }
+          }
+        }
+      }
+    } catch (err2) {}
+  }
+
+  // 4. Pencarian Global Google Drive (title contains cleanCode)
+  if (!matchedFile) {
+    try {
+      var globalFiles = DriveApp.searchFiles("title contains '" + cleanCode + "' and trashed = false");
+      while (globalFiles.hasNext()) {
+        var gf = globalFiles.next();
+        var gName = gf.getName().toUpperCase();
+        if (gName.indexOf(".JSON") !== -1 && isMatchCode(gName, cleanCode)) {
+          matchedFile = gf;
+          break;
+        }
+      }
+    } catch (err3) {}
   }
 
   if (!matchedFile) {
     return {
       success: false,
-      message: "Naskah soal dengan kode '" + cleanCode + "' belum ditemukan di folder 'Data Soal'."
+      message: "Naskah soal dengan kode '" + cleanCode + "' belum ditemukan di Google Drive. Pastikan format nama file adalah " + cleanCode + "_NamaMapel_Kelas.json atau " + cleanCode + ".json."
     };
   }
 
@@ -746,8 +890,13 @@ function getExamByCode(code) {
     success: true,
     exam: examData,
     fileId: matchedFile.getId(),
+    fileName: matchedFile.getName(),
     fileUrl: matchedFile.getUrl()
   };
+}
+
+function getExamByCode(code) {
+  return getExam(code, "");
 }
 
 /**

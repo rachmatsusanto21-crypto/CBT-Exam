@@ -41,7 +41,7 @@ import { saveExamToGoogleDrive, formatExamDriveFileName } from "../utils/googleD
 import { getCachedAccessToken, googleSignIn } from "../utils/googleAuth";
 import { generateDriveStudentUrl, generateShortStudentUrl } from "../utils/examShareEncoder";
 import { saveExamPackages } from "../utils/storage";
-import { syncExamToGAS } from "../utils/gasService";
+import { syncExamToGAS, getGasConfig } from "../utils/gasService";
 
 interface ExamHistoryModalProps {
   isOpen: boolean;
@@ -139,17 +139,24 @@ export const ExamHistoryModal: React.FC<ExamHistoryModalProps> = ({
   const handleCopyStudentLink = (examItem: ExamPackage) => {
     const currentUrl = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
     const baseUrl = currentUrl.endsWith("/") ? currentUrl.slice(0, -1) : currentUrl;
-    const studentUrl = generateShortStudentUrl(baseUrl, examItem, examItem.sessionToken);
+    const gasCfg = getGasConfig();
+    const gasUrl = gasCfg?.connected && gasCfg.webAppUrl ? gasCfg.webAppUrl : undefined;
+    const studentUrl = generateShortStudentUrl(baseUrl, examItem, examItem.sessionToken, true, gasUrl);
     navigator.clipboard.writeText(studentUrl);
     setCopiedStudentExamId(examItem.id);
-    showFeedback(`✓ Link Mode Siswa (?mode=student&code=${examItem.code}) berhasil disalin!`);
+    const hasDrive = Boolean(examItem.gdriveFileId);
+    showFeedback(
+      `✓ Link Mode Siswa (?mode=student&code=${examItem.code}${hasDrive ? `&driveId=...` : ""}) berhasil disalin! ${hasDrive ? "Direct Drive ID aktif untuk siswa." : ""}`
+    );
     setTimeout(() => setCopiedStudentExamId(null), 3000);
   };
 
   const handleCopyDriveLink = (examItem: ExamPackage) => {
     const currentUrl = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
     const baseUrl = currentUrl.endsWith("/") ? currentUrl.slice(0, -1) : currentUrl;
-    const driveUrl = generateDriveStudentUrl(baseUrl, examItem, examItem.sessionToken);
+    const gasCfg = getGasConfig();
+    const gasUrl = gasCfg?.connected && gasCfg.webAppUrl ? gasCfg.webAppUrl : undefined;
+    const driveUrl = generateDriveStudentUrl(baseUrl, examItem, examItem.sessionToken, gasUrl);
     navigator.clipboard.writeText(driveUrl);
     setCopiedDriveExamId(examItem.id);
     showFeedback(`✓ Link Google Drive untuk naskah "${examItem.code}" tersalin! Siswa otomatis me-load dari Drive.`);

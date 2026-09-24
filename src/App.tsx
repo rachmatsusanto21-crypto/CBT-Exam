@@ -64,7 +64,7 @@ import { normalizeToken, deduplicateStudentTokens } from "./utils/tokenValidator
 import { decodeExamFromCurrentUrl, decodeExamFromUrlString } from "./utils/examShareEncoder";
 import { broadcastLiveSession, subscribeToLiveSessions, subscribeToSessionResets } from "./utils/liveSync";
 import { loadExamFromGoogleDrive, findAndLoadExamFromDriveByCode, extractGoogleDriveFileId } from "./utils/googleDrive";
-import { fetchExamFromGAS, syncExamToGAS, syncStudentSessionToGAS } from "./utils/gasService";
+import { fetchExamFromGAS, syncExamToGAS, syncStudentSessionToGAS, saveGasConfig } from "./utils/gasService";
 import {
   subscribeToExamSessions,
   fetchExamSessions,
@@ -102,6 +102,18 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     return params.get("token") || "";
   });
+
+  // Auto-detect embedded gasUrl parameter (?gasUrl=...) from teacher's share link
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const urlGas = params.get("gasUrl");
+      if (urlGas && urlGas.startsWith("http")) {
+        const decodedGas = decodeURIComponent(urlGas);
+        saveGasConfig({ webAppUrl: decodedGas, connected: true });
+      }
+    }
+  }, []);
 
   // Navigation & View State (Default to Teacher Monitoring, Student mode is isolated in dedicated tab)
   const [activeTab, setActiveTab] = useState<NavigationTab>("monitoring");

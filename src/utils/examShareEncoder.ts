@@ -259,15 +259,20 @@ export const generateStudentShareUrl = (
 
 /**
  * Generates an ultra-short URL for QR Codes and quick mobile typing
+ * Automatically attaches Google Drive File ID if available for instant loading on student devices
  */
 export const generateShortStudentUrl = (
   baseUrl: string,
   exam: ExamPackage,
-  token?: string
+  token?: string,
+  includeDriveId: boolean = true,
+  customGasUrl?: string
 ): string => {
   const cleanBase = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
   const tokenQuery = token ? `&token=${encodeURIComponent(token)}` : "";
-  return `${cleanBase}?mode=student&code=${encodeURIComponent(exam.code)}${tokenQuery}`;
+  const driveParam = includeDriveId && exam.gdriveFileId ? `&driveId=${encodeURIComponent(exam.gdriveFileId)}` : "";
+  const gasParam = customGasUrl ? `&gasUrl=${encodeURIComponent(customGasUrl)}` : "";
+  return `${cleanBase}?mode=student&code=${encodeURIComponent(exam.code)}${driveParam}${tokenQuery}${gasParam}`;
 };
 
 /**
@@ -278,12 +283,14 @@ export const generateShortStudentUrl = (
 export const generateDriveStudentUrl = (
   baseUrl: string,
   exam: ExamPackage,
-  token?: string
+  token?: string,
+  customGasUrl?: string
 ): string => {
   const cleanBase = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
   const tokenQuery = token ? `&token=${encodeURIComponent(token)}` : "";
   const driveParam = exam.gdriveFileId ? `&driveId=${encodeURIComponent(exam.gdriveFileId)}` : "";
-  return `${cleanBase}?mode=student&code=${encodeURIComponent(exam.code)}${driveParam}${tokenQuery}`;
+  const gasParam = customGasUrl ? `&gasUrl=${encodeURIComponent(customGasUrl)}` : "";
+  return `${cleanBase}?mode=student&code=${encodeURIComponent(exam.code)}${driveParam}${tokenQuery}${gasParam}`;
 };
 
 /**

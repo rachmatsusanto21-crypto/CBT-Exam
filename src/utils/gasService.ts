@@ -14,6 +14,23 @@ const DEFAULT_GAS_CONFIG: GasConfig = {
 let cachedGasConfig: GasConfig = (() => {
   try {
     if (typeof window !== "undefined") {
+      // 1. Check URL parameters for embedded gasUrl (?gasUrl=https://script.google.com/...)
+      const searchParams = new URLSearchParams(window.location.search);
+      const urlGas = searchParams.get("gasUrl");
+      if (urlGas && urlGas.startsWith("http")) {
+        const decoded = decodeURIComponent(urlGas);
+        const initialCfg: GasConfig = {
+          webAppUrl: decoded,
+          connected: true,
+          lastTestedAt: new Date().toISOString(),
+        };
+        try {
+          localStorage.setItem(GAS_CONFIG_STORAGE_KEY, JSON.stringify(initialCfg));
+        } catch {}
+        return initialCfg;
+      }
+
+      // 2. Read from localStorage
       const saved = localStorage.getItem(GAS_CONFIG_STORAGE_KEY);
       if (saved) {
         return { ...DEFAULT_GAS_CONFIG, ...JSON.parse(saved) };
@@ -24,6 +41,22 @@ let cachedGasConfig: GasConfig = (() => {
   }
   return DEFAULT_GAS_CONFIG;
 })();
+
+// Asynchronously hydrate GAS config from server if local is empty
+if (typeof window !== "undefined" && !cachedGasConfig.webAppUrl) {
+  fetch("/api/gas/config")
+    .then((res) => (res.ok ? res.json() : null))
+    .then((data) => {
+      if (data && data.webAppUrl && !cachedGasConfig.webAppUrl) {
+        saveGasConfig({
+          webAppUrl: data.webAppUrl,
+          connected: true,
+          folders: data.folders,
+        });
+      }
+    })
+    .catch(() => {});
+}
 
 type GasConfigListener = (cfg: GasConfig) => void;
 const configListeners = new Set<GasConfigListener>();
@@ -205,6 +238,16 @@ export async function syncExamToGAS(
 
       if (gasResult && gasResult.success) {
         saveGasConfig({ lastSyncedAt: new Date().toISOString() });
+        // Also persist GAS config to server if backend is reachable
+        fetch("/api/gas/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            webAppUrl: cachedGasConfig.webAppUrl,
+            folders: cachedGasConfig.folders,
+          }),
+        }).catch(() => {});
+
         return {
           success: true,
           message: "Naskah ujian berhasil tersimpan di Google Sheets (Data Soal) & Drive!",
@@ -228,38 +271,81 @@ export async function syncExamToGAS(
 }
 
 /**
- * Ambil Naskah Ujian berdasarkan Kode Ujian
- * Coba dari Google Apps Script (Data Soal), jika belum ada atau gagal fallback ke Server
+ * Ambil Naskah Ujian berdasarkan Kode Ujian atau Google Drive File ID
+ * Coba dari Google Apps Script (proxy resmi ke Google Drive), jika belum ada atau gagal fallback ke Server
  */
 export async function fetchExamFromGAS(
-  code: string
-): Promise<{ success: boolean; exam?: ExamPackage; token?: string; tokens?: StudentTokenItem[]; message?: string }> {
-  const cleanCode = String(code || "").trim().toUpperCase();
-  if (!cleanCode) return { success: false, message: "Kode ujian kosong." };
+  codeOrQuery?: string,
+  customDriveId?: string
+): Promise<{
+  success: boolean;
+  exam?: ExamPackage;
+  token?: string;
+  tokens?: StudentTokenItem[];
+  fileId?: string;
+  message?: string;
+}> {
+  let cleanCode = String(codeOrQuery || "").trim().toUpperCase();
+  let cleanDriveId = String(customDriveId || "").trim();
 
-  // 1. Coba dari server API terlebih dahulu (sangat cepat & sudah di-index)
-  try {
-    const res = await fetch(`/api/exams/by-code/${encodeURIComponent(cleanCode)}`);
-    if (res.ok) {
-      const data = await res.json();
-      if (data && data.success && data.exam) {
-        return {
-          success: true,
-          exam: data.exam,
-          token: data.token || data.exam.sessionToken,
-          tokens: data.tokens || data.exam.tokens || [],
-        };
-      }
-    }
-  } catch (e) {
-    console.warn("[fetchExamFromGAS] Server local fetch failed, trying GAS directly:", e);
+  // If codeOrQuery is actually a Google Drive file ID (25-65 alphanumeric chars)
+  if (!cleanDriveId && /^[a-zA-Z0-9_-]{25,65}$/.test(cleanCode)) {
+    cleanDriveId = cleanCode;
+    cleanCode = "";
   }
 
-  // 2. Coba langsung dari Google Apps Script Web App (subfolder 'Data Soal')
-  if (cachedGasConfig.connected && cachedGasConfig.webAppUrl) {
+  if (!cleanCode && !cleanDriveId) {
+    return { success: false, message: "Kode ujian atau Drive ID kosong." };
+  }
+
+  // 1. Coba dari server API terlebih dahulu jika kode ada (sangat cepat & sudah di-index)
+  if (cleanCode) {
     try {
-      const gasResult = await callGasEndpoint("getExam", { code: cleanCode }, "GET");
-      if (gasResult && gasResult.success && gasResult.exam) {
+      const res = await fetch(`/api/exams/by-code/${encodeURIComponent(cleanCode)}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.success && data.exam) {
+          return {
+            success: true,
+            exam: data.exam,
+            token: data.token || data.exam.sessionToken,
+            tokens: data.tokens || data.exam.tokens || [],
+          };
+        }
+      }
+    } catch (e) {
+      console.warn("[fetchExamFromGAS] Server local fetch failed, trying GAS directly:", e);
+    }
+  }
+
+  // 2. Pastikan URL GAS tersedia (dari cache atau server)
+  let gasUrl = cachedGasConfig.webAppUrl?.trim();
+  if (!gasUrl) {
+    try {
+      const srvRes = await fetch("/api/gas/config");
+      if (srvRes.ok) {
+        const srvData = await srvRes.json();
+        if (srvData && srvData.webAppUrl) {
+          saveGasConfig({ webAppUrl: srvData.webAppUrl, connected: true });
+          gasUrl = srvData.webAppUrl.trim();
+        }
+      }
+    } catch {}
+  }
+
+  // 3. Coba langsung dari Google Apps Script Web App (action=getExam dengan code & driveId)
+  if (gasUrl) {
+    try {
+      const gasResult = await callGasEndpoint(
+        "getExam",
+        {
+          code: cleanCode || undefined,
+          driveId: cleanDriveId || undefined,
+          fileId: cleanDriveId || undefined,
+        },
+        "GET"
+      );
+      if (gasResult && gasResult.success && gasResult.exam && Array.isArray(gasResult.exam.questions)) {
         // Simpan juga ke cache server lokal
         fetch("/api/exams", {
           method: "POST",
@@ -276,6 +362,7 @@ export async function fetchExamFromGAS(
           exam: gasResult.exam,
           token: gasResult.exam.sessionToken,
           tokens: gasResult.exam.tokens || [],
+          fileId: gasResult.fileId || cleanDriveId,
         };
       }
     } catch (gasErr: any) {
@@ -285,7 +372,7 @@ export async function fetchExamFromGAS(
 
   return {
     success: false,
-    message: `Naskah soal dengan kode '${cleanCode}' tidak ditemukan di Google Sheets maupun server.`,
+    message: `Naskah soal ${cleanCode ? `dengan kode '${cleanCode}'` : `dengan file ID '${cleanDriveId}'`} tidak ditemukan di Google Drive maupun server.`,
   };
 }
 
