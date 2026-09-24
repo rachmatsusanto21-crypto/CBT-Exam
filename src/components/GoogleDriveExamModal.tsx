@@ -31,6 +31,7 @@ import {
   deleteExamFromGoogleDrive,
   getOrCreateExamsSubfolder,
   extractGoogleDriveFileId,
+  autoScanDataSoalFolder,
 } from "../utils/googleDrive";
 import {
   googleSignIn,
@@ -85,6 +86,8 @@ export const GoogleDriveExamModal: React.FC<GoogleDriveExamModalProps> = ({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [autoSync, setAutoSync] = useState<boolean>(() => isDriveAutoSyncEnabled());
   const [driveSyncState, setDriveSyncState] = useState<DriveSyncState>({ status: "idle", lastSyncedAt: null });
+  const [isScanningRecursively, setIsScanningRecursively] = useState(false);
+  const [scanStats, setScanStats] = useState<{ folderCount: number; filesScanned: number; examsIndexed: number } | null>(null);
 
   // Paste Google Drive Link states
   const [driveLinkInput, setDriveLinkInput] = useState("");
@@ -125,13 +128,30 @@ export const GoogleDriveExamModal: React.FC<GoogleDriveExamModalProps> = ({
     };
   }, []);
 
-  // Fetch Drive Exam List
-  const fetchDriveExams = async (token: string) => {
+  // Fetch Drive Exam List & Auto-Scan Data_Soal Recursively
+  const fetchDriveExams = async (token: string, explicitScan = false) => {
     if (!token) return;
     setIsLoadingList(true);
+    if (explicitScan) setIsScanningRecursively(true);
     try {
-      const list = await listExamsFromGoogleDrive(token);
-      setDriveExams(list);
+      const scanRes = await autoScanDataSoalFolder(token);
+      if (scanRes.success) {
+        setDriveExams(scanRes.items);
+        setScanStats({
+          folderCount: scanRes.folderCount,
+          filesScanned: scanRes.filesScanned,
+          examsIndexed: scanRes.examsIndexed,
+        });
+        if (explicitScan) {
+          setStatusMsg({
+            type: "success",
+            text: `Pemindaian selesai: ${scanRes.folderCount} folder & ${scanRes.filesScanned} file dipindai. Ditemukan ${scanRes.examsIndexed} naskah soal siap pakai.`,
+          });
+        }
+      } else {
+        const fallbackList = await listExamsFromGoogleDrive(token);
+        setDriveExams(fallbackList);
+      }
     } catch (err: any) {
       console.warn("Drive exams fetch error:", err);
       if (isAuthExpiredError(err)) {
@@ -144,6 +164,7 @@ export const GoogleDriveExamModal: React.FC<GoogleDriveExamModalProps> = ({
       });
     } finally {
       setIsLoadingList(false);
+      setIsScanningRecursively(false);
     }
   };
 
@@ -776,15 +797,43 @@ export const GoogleDriveExamModal: React.FC<GoogleDriveExamModalProps> = ({
 
           {/* Stored Google Drive Exams List */}
           <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                <FolderOpen className="w-4 h-4 text-amber-400" />
-                <span>Daftar Naskah Soal di Google Drive ({driveExams.length})</span>
-              </h3>
-              <span className="text-[11px] text-slate-400">
-                Folder: <code className="text-indigo-300 bg-slate-800 px-1.5 py-0.5 rounded font-mono">SlideExam_CBT/Naskah_Soal</code>
-              </span>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  <FolderOpen className="w-4 h-4 text-amber-400" />
+                  <span>Daftar Naskah Soal di Google Drive ({driveExams.length})</span>
+                </h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  Folder dipindai: <code className="text-indigo-300 bg-slate-800 px-1.5 py-0.5 rounded font-mono">Data_Soal</code>, <code className="text-indigo-300 bg-slate-800 px-1.5 py-0.5 rounded font-mono">SlideExam_CBT</code> & semua subfolder rekursif
+                </p>
+              </div>
+
+              {currentUser && (
+                <button
+                  onClick={() => fetchDriveExams(driveToken, true)}
+                  disabled={isLoadingList || isScanningRecursively}
+                  className="px-3 py-1.5 bg-indigo-950/60 hover:bg-indigo-900/60 text-indigo-300 border border-indigo-500/40 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer self-start sm:self-auto shrink-0 shadow-sm"
+                  title="Pindai ulang folder Data_Soal dan semua subfoldernya secara rekursif"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isScanningRecursively ? "animate-spin text-indigo-400" : ""}`} />
+                  <span>{isScanningRecursively ? "Memindai Rekursif..." : "Pindai Rekursif Data_Soal"}</span>
+                </button>
+              )}
             </div>
+
+            {scanStats && (
+              <div className="p-3 bg-indigo-950/20 border border-indigo-500/30 rounded-xl flex items-center justify-between text-xs text-indigo-200">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span>
+                    Auto-Scan Rekursif: Memindai <strong>{scanStats.folderCount} folder</strong> &amp; <strong>{scanStats.filesScanned} file</strong>. Ditemukan <strong>{scanStats.examsIndexed} naskah soal valid</strong>.
+                  </span>
+                </div>
+                <span className="text-[11px] text-emerald-400 font-semibold bg-emerald-950/50 border border-emerald-500/30 px-2 py-0.5 rounded-full shrink-0">
+                  Anti-Salah Penamaan
+                </span>
+              </div>
+            )}
 
             {isLoadingList ? (
               <div className="p-8 text-center bg-[#16161a] rounded-2xl border border-slate-800 space-y-2">

@@ -10,6 +10,7 @@ import { syncExamToGAS, fetchExamFromGAS } from "./gasService";
 
 export const GOOGLE_DRIVE_BACKUP_FOLDER_NAME = "SlideExam_CBT";
 export const GOOGLE_DRIVE_BACKUP_SUBFOLDER_NAME = "Backup_Data_Aplikasi";
+export const GOOGLE_DRIVE_DATA_SOAL_FOLDER_NAME = "Data_Soal";
 export const GOOGLE_DRIVE_EXAMS_FOLDER_NAME = "Naskah_Soal"; // legacy compatibility
 
 export class GoogleDriveAuthError extends Error {
@@ -85,6 +86,17 @@ export interface GoogleDriveExamItem extends GoogleDriveFileItem {
   totalScore?: number;
   durationMinutes?: number;
   sessionToken?: string;
+}
+
+export interface DataSoalScanResult {
+  success: boolean;
+  folderFound: boolean;
+  folderCount: number;
+  filesScanned: number;
+  examsIndexed: number;
+  items: GoogleDriveExamItem[];
+  error?: string;
+  scannedAt?: string;
 }
 
 /**
@@ -667,14 +679,311 @@ export async function saveExamToGoogleDrive(
 }
 
 /**
+ * Auto-scans the 'Data_Soal' folder (and any subfolders) in Google Drive recursively.
+ * Intelligently mitigates teacher manual naming mistakes:
+ * 1. Searches user's Drive for any folder named 'Data_Soal', 'Data Soal', etc. (including inside SlideExam_CBT).
+ * 2. Traverses all nested subfolders recursively using Breadth-First Search (BFS).
+ * 3. Retrieves all .json files across all discovered subfolders with pagination handling.
+ * 4. Resiliently inspects each file: if the file name lacks a code or was manually misnamed
+ *    (e.g., 'soal_pancasila.json' or 'Ulangan Harian 1.json'), it reads the JSON content to extract
+ *    the TRUE exam.code and exam.title directly from the package structure.
+ * 5. Auto-indexes discovered exams into localStorage and registers them with the server API (/api/gdrive/register-exam)
+ *    so students can immediately join with ?code=... without naming hurdles.
+ */
+export async function autoScanDataSoalFolder(
+  accessTokenOrNull?: string | null
+): Promise<DataSoalScanResult> {
+  const token = accessTokenOrNull || getCachedAccessToken();
+  if (!token) {
+    return {
+      success: false,
+      folderFound: false,
+      folderCount: 0,
+      filesScanned: 0,
+      examsIndexed: 0,
+      items: [],
+      error: "Token akses Google Drive tidak tersedia. Silakan hubungkan akun Google terlebih dahulu.",
+    };
+  }
+
+  try {
+    // 1. Gather seed candidate folder IDs
+    const candidateFolderIds = new Set<string>();
+
+    // A. Query user's Drive for any folder named 'Data_Soal', 'Data Soal', or legacy 'Naskah_Soal'
+    try {
+      const folderQuery = `mimeType='application/vnd.google-apps.folder' and (name='${GOOGLE_DRIVE_DATA_SOAL_FOLDER_NAME}' or name='Data Soal' or name='data_soal' or name='Data-Soal' or name='${GOOGLE_DRIVE_EXAMS_FOLDER_NAME}') and trashed=false`;
+      const fSearchUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
+        folderQuery
+      )}&fields=files(id,name)&supportsAllDrives=true&includeItemsFromAllDrives=true&pageSize=50`;
+      const fRes = await fetch(fSearchUrl, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (fRes.ok) {
+        const fData = await fRes.json();
+        if (fData.files && Array.isArray(fData.files)) {
+          for (const folder of fData.files) {
+            candidateFolderIds.add(folder.id);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("Data_Soal folder search query error:", err);
+    }
+
+    // B. Also include Backup_Data_Aplikasi and root SlideExam_CBT folder
+    try {
+      const rootId = await getOrCreateSlideExamFolder(token);
+      if (rootId) candidateFolderIds.add(rootId);
+      const backupId = await getOrCreateBackupDataSubfolder(token);
+      if (backupId) candidateFolderIds.add(backupId);
+    } catch (err) {
+      console.warn("Root folder fetch in autoScan error:", err);
+    }
+
+    // 2. Recursive BFS traversal to discover all subfolders
+    const visitedFolderIds = new Set<string>();
+    const folderQueue: string[] = Array.from(candidateFolderIds);
+
+    while (folderQueue.length > 0) {
+      const currentFolderId = folderQueue.shift()!;
+      if (visitedFolderIds.has(currentFolderId)) continue;
+      visitedFolderIds.add(currentFolderId);
+
+      let pageToken: string | undefined = undefined;
+      let depthLimit = 0;
+      do {
+        depthLimit++;
+        const subQuery = `'${currentFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+        let subUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
+          subQuery
+        )}&fields=nextPageToken,files(id,name)&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+        if (pageToken) subUrl += `&pageToken=${encodeURIComponent(pageToken)}`;
+
+        const subRes = await fetch(subUrl, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        if (!subRes.ok) break;
+        const subData = await subRes.json();
+        if (subData.files && Array.isArray(subData.files)) {
+          for (const sub of subData.files) {
+            if (!visitedFolderIds.has(sub.id) && !folderQueue.includes(sub.id)) {
+              folderQueue.push(sub.id);
+            }
+          }
+        }
+        pageToken = subData.nextPageToken;
+      } while (pageToken && depthLimit < 20);
+    }
+
+    // 3. Query all JSON files across all visited folders
+    const discoveredFilesMap = new Map<string, any>();
+
+    for (const folderId of visitedFolderIds) {
+      let pageToken: string | undefined = undefined;
+      let fileLimit = 0;
+      do {
+        fileLimit++;
+        const fileQuery = `'${folderId}' in parents and mimeType='application/json' and trashed=false`;
+        let fileUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
+          fileQuery
+        )}&fields=nextPageToken,files(id,name,createdTime,modifiedTime,size,webViewLink,description)&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true`;
+        if (pageToken) fileUrl += `&pageToken=${encodeURIComponent(pageToken)}`;
+
+        const fileRes = await fetch(fileUrl, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        if (!fileRes.ok) break;
+        const fileData = await fileRes.json();
+        if (fileData.files && Array.isArray(fileData.files)) {
+          for (const f of fileData.files) {
+            // Exclude whole-app backups
+            if (!f.name.startsWith("SlideExam_CBT_Backup_")) {
+              discoveredFilesMap.set(f.id, f);
+            }
+          }
+        }
+        pageToken = fileData.nextPageToken;
+      } while (pageToken && fileLimit < 20);
+    }
+
+    // 4. Resilient Exam Processing & Auto-indexing
+    // Mitigate teacher manual naming mistakes by reading internal exam payload if code is ambiguous
+    const examItems: GoogleDriveExamItem[] = [];
+    const filesList = Array.from(discoveredFilesMap.values());
+
+    for (const f of filesList) {
+      const parsedInfo = parseExamInfoFromDriveFileName(f.name);
+      let resolvedCode = parsedInfo.examCode || "";
+      let resolvedTitle = parsedInfo.examTitle || f.name.replace(/\.json$/i, "");
+      let resolvedSubject = parsedInfo.subject;
+      let resolvedGradeLevel = parsedInfo.gradeLevel;
+      let questionCount: number | undefined = undefined;
+      let totalScore: number | undefined = undefined;
+      let durationMinutes: number | undefined = undefined;
+      let sessionToken: string | undefined = undefined;
+      let examPayload: ExamPackage | null = null;
+
+      // Check localStorage cache first
+      let cachedExamStr: string | null = null;
+      try {
+        cachedExamStr = localStorage.getItem(`gdrive_cache_${f.id}`);
+      } catch {}
+
+      if (cachedExamStr) {
+        try {
+          examPayload = JSON.parse(cachedExamStr);
+        } catch {}
+      }
+
+      // If not cached, or if filename lacked code or had manual generic naming, inspect JSON content
+      if (!examPayload && (!resolvedCode || resolvedCode.startsWith("SOAL") || !resolvedSubject)) {
+        try {
+          const dlRes = await fetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (dlRes.ok) {
+            const rawJson = await dlRes.json();
+            if (rawJson && Array.isArray(rawJson.questions) && rawJson.questions.length > 0) {
+              examPayload = rawJson;
+            }
+          }
+        } catch (inspectErr) {
+          console.warn(`Could not inspect JSON content for ${f.name}:`, inspectErr);
+        }
+      }
+
+      // If examPayload is verified, extract true values regardless of manual filename errors
+      if (examPayload) {
+        if (examPayload.code) {
+          resolvedCode = examPayload.code.trim().toUpperCase();
+        }
+        if (examPayload.title) {
+          resolvedTitle = examPayload.title.trim();
+        }
+        if (examPayload.teacherProfile?.subject) {
+          resolvedSubject = examPayload.teacherProfile.subject;
+        }
+        if (examPayload.teacherProfile?.gradeLevel) {
+          resolvedGradeLevel = examPayload.teacherProfile.gradeLevel;
+        }
+        if (Array.isArray(examPayload.questions)) {
+          questionCount = examPayload.questions.length;
+        }
+        if (examPayload.totalScore !== undefined) {
+          totalScore = examPayload.totalScore;
+        }
+        if (examPayload.durationMinutes !== undefined) {
+          durationMinutes = examPayload.durationMinutes;
+        }
+        if (examPayload.sessionToken) {
+          sessionToken = examPayload.sessionToken;
+        }
+
+        // Cache in localStorage by ID and by Code
+        try {
+          localStorage.setItem(`gdrive_cache_${f.id}`, JSON.stringify(examPayload));
+          if (resolvedCode) {
+            localStorage.setItem(`gdrive_code_${resolvedCode}`, JSON.stringify(examPayload));
+          }
+        } catch {}
+
+        // Ensure file is publicly readable so students don't face permission screens
+        makeFilePubliclyReadable(token, f.id).catch(() => {});
+
+        // Register to server so student devices can resolve via Express backend
+        try {
+          fetch("/api/gdrive/register-exam", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              code: resolvedCode,
+              fileId: f.id,
+              fileName: f.name,
+              webViewLink: f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`,
+              downloadUrl: `https://www.googleapis.com/drive/v3/files/${f.id}?alt=media`,
+              exam: examPayload,
+              accessToken: token,
+            }),
+          }).catch(() => {});
+        } catch {}
+      }
+
+      examItems.push({
+        id: f.id,
+        name: f.name,
+        createdTime: f.createdTime,
+        modifiedTime: f.modifiedTime,
+        size: f.size,
+        webViewLink: f.webViewLink,
+        examCode: resolvedCode,
+        examTitle: resolvedTitle,
+        subject: resolvedSubject,
+        gradeLevel: resolvedGradeLevel,
+        questionCount,
+        totalScore,
+        durationMinutes,
+        sessionToken,
+      });
+    }
+
+    // Sort by modifiedTime descending
+    examItems.sort((a, b) => (b.modifiedTime || "").localeCompare(a.modifiedTime || ""));
+
+    // Save scan cache in localStorage
+    try {
+      localStorage.setItem("slideexam_scanned_data_soal_exams", JSON.stringify(examItems));
+      localStorage.setItem("slideexam_last_data_soal_scan_time", new Date().toISOString());
+    } catch {}
+
+    return {
+      success: true,
+      folderFound: visitedFolderIds.size > 0,
+      folderCount: visitedFolderIds.size,
+      filesScanned: filesList.length,
+      examsIndexed: examItems.length,
+      items: examItems,
+      scannedAt: new Date().toISOString(),
+    };
+  } catch (err: any) {
+    console.error("autoScanDataSoalFolder error:", err);
+    return {
+      success: false,
+      folderFound: false,
+      folderCount: 0,
+      filesScanned: 0,
+      examsIndexed: 0,
+      items: [],
+      error: err?.message || "Gagal memindai folder Data_Soal di Google Drive.",
+    };
+  }
+}
+
+/**
+ * Explicit alias for autoScanDataSoalFolder to support recursive scanning calls
+ */
+export const scanDataSoalFolderRecursively = autoScanDataSoalFolder;
+
+/**
  * Lists all individual exam packages from Google Drive.
- * Searches across Backup_Data_Aplikasi, Naskah_Soal, and root folder.
+ * Uses recursive autoScanDataSoalFolder across Data_Soal, Backup_Data_Aplikasi, and root.
  */
 export async function listExamsFromGoogleDrive(accessToken: string): Promise<GoogleDriveExamItem[]> {
+  try {
+    const scanResult = await autoScanDataSoalFolder(accessToken);
+    if (scanResult.success && scanResult.items.length > 0) {
+      return scanResult.items;
+    }
+  } catch (err) {
+    console.warn("autoScanDataSoalFolder in listExams error, falling back to direct search:", err);
+  }
+
   const rootFolderId = await getOrCreateSlideExamFolder(accessToken);
   const backupFolderId = await getOrCreateBackupDataSubfolder(accessToken);
 
-  // Search across backup subfolder, root folder, and Data_Soal folder for .json files
+  // Fallback search across backup subfolder, root folder for .json files
   const query = `('${backupFolderId}' in parents or '${rootFolderId}' in parents) and trashed=false and mimeType='application/json'`;
   const listUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
     query
@@ -692,36 +1001,6 @@ export async function listExamsFromGoogleDrive(accessToken: string): Promise<Goo
 
   const data = await res.json();
   const rawFiles: any[] = data.files || [];
-
-  // Also check if there are files in Data_Soal folder if exists
-  try {
-    const dataSoalQuery = `'${rootFolderId}' in parents and name='Data_Soal' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-    const dataSoalSearch = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(dataSoalQuery)}&fields=files(id)`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (dataSoalSearch.ok) {
-      const dsData = await dataSoalSearch.json();
-      if (dsData.files && dsData.files.length > 0) {
-        const dsFolderId = dsData.files[0].id;
-        const dsFilesRes = await fetch(
-          `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(`'${dsFolderId}' in parents and trashed=false and mimeType='application/json'`)}&orderBy=modifiedTime desc&fields=files(id,name,createdTime,modifiedTime,size,webViewLink,description)`,
-          { headers: { Authorization: `Bearer ${accessToken}` } }
-        );
-        if (dsFilesRes.ok) {
-          const dsFilesData = await dsFilesRes.json();
-          if (dsFilesData.files) {
-            for (const f of dsFilesData.files) {
-              if (!rawFiles.some((rf) => rf.id === f.id)) {
-                rawFiles.push(f);
-              }
-            }
-          }
-        }
-      }
-    }
-  } catch (dsErr) {
-    console.warn("Data_Soal scan optional error:", dsErr);
-  }
 
   return rawFiles
     .filter((f) => !f.name.startsWith("SlideExam_CBT_Backup_")) // exclude full app backups
@@ -970,10 +1249,25 @@ export async function findAndLoadExamFromDriveByCode(
     }
   } catch {}
 
-  // Tier 5: If access token available, query Google Drive API directly across backup subfolder and root folder
+  // Tier 5: If access token available, auto-scan Data_Soal recursively or search Drive directly
   const tokenToUse = accessTokenOrNull || getCachedAccessToken();
   if (tokenToUse) {
     try {
+      // 5a. Try recursive autoScanDataSoalFolder
+      const scanResult = await autoScanDataSoalFolder(tokenToUse);
+      if (scanResult.success && scanResult.items.length > 0) {
+        const found = scanResult.items.find(
+          (it) =>
+            it.examCode?.toUpperCase() === cleanQuery.toUpperCase() ||
+            it.name.toUpperCase().includes(cleanQuery.toUpperCase()) ||
+            it.id === cleanQuery
+        );
+        if (found) {
+          return await loadExamFromGoogleDrive(tokenToUse, found.id);
+        }
+      }
+
+      // 5b. Direct query across backup and root folder as fallback
       const backupFolderId = await getOrCreateBackupDataSubfolder(tokenToUse);
       const rootFolderId = await getOrCreateSlideExamFolder(tokenToUse);
       const q = `('${backupFolderId}' in parents or '${rootFolderId}' in parents) and name contains '${cleanQuery}' and trashed=false and mimeType='application/json'`;

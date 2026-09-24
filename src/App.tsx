@@ -63,7 +63,13 @@ import { getGeminiRequestHeaders } from "./utils/storage";
 import { normalizeToken, deduplicateStudentTokens } from "./utils/tokenValidator";
 import { decodeExamFromCurrentUrl, decodeExamFromUrlString } from "./utils/examShareEncoder";
 import { broadcastLiveSession, subscribeToLiveSessions, subscribeToSessionResets } from "./utils/liveSync";
-import { loadExamFromGoogleDrive, findAndLoadExamFromDriveByCode, extractGoogleDriveFileId } from "./utils/googleDrive";
+import {
+  loadExamFromGoogleDrive,
+  findAndLoadExamFromDriveByCode,
+  extractGoogleDriveFileId,
+  autoScanDataSoalFolder,
+} from "./utils/googleDrive";
+import { getCachedAccessToken } from "./utils/googleAuth";
 import { fetchExamFromGAS, syncExamToGAS, syncStudentSessionToGAS, saveGasConfig } from "./utils/gasService";
 import {
   subscribeToExamSessions,
@@ -112,6 +118,25 @@ export default function App() {
         const decodedGas = decodeURIComponent(urlGas);
         saveGasConfig({ webAppUrl: decodedGas, connected: true });
       }
+    }
+  }, []);
+
+  // Auto-scan 'Data_Soal' folder in Google Drive recursively on app load
+  // to minimize manual file naming errors by teachers and auto-index exams
+  useEffect(() => {
+    const driveToken = getCachedAccessToken();
+    if (driveToken) {
+      autoScanDataSoalFolder(driveToken)
+        .then((scanRes) => {
+          if (scanRes.success && scanRes.items.length > 0) {
+            console.log(
+              `[SlideExam CBT] Auto-scan folder Data_Soal selesai: ${scanRes.items.length} naskah soal terindeks otomatis secara rekursif.`
+            );
+          }
+        })
+        .catch((scanErr) => {
+          console.warn("[SlideExam CBT] Auto-scan background error:", scanErr);
+        });
     }
   }, []);
 
