@@ -228,6 +228,7 @@ export interface ConnectedDeviceRecord {
   className?: string;
   deviceType?: string;
   browser?: string;
+  screenResolution?: string;
   status: "standby" | "in_progress" | "submitted";
   lastSeenAt: string;
   lastSeenTimestamp: number;
@@ -662,6 +663,37 @@ app.post("/api/gas/config", (req, res) => {
   }
 });
 
+// Asynchronously forward events (devicePing, anti_gagal / saveSession) directly to Google Apps Script server-side
+async function forwardToGasServerSide(action: string, payload: any) {
+  const gasUrl = (payload?.gasUrl || serverGasConfig?.webAppUrl || "").trim();
+  if (!gasUrl || !gasUrl.startsWith("http")) return;
+
+  if (payload?.gasUrl && (!serverGasConfig || serverGasConfig.webAppUrl !== payload.gasUrl)) {
+    serverGasConfig = {
+      ...(serverGasConfig || {}),
+      webAppUrl: payload.gasUrl.trim(),
+      updatedAt: new Date().toISOString(),
+    };
+    saveGasConfigToDisk(serverGasConfig);
+  }
+
+  try {
+    const bodyData = JSON.stringify({ action, ...payload });
+    const gasRes = await fetch(gasUrl, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: bodyData,
+    });
+    if (gasRes.ok) {
+      console.log(`[server.ts] Successfully forwarded '${action}' to Google Apps Script`);
+    } else {
+      console.warn(`[server.ts] Forward '${action}' to GAS responded with status: ${gasRes.status}`);
+    }
+  } catch (err: any) {
+    console.warn(`[server.ts] Error forwarding '${action}' to Google Apps Script:`, err?.message);
+  }
+}
+
 // Retrieve shared exam package by code or ID
 const handleGetExamByCode = async (req: any, res: any) => {
   const code = (req.params.code || req.params.codeOrId || "").trim();
@@ -747,6 +779,18 @@ app.post("/api/sessions", (req, res) => {
     const cleanCode = String(session.examCode || "").trim().toUpperCase();
     const cleanNisn = String(session.nisn || "").trim();
 
+    // Auto-learn Google Apps Script Web App URL from student payload if present
+    if (session.gasUrl && typeof session.gasUrl === "string" && session.gasUrl.startsWith("http")) {
+      if (!serverGasConfig || serverGasConfig.webAppUrl !== session.gasUrl.trim()) {
+        serverGasConfig = {
+          ...(serverGasConfig || {}),
+          webAppUrl: session.gasUrl.trim(),
+          updatedAt: new Date().toISOString(),
+        };
+        saveGasConfigToDisk(serverGasConfig);
+      }
+    }
+
     // Check if this specific session was marked as reset by teacher
     const nameCodeKey = cleanName && cleanCode ? `${cleanName}__${cleanCode}` : "";
     const nisnCodeKey = cleanNisn && cleanCode ? `${cleanNisn}__${cleanCode}` : "";
@@ -779,7 +823,40 @@ app.post("/api/sessions", (req, res) => {
       serverReceivedAt: new Date().toISOString(),
     });
 
+    // Update connected devices registry
+    const devId = String(session.deviceId || `dev-${cleanId}`).trim();
+    const deviceRecord: ConnectedDeviceRecord = {
+      deviceId: devId,
+      examCode: cleanCode,
+      examId: String(session.examId || "").trim(),
+      token: String(session.token || "").trim().toUpperCase(),
+      studentName: String(session.studentName || "").trim(),
+      nisn: cleanNisn,
+      className: String(session.className || "").trim(),
+      deviceType: String(session.deviceType || "Smartphone").trim(),
+      browser: String(session.deviceInfo || req.headers["user-agent"] || "").trim(),
+      screenResolution: String(session.screenResolution || "").trim(),
+      status: session.status === "submitted" ? "submitted" : "in_progress",
+      lastSeenAt: new Date().toISOString(),
+      lastSeenTimestamp: Date.now(),
+      ip: req.ip || (req.headers["x-forwarded-for"] as string) || "",
+    };
+    connectedDevicesRegistry.set(devId, deviceRecord);
+
     saveSessionsToDisk(studentSessionsRegistry);
+
+    // Asynchronously forward to Google Apps Script / Google Sheets server-side (Bypass CORS & mobile restrictions)
+    forwardToGasServerSide("anti_gagal", {
+      session,
+      aiAnalysis: session.aiStructuredAnalysis || session.aiRemediation || session.aiEnrichment,
+      gasUrl: session.gasUrl,
+    }).catch(() => {});
+
+    // Also update Perangkat_Terhubung sheet
+    forwardToGasServerSide("devicePing", {
+      ...deviceRecord,
+      gasUrl: session.gasUrl,
+    }).catch(() => {});
 
     res.json({ success: true, sessionId: cleanId, isReset: false });
   } catch (err: any) {
@@ -813,8 +890,22 @@ app.post("/api/devices/ping", (req, res) => {
       className,
       deviceType,
       browser,
+      screenResolution,
       status = "standby",
+      gasUrl,
     } = req.body || {};
+
+    // Auto-learn Google Apps Script Web App URL from ping payload if present
+    if (gasUrl && typeof gasUrl === "string" && gasUrl.startsWith("http")) {
+      if (!serverGasConfig || serverGasConfig.webAppUrl !== gasUrl.trim()) {
+        serverGasConfig = {
+          ...(serverGasConfig || {}),
+          webAppUrl: gasUrl.trim(),
+          updatedAt: new Date().toISOString(),
+        };
+        saveGasConfigToDisk(serverGasConfig);
+      }
+    }
 
     const cleanDeviceId = String(deviceId || req.ip || `dev-${Date.now()}`).trim();
     const cleanCode = String(examCode || "").trim().toUpperCase();
@@ -829,7 +920,8 @@ app.post("/api/devices/ping", (req, res) => {
       nisn: String(nisn || "").trim(),
       className: String(className || "").trim(),
       deviceType: String(deviceType || "Smartphone").trim(),
-      browser: String(browser || "").trim(),
+      browser: String(browser || req.headers["user-agent"] || "").trim(),
+      screenResolution: String(screenResolution || "").trim(),
       status: status === "in_progress" ? "in_progress" : status === "submitted" ? "submitted" : "standby",
       lastSeenAt: new Date().toISOString(),
       lastSeenTimestamp: now,
@@ -838,12 +930,18 @@ app.post("/api/devices/ping", (req, res) => {
 
     connectedDevicesRegistry.set(cleanDeviceId, record);
 
-    // Prune devices not seen for > 2 minutes
+    // Prune devices not seen for > 5 minutes
     connectedDevicesRegistry.forEach((dev, key) => {
-      if (now - dev.lastSeenTimestamp > 120000) {
+      if (now - dev.lastSeenTimestamp > 300000) {
         connectedDevicesRegistry.delete(key);
       }
     });
+
+    // Asynchronously forward device ping to Google Apps Script / Google Sheets
+    forwardToGasServerSide("devicePing", {
+      ...record,
+      gasUrl: gasUrl || serverGasConfig?.webAppUrl,
+    }).catch(() => {});
 
     res.json({ success: true, deviceId: cleanDeviceId, activeCount: connectedDevicesRegistry.size });
   } catch (err: any) {
@@ -851,15 +949,15 @@ app.post("/api/devices/ping", (req, res) => {
   }
 });
 
-// Get active connected devices for an exam
+// Get active connected devices for an exam (Combines Ping Registry + Active Student Sessions)
 app.get("/api/devices/by-exam/:codeOrId", (req, res) => {
   const target = (req.params.codeOrId || "").trim().toUpperCase();
   const now = Date.now();
-  const activeDevices: ConnectedDeviceRecord[] = [];
+  const activeDevicesMap = new Map<string, ConnectedDeviceRecord>();
 
+  // 1. Devices from ping registry (active in last 60 seconds)
   connectedDevicesRegistry.forEach((dev) => {
-    // Only return devices active in last 45 seconds
-    if (now - dev.lastSeenTimestamp <= 45000) {
+    if (now - dev.lastSeenTimestamp <= 60000) {
       const dCode = (dev.examCode || "").trim().toUpperCase();
       const dId = (dev.examId || "").trim().toUpperCase();
       if (
@@ -869,11 +967,47 @@ app.get("/api/devices/by-exam/:codeOrId", (req, res) => {
         dId === target ||
         dCode.replace(/-/g, "") === target.replace(/-/g, "")
       ) {
-        activeDevices.push(dev);
+        activeDevicesMap.set(dev.deviceId, dev);
       }
     }
   });
 
+  // 2. Also synthesize connected devices from any student sessions active in last 60 seconds
+  studentSessionsRegistry.forEach((session) => {
+    const sTime = session.serverReceivedAt ? new Date(session.serverReceivedAt).getTime() : 0;
+    if (now - sTime <= 60000) {
+      const sCode = (session.examCode || "").trim().toUpperCase();
+      const sId = (session.examId || "").trim().toUpperCase();
+      if (
+        target === "ALL" ||
+        !target ||
+        sCode === target ||
+        sId === target ||
+        sCode.replace(/-/g, "") === target.replace(/-/g, "")
+      ) {
+        const devId = String(session.deviceId || `dev-${session.id}`).trim();
+        if (!activeDevicesMap.has(devId)) {
+          activeDevicesMap.set(devId, {
+            deviceId: devId,
+            examCode: sCode,
+            examId: sId,
+            token: (session.token || "").trim().toUpperCase(),
+            studentName: (session.studentName || "").trim(),
+            nisn: (session.nisn || "").trim(),
+            className: (session.className || "").trim(),
+            deviceType: session.deviceType || "Smartphone",
+            browser: session.deviceInfo || "",
+            screenResolution: session.screenResolution || "",
+            status: session.status === "submitted" ? "submitted" : "in_progress",
+            lastSeenAt: session.serverReceivedAt || new Date().toISOString(),
+            lastSeenTimestamp: sTime,
+          });
+        }
+      }
+    }
+  });
+
+  const activeDevices = Array.from(activeDevicesMap.values());
   res.json({ success: true, count: activeDevices.length, devices: activeDevices });
 });
 

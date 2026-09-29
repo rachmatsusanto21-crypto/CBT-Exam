@@ -201,7 +201,7 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
   const baseUrl = currentUrl.endsWith("/") ? currentUrl.slice(0, -1) : currentUrl;
 
   const gasCfg = getGasConfig();
-  const currentGasUrl = gasCfg?.connected && gasCfg.webAppUrl ? gasCfg.webAppUrl : undefined;
+  const currentGasUrl = gasCfg?.webAppUrl?.trim() || undefined;
 
   // 1. Primary Student Link (Mode Siswa Aplikasi: ?mode=student&code=...&driveId=...&gasUrl=...)
   // Automatically carries driveId and gasUrl when available so student devices load directly from Drive/GAS!
@@ -228,7 +228,7 @@ export const DirectStudentShareModal: React.FC<DirectStudentShareModalProps> = (
 
   // 4. Student CBT Link with Google Drive ID (Opens SlideExam CBT and fetches from Drive automatically)
   const driveStudentCbtLink = currentExam.gdriveFileId
-    ? `${baseUrl.replace(/\/$/, "")}?mode=student&code=${encodeURIComponent(currentExam.code)}&driveId=${encodeURIComponent(currentExam.gdriveFileId)}${includeTokenInLink && currentToken ? `&token=${encodeURIComponent(currentToken)}` : ""}`
+    ? `${baseUrl.replace(/\/$/, "")}?mode=student&code=${encodeURIComponent(currentExam.code)}&driveId=${encodeURIComponent(currentExam.gdriveFileId)}${includeTokenInLink && currentToken ? `&token=${encodeURIComponent(currentToken)}` : ""}${currentGasUrl ? `&gasUrl=${encodeURIComponent(currentGasUrl)}` : ""}`
     : studentActiveLink;
 
   // Link selected in the input box

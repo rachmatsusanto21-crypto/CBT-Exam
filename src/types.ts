@@ -114,6 +114,7 @@ export interface ConnectedDeviceItem {
   className?: string;
   deviceType?: string;
   browser?: string;
+  screenResolution?: string;
   status: "standby" | "in_progress" | "submitted";
   lastSeenAt: string;
   lastSeenTimestamp?: number;
@@ -147,6 +148,8 @@ export interface StudentExamSession {
   nisn: string;
   className: string;
   token: string;
+  deviceId?: string; // ID unik perangkat siswa (UserAgent + Screen Resolution)
+  screenResolution?: string; // Resolusi layar (misal 1080x2400)
   currentSlideIndex: number;
   answers: Record<string, StudentAnswerItem>; // key is questionId
   startTime: string;

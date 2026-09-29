@@ -37,6 +37,94 @@ var SHEET_NAME_SISWA = "Data_Siswa_Dan_Kelas";
 var SHEET_NAME_ANALISIS = "Data_Analisis_Dan_Nilai";
 var SHEET_NAME_SOAL = "Data_Bank_Soal";
 
+var DEFAULT_SHEETS_CONFIG = {
+  Data_Siswa_Dan_Kelas: [
+    {
+      name: "Roster_Siswa",
+      headers: [
+        "Timestamp", "ID Siswa", "NISN", "Nama Lengkap Siswa", "Kelas",
+        "No Kursi", "Status Ujian", "Kode Ujian Terakhir", "Token Sesi", "Terakhir Aktif"
+      ],
+      headerBg: "#0f766e"
+    },
+    {
+      name: "Token_Ujian",
+      headers: [
+        "Timestamp", "Kode Ujian", "Judul Ujian", "Token Sesi", "Kelas Sasaran",
+        "Waktu Dibuat", "Status Token", "Total Siswa Terdaftar"
+      ],
+      headerBg: "#047857"
+    },
+    {
+      name: "Perangkat_Terhubung",
+      headers: [
+        "Timestamp", "Device ID", "Kode Ujian", "ID Ujian", "Token", "Nama Siswa",
+        "NISN", "Kelas", "Tipe Perangkat", "Resolusi Layar", "Browser", "Status", "Terakhir Aktif (ISO)"
+      ],
+      headerBg: "#0369a1"
+    }
+  ],
+  Data_Analisis_Dan_Nilai: [
+    {
+      name: "Hasil_Ujian",
+      headers: [
+        "Timestamp", "Sesi ID", "Kode Ujian", "Judul Ujian", "Mata Pelajaran",
+        "NISN", "Nama Siswa", "Kelas", "Skor Diperoleh", "Skor Maksimal",
+        "Persentase (%)", "Status Kelulusan", "Durasi Pengerjaan (Menit)",
+        "Jumlah Soal Benar", "Jumlah Soal Salah", "Status Sesi", "Waktu Selesai",
+        "Device ID", "Resolusi Layar"
+      ],
+      headerBg: "#4338ca"
+    },
+    {
+      name: "Pengayaan_Dan_Remidi_AI",
+      headers: [
+        "Timestamp", "Sesi ID", "Kode Ujian", "NISN", "Nama Siswa", "Kelas",
+        "Skor Akhir", "Status Kelulusan", "Diagnosis Miskonsepsi AI",
+        "Program Pengayaan AI", "Program Remidi AI", "Rekomendasi Materi Lanjutan AI", "Pesan Motivasi AI"
+      ],
+      headerBg: "#6366f1"
+    },
+    {
+      name: "Analisis_Butir_Soal",
+      headers: [
+        "Timestamp", "Kode Ujian", "No Butir", "ID Soal", "Topik / Materi",
+        "Tipe Soal", "Kunci Jawaban", "Tingkat Kesukaran", "Persentase Benar (%)",
+        "Jumlah Menjawab Benar", "Total Peserta Ujian"
+      ],
+      headerBg: "#3730a3"
+    },
+    {
+      name: "Perangkat_Terhubung",
+      headers: [
+        "Timestamp", "Device ID", "Kode Ujian", "ID Ujian", "Token", "Nama Siswa",
+        "NISN", "Kelas", "Tipe Perangkat", "Resolusi Layar", "Browser", "Status", "Terakhir Aktif (ISO)"
+      ],
+      headerBg: "#0369a1"
+    }
+  ],
+  Data_Bank_Soal: [
+    {
+      name: "Paket_Ujian",
+      headers: [
+        "Timestamp", "ID Ujian", "Kode Ujian", "Judul Ujian", "Mata Pelajaran",
+        "Jenjang / Kelas", "Nama Guru", "KKM Minimum", "Durasi (Menit)",
+        "Jumlah Soal", "Total Skor", "Link File JSON Drive", "Terakhir Diperbarui"
+      ],
+      headerBg: "#b45309"
+    },
+    {
+      name: "Butir_Soal",
+      headers: [
+        "Timestamp", "ID Ujian", "Kode Ujian", "No Soal", "ID Soal", "Tipe Soal",
+        "Topik Tag", "Level Kognitif", "Teks Soal", "Stimulus", "Pilihan / Pasangan",
+        "Kunci Jawaban", "Bobot Skor", "Pembahasan"
+      ],
+      headerBg: "#d97706"
+    }
+  ]
+};
+
 /**
  * Handle HTTP GET Requests
  */
@@ -81,6 +169,28 @@ function doGet(e) {
         result = getStudentSessions(examCode);
         break;
 
+      case "getConnectedDevices":
+      case "getDevices":
+        var targetCode = e.parameter.examCode || e.parameter.code || "";
+        result = getConnectedDevices(targetCode);
+        break;
+
+      case "devicePing":
+      case "pingDevice":
+        result = saveConnectedDevice(e.parameter);
+        break;
+
+      case "saveSession":
+      case "submitExam":
+      case "anti_gagal":
+        if (e.parameter.session) {
+          var parsedSess = JSON.parse(e.parameter.session);
+          result = saveStudentSession(parsedSess, e.parameter.aiAnalysis);
+        } else {
+          result = saveStudentSession(e.parameter, e.parameter.aiAnalysis);
+        }
+        break;
+
       case "getRoster":
         var targetExamCode = e.parameter.examCode || "";
         var targetClass = e.parameter.className || "";
@@ -107,21 +217,36 @@ function doPost(e) {
   try {
     var payload = {};
     if (e && e.postData && e.postData.contents) {
-      payload = JSON.parse(e.postData.contents);
+      try {
+        payload = JSON.parse(e.postData.contents);
+      } catch (parseErr) {
+        payload = e.parameter || {};
+      }
+    } else if (e && e.parameter) {
+      payload = e.parameter;
     }
 
     var action = payload.action || (e && e.parameter && e.parameter.action) || "";
 
     switch (action) {
       case "ping":
-      case "devicePing":
         result = {
           success: true,
           status: "success",
-          message: "PONG - GAS Backend Online (Perangkat Terdeteksi)",
-          deviceId: payload.deviceId || "",
+          message: "PONG - GAS Backend Online",
           timestamp: new Date().toISOString()
         };
+        break;
+
+      case "devicePing":
+      case "pingDevice":
+      case "deviceHeartbeat":
+        result = saveConnectedDevice(payload);
+        break;
+
+      case "getConnectedDevices":
+      case "getDevices":
+        result = getConnectedDevices(payload.examCode || payload.code || "");
         break;
 
       case "initFolders":
@@ -241,7 +366,145 @@ function getFoldersInfo() {
 }
 
 /**
+ * Catat atau perbarui kehadiran perangkat unik siswa di Google Sheets
+ */
+function saveConnectedDevice(info) {
+  if (!info || (!info.deviceId && !info.studentName)) {
+    return { success: false, message: "Informasi perangkat tidak valid" };
+  }
+
+  var folders = getSystemFolders();
+  var ssAnalisis = getOrCreateSpreadsheet(folders.analisis, SHEET_NAME_ANALISIS);
+  var sheetDevices = ssAnalisis.getSheetByName("Perangkat_Terhubung");
+  if (!sheetDevices) {
+    sheetDevices = ssAnalisis.insertSheet("Perangkat_Terhubung");
+    sheetDevices.appendRow([
+      "Timestamp", "Device ID", "Kode Ujian", "ID Ujian", "Token", "Nama Siswa",
+      "NISN", "Kelas", "Tipe Perangkat", "Resolusi Layar", "Browser", "Status", "Terakhir Aktif (ISO)"
+    ]);
+    var headerRange = sheetDevices.getRange(1, 1, 1, 13);
+    headerRange.setFontWeight("bold");
+    headerRange.setBackground("#0369a1");
+    headerRange.setFontColor("#ffffff");
+    sheetDevices.setFrozenRows(1);
+  }
+
+  var devId = String(info.deviceId || "").trim();
+  var examCode = String(info.examCode || "").trim().toUpperCase();
+  var examId = String(info.examId || "").trim();
+  var token = String(info.token || "").trim().toUpperCase();
+  var studentName = String(info.studentName || "").trim();
+  var nisn = String(info.nisn || "").trim();
+  var className = String(info.className || "").trim();
+  var deviceType = String(info.deviceType || "Smartphone").trim();
+  var screenResolution = String(info.screenResolution || "").trim();
+  var browser = String(info.browser || info.userAgent || "").trim();
+  var status = String(info.status || "standby").trim();
+  var isoTime = new Date().toISOString();
+
+  var data = sheetDevices.getDataRange().getValues();
+  var existingRow = -1;
+
+  for (var i = 1; i < data.length; i++) {
+    var rowDevId = String(data[i][1]).trim();
+    var rowCode = String(data[i][2]).trim().toUpperCase();
+    var rowNisn = String(data[i][6]).trim();
+    var rowName = String(data[i][5]).trim().toLowerCase();
+
+    // Cocokkan berdasarkan deviceId atau kombinasi siswa + kode ujian
+    if (devId && rowDevId === devId) {
+      existingRow = i + 1;
+      break;
+    }
+    if (examCode && rowCode === examCode && ((nisn && rowNisn === nisn) || (studentName && rowName === studentName.toLowerCase()))) {
+      existingRow = i + 1;
+      break;
+    }
+  }
+
+  var rowValues = [
+    new Date(),
+    devId,
+    examCode,
+    examId,
+    token,
+    studentName,
+    nisn,
+    className,
+    deviceType,
+    screenResolution,
+    browser,
+    status,
+    isoTime
+  ];
+
+  if (existingRow > 0) {
+    sheetDevices.getRange(existingRow, 1, 1, rowValues.length).setValues([rowValues]);
+  } else {
+    sheetDevices.appendRow(rowValues);
+  }
+
+  return {
+    success: true,
+    status: "success",
+    deviceId: devId,
+    lastSeenAt: isoTime,
+    message: "Perangkat berhasil dicatat di Google Sheets (Data Analisis dan Nilai)"
+  };
+}
+
+/**
+ * Ambil daftar perangkat yang sedang terhubung dari Google Sheets
+ */
+function getConnectedDevices(examCode) {
+  var folders = getSystemFolders();
+  var ssAnalisis = getOrCreateSpreadsheet(folders.analisis, SHEET_NAME_ANALISIS);
+  var sheetDevices = ssAnalisis.getSheetByName("Perangkat_Terhubung");
+
+  var devices = [];
+  var filterCode = examCode ? String(examCode).trim().toUpperCase() : "";
+  var now = new Date().getTime();
+  var ACTIVE_WINDOW_MS = 5 * 60 * 1000; // Aktif dalam 5 menit terakhir
+
+  if (sheetDevices && sheetDevices.getLastRow() > 1) {
+    var data = sheetDevices.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++) {
+      var dCode = String(data[i][2]).trim().toUpperCase();
+      var lastSeenStr = String(data[i][12]).trim();
+      var lastSeenTime = lastSeenStr ? new Date(lastSeenStr).getTime() : 0;
+
+      // Filter kode ujian dan hanya ambil perangkat yang aktif dalam 5 menit
+      if (!filterCode || dCode === filterCode || filterCode === "ALL") {
+        if (now - lastSeenTime <= ACTIVE_WINDOW_MS || !lastSeenTime) {
+          devices.push({
+            deviceId: String(data[i][1]).trim(),
+            examCode: data[i][2],
+            examId: data[i][3],
+            token: data[i][4],
+            studentName: data[i][5],
+            nisn: data[i][6],
+            className: data[i][7],
+            deviceType: data[i][8],
+            screenResolution: data[i][9],
+            browser: data[i][10],
+            status: data[i][11] || "standby",
+            lastSeenAt: lastSeenStr || new Date().toISOString()
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    success: true,
+    count: devices.length,
+    devices: devices
+  };
+}
+
+/**
  * Ambil atau buat Spreadsheet di dalam folder tertentu
+ * Secara otomatis menggunakan DEFAULT_SHEETS_CONFIG jika sheetsConfig tidak disediakan
  */
 function getOrCreateSpreadsheet(folder, name, sheetsConfig) {
   var files = folder.getFilesByName(name);
@@ -256,9 +519,14 @@ function getOrCreateSpreadsheet(folder, name, sheetsConfig) {
     DriveApp.getRootFolder().removeFile(driveFile);
   }
 
+  // Gunakan config default jika sheetsConfig tidak disediakan
+  var effectiveConfig = (sheetsConfig && Array.isArray(sheetsConfig) && sheetsConfig.length > 0)
+    ? sheetsConfig
+    : (DEFAULT_SHEETS_CONFIG[name] || []);
+
   // Siapkan sheets dan headers
-  if (sheetsConfig && Array.isArray(sheetsConfig)) {
-    sheetsConfig.forEach(function(cfg) {
+  if (effectiveConfig && Array.isArray(effectiveConfig)) {
+    effectiveConfig.forEach(function(cfg) {
       var sheet = ss.getSheetByName(cfg.name);
       if (!sheet) {
         sheet = ss.insertSheet(cfg.name);
@@ -594,6 +862,22 @@ function saveStudentSession(session, aiAnalysis) {
 
   // 1. Tulis ke sheet 'Hasil_Ujian'
   var sheetHasil = ssAnalisis.getSheetByName("Hasil_Ujian");
+  if (!sheetHasil) {
+    sheetHasil = ssAnalisis.insertSheet("Hasil_Ujian");
+    sheetHasil.appendRow([
+      "Timestamp", "Sesi ID", "Kode Ujian", "Judul Ujian", "Mata Pelajaran",
+      "NISN", "Nama Siswa", "Kelas", "Skor Diperoleh", "Skor Maksimal",
+      "Persentase (%)", "Status Kelulusan", "Durasi Pengerjaan (Menit)",
+      "Jumlah Soal Benar", "Jumlah Soal Salah", "Status Sesi", "Waktu Selesai",
+      "Device ID", "Resolusi Layar"
+    ]);
+    var headerRange = sheetHasil.getRange(1, 1, 1, 19);
+    headerRange.setFontWeight("bold");
+    headerRange.setBackground("#4338ca");
+    headerRange.setFontColor("#ffffff");
+    sheetHasil.setFrozenRows(1);
+  }
+
   if (sheetHasil) {
     var data = sheetHasil.getDataRange().getValues();
     var existingRow = -1;
@@ -632,7 +916,9 @@ function saveStudentSession(session, aiAnalysis) {
       correctCount,
       wrongCount,
       session.status || "submitted",
-      session.submitTime || new Date().toISOString()
+      session.submitTime || new Date().toISOString(),
+      session.deviceId || "",
+      session.screenResolution || ""
     ];
 
     if (existingRow > 0) {
@@ -640,6 +926,24 @@ function saveStudentSession(session, aiAnalysis) {
     } else {
       sheetHasil.appendRow(rowValues);
     }
+  }
+
+  // Catat atau perbarui juga status di sheet 'Perangkat_Terhubung'
+  if (session.deviceId || session.studentName) {
+    try {
+      saveConnectedDevice({
+        deviceId: session.deviceId,
+        examCode: session.examCode,
+        examId: session.examId,
+        token: session.token,
+        studentName: session.studentName,
+        nisn: session.nisn,
+        className: session.className,
+        deviceType: session.deviceType,
+        screenResolution: session.screenResolution,
+        status: "submitted"
+      });
+    } catch(devErr) {}
   }
 
   // 2. Tulis analisis pengayaan dan remidi ke sheet 'Pengayaan_Dan_Remidi_AI'

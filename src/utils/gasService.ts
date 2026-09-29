@@ -70,6 +70,18 @@ export function saveGasConfig(cfg: Partial<GasConfig>): GasConfig {
   try {
     if (typeof window !== "undefined") {
       localStorage.setItem(GAS_CONFIG_STORAGE_KEY, JSON.stringify(cachedGasConfig));
+
+      // Asynchronously synchronize config with Express server
+      if (cachedGasConfig.webAppUrl) {
+        fetch("/api/gas/config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            webAppUrl: cachedGasConfig.webAppUrl,
+            folders: cachedGasConfig.folders,
+          }),
+        }).catch(() => {});
+      }
     }
   } catch (e) {
     console.warn("Failed saving GAS config to localStorage:", e);
@@ -454,13 +466,28 @@ export async function syncStudentSessionToGAS(
 ): Promise<{ success: boolean; isReset?: boolean; sheetUrl?: string; message?: string }> {
   if (!session || !session.id) return { success: false, message: "Sesi tidak valid" };
 
-  // 1. Rekam ke Server Node.js untuk 2-way real-time monitoring
+  // Resolve target GAS URL from cache or URL parameters
+  let targetGasUrl = cachedGasConfig.webAppUrl?.trim();
+  if (!targetGasUrl && typeof window !== "undefined") {
+    const searchParams = new URLSearchParams(window.location.search);
+    const urlGas = searchParams.get("gasUrl");
+    if (urlGas && urlGas.startsWith("http")) {
+      targetGasUrl = decodeURIComponent(urlGas).trim();
+      saveGasConfig({ webAppUrl: targetGasUrl, connected: true });
+    }
+  }
+
+  // 1. Rekam ke Server Node.js untuk 2-way real-time monitoring (sertakan gasUrl agar server dapat forward ke GAS)
   let serverReset = false;
   try {
+    const sessionWithGas = {
+      ...session,
+      gasUrl: targetGasUrl || (session as any).gasUrl || undefined,
+    };
     const res = await fetch("/api/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(session),
+      body: JSON.stringify(sessionWithGas),
     });
     if (res.ok) {
       const sData = await res.json();
@@ -474,16 +501,6 @@ export async function syncStudentSessionToGAS(
   }
 
   // 2. Simpan ke Google Sheets (Data Analisis dan Nilai) via Google Apps Script (Paket Anti Gagal)
-  let targetGasUrl = cachedGasConfig.webAppUrl?.trim();
-  if (!targetGasUrl && typeof window !== "undefined") {
-    const searchParams = new URLSearchParams(window.location.search);
-    const urlGas = searchParams.get("gasUrl");
-    if (urlGas && urlGas.startsWith("http")) {
-      targetGasUrl = decodeURIComponent(urlGas).trim();
-      saveGasConfig({ webAppUrl: targetGasUrl, connected: true });
-    }
-  }
-
   if (targetGasUrl) {
     try {
       const gasPayload = {
@@ -502,13 +519,13 @@ export async function syncStudentSessionToGAS(
         };
       }
     } catch (gasErr: any) {
-      console.warn("[syncStudentSessionToGAS] GAS save failed, saved to local cache:", gasErr);
+      console.warn("[syncStudentSessionToGAS] Direct GAS save failed, server proxy will retry:", gasErr);
     }
   }
 
   return {
     success: true,
-    message: "Hasil ujian tersimpan di sistem lokal.",
+    message: "Hasil ujian tersimpan di sistem lokal dan server.",
   };
 }
 
@@ -553,7 +570,9 @@ export interface DevicePingPayload {
   className?: string;
   deviceType?: string;
   browser?: string;
+  screenResolution?: string;
   status: "standby" | "in_progress" | "submitted";
+  gasUrl?: string;
 }
 
 /**
@@ -562,17 +581,8 @@ export interface DevicePingPayload {
 export async function pingStudentDevice(info: DevicePingPayload): Promise<void> {
   if (!info || !info.deviceId) return;
 
-  // 1. Rekam ke server lokal
-  try {
-    fetch("/api/devices/ping", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(info),
-    }).catch(() => {});
-  } catch {}
-
-  // 2. Jika GAS terhubung, kirim ping kehadiran perangkat ke Web App Google Apps Script
-  let targetGasUrl = cachedGasConfig.webAppUrl?.trim();
+  // Resolve target GAS URL from cache or URL parameters
+  let targetGasUrl = (info.gasUrl || cachedGasConfig.webAppUrl)?.trim();
   if (!targetGasUrl && typeof window !== "undefined") {
     const searchParams = new URLSearchParams(window.location.search);
     const urlGas = searchParams.get("gasUrl");
@@ -582,28 +592,71 @@ export async function pingStudentDevice(info: DevicePingPayload): Promise<void> 
     }
   }
 
+  const payloadWithGas: DevicePingPayload = {
+    ...info,
+    gasUrl: targetGasUrl || undefined,
+  };
+
+  // 1. Rekam ke server lokal (server juga otomatis meneruskan ke GAS secara server-to-server)
+  try {
+    fetch("/api/devices/ping", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payloadWithGas),
+    }).catch(() => {});
+  } catch {}
+
+  // 2. Jika GAS URL diketahui, kirim juga ping kehadiran perangkat langsung ke Web App Google Apps Script
   if (targetGasUrl) {
     try {
-      callGasEndpoint("devicePing", info, "POST", targetGasUrl).catch(() => {});
+      callGasEndpoint("devicePing", payloadWithGas, "POST", targetGasUrl).catch(() => {});
     } catch {}
   }
 }
 
 /**
- * Ambil daftar perangkat siswa yang sedang aktif/terhubung
+ * Ambil daftar perangkat siswa yang sedang aktif/terhubung (Gabungan Server Lokal + Google Sheets)
  */
 export async function fetchConnectedDevices(examCodeOrId?: string): Promise<any[]> {
   const code = (examCodeOrId || "ALL").trim().toUpperCase();
+  const deviceMap = new Map<string, any>();
+
+  // 1. Ambil dari server lokal
   try {
     const res = await fetch(`/api/devices/by-exam/${encodeURIComponent(code)}`);
     if (res.ok) {
       const data = await res.json();
       if (data && data.success && Array.isArray(data.devices)) {
-        return data.devices;
+        data.devices.forEach((d: any) => {
+          if (d && d.deviceId) deviceMap.set(d.deviceId, d);
+        });
       }
     }
   } catch {}
-  return [];
+
+  // 2. Jika Google Apps Script terhubung, ambil data dari sheet Perangkat_Terhubung dan gabungkan
+  if (cachedGasConfig.webAppUrl) {
+    try {
+      const gasCode = code === "ALL" ? "" : code;
+      const gasRes = await callGasEndpoint("getConnectedDevices", { examCode: gasCode }, "GET");
+      if (gasRes && (gasRes.success || Array.isArray(gasRes.devices))) {
+        const gasDevices = Array.isArray(gasRes.devices) ? gasRes.devices : [];
+        gasDevices.forEach((gd: any) => {
+          if (gd && gd.deviceId) {
+            const existing = deviceMap.get(gd.deviceId);
+            deviceMap.set(gd.deviceId, {
+              ...(existing || {}),
+              ...gd,
+            });
+          }
+        });
+      }
+    } catch (gasErr) {
+      // silent fallback
+    }
+  }
+
+  return Array.from(deviceMap.values());
 }
 
 /**

@@ -345,16 +345,18 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
   const studentRows: StudentRowItem[] = uniqueExamTokens.map((tokenItem) => {
     const activeSession = examSessions.find(
       (s) =>
-        (s.token && tokenItem.token && s.token.toUpperCase() === tokenItem.token.toUpperCase()) ||
-        (s.nisn && tokenItem.nisn && s.nisn === tokenItem.nisn) ||
+        (s.token && tokenItem.token && s.token.trim().toUpperCase() === tokenItem.token.trim().toUpperCase()) ||
+        (s.nisn && tokenItem.nisn && s.nisn.trim() === tokenItem.nisn.trim()) ||
         (s.studentName && tokenItem.studentName && s.studentName.toLowerCase().trim() === tokenItem.studentName.toLowerCase().trim())
     );
 
     const matchedDevice = connectedDevices.find(
       (d) =>
-        (d.token && tokenItem.token && d.token.toUpperCase() === tokenItem.token.toUpperCase()) ||
-        (d.nisn && tokenItem.nisn && d.nisn === tokenItem.nisn) ||
-        (d.studentName && tokenItem.studentName && d.studentName.toLowerCase().trim() === tokenItem.studentName.toLowerCase().trim())
+        (activeSession?.deviceId && d.deviceId === activeSession.deviceId) ||
+        (d.deviceId && tokenItem.id === `dev-${d.deviceId}`) ||
+        (d.token && tokenItem.token && d.token.trim().toUpperCase() === tokenItem.token.trim().toUpperCase() && tokenItem.token.length >= 3) ||
+        (d.nisn && tokenItem.nisn && d.nisn.trim() === tokenItem.nisn.trim() && tokenItem.nisn.length >= 3) ||
+        (d.studentName && tokenItem.studentName && d.studentName.toLowerCase().trim() === tokenItem.studentName.toLowerCase().trim() && tokenItem.studentName.trim().length >= 3)
     );
 
     const isStandby = (activeSession && (activeSession as any).status === "standby") || (matchedDevice && matchedDevice.status === "standby");
@@ -383,9 +385,11 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
   connectedDevices.forEach((dev) => {
     const isAlreadyListed = studentRows.some(
       (row) =>
-        (dev.token && row.tokenItem.token && row.tokenItem.token.toUpperCase() === dev.token.toUpperCase()) ||
-        (dev.studentName && row.tokenItem.studentName.toLowerCase().trim() === dev.studentName.toLowerCase().trim()) ||
-        (dev.deviceId && row.tokenItem.id === `dev-${dev.deviceId}`)
+        (row.session?.deviceId && dev.deviceId && row.session.deviceId === dev.deviceId) ||
+        (row.tokenItem.connectedDevice?.deviceId === dev.deviceId) ||
+        (row.tokenItem.id === `dev-${dev.deviceId}`) ||
+        (dev.token && row.tokenItem.token && dev.token.length >= 3 && row.tokenItem.token.toUpperCase() === dev.token.toUpperCase()) ||
+        (dev.studentName && dev.studentName.trim().length >= 3 && row.tokenItem.studentName.toLowerCase().trim() === dev.studentName.toLowerCase().trim())
     );
     if (!isAlreadyListed) {
       studentRows.push({
@@ -396,7 +400,7 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
           studentName: dev.studentName || `Perangkat Siswa (${dev.deviceType || "Smartphone"})`,
           nisn: dev.nisn || "-",
           className: dev.className || exam.teacherProfile?.gradeLevel || "-",
-          status: dev.status === "in_progress" ? "sedang_mengerjakan" : "standby",
+          status: dev.status === "in_progress" ? "sedang_mengerjakan" : dev.status === "submitted" ? "selesai" : "standby",
           generatedAt: dev.lastSeenAt,
           connectedDevice: dev,
         },

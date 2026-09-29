@@ -71,7 +71,7 @@ import {
   fetchGoogleDriveJsonViaProxy,
 } from "./utils/googleDrive";
 import { getCachedAccessToken } from "./utils/googleAuth";
-import { fetchExamFromGAS, syncExamToGAS, syncStudentSessionToGAS, saveGasConfig } from "./utils/gasService";
+import { fetchExamFromGAS, syncExamToGAS, syncStudentSessionToGAS, saveGasConfig, getGasConfig } from "./utils/gasService";
 import {
   subscribeToExamSessions,
   fetchExamSessions,
@@ -749,15 +749,26 @@ export default function App() {
     }
   }, [isDirectStudentMode, isTeacherTrial, activeExam?.title, activeExam?.code, requestedExamCode]);
 
+  // Helper to build robust student exam launch URL with code, driveId, and gasUrl
+  const buildStudentLaunchUrl = (examCode?: string, isTrial?: boolean) => {
+    const code = (examCode || activeExam?.code || "").trim();
+    const driveId = activeExam?.gdriveFileId ? `&driveId=${encodeURIComponent(activeExam.gdriveFileId)}` : "";
+    const gasCfg = getGasConfig();
+    const gasUrl = gasCfg?.webAppUrl?.trim() || "";
+    const gasParam = gasUrl ? `&gasUrl=${encodeURIComponent(gasUrl)}` : "";
+    const trialParam = isTrial ? "&trial=true" : "";
+    return `${window.location.origin}${window.location.pathname}?mode=student&code=${encodeURIComponent(code)}${driveId}${gasParam}${trialParam}`;
+  };
+
   // Automatic redirect if activeTab ever switches to student_exam: open in isolated new tab and keep teacher dashboard on monitoring
   useEffect(() => {
     if (activeTab === "student_exam") {
       const examCode = activeExam?.code || "";
-      const url = `${window.location.origin}${window.location.pathname}?mode=student&code=${encodeURIComponent(examCode)}${isTeacherTrial ? "&trial=true" : ""}`;
+      const url = buildStudentLaunchUrl(examCode, isTeacherTrial);
       window.open(url, "_blank");
       setActiveTab("monitoring");
     }
-  }, [activeTab, activeExam?.code, isTeacherTrial]);
+  }, [activeTab, activeExam?.code, isTeacherTrial, activeExam?.gdriveFileId]);
 
   // Automatically broadcast and sync active exam to server & Google Sheets for 2-way multi-device discovery
   // CRITICAL SECURITY RULE: Only run for teacher workspace! NEVER for student devices!
@@ -1707,7 +1718,7 @@ export default function App() {
             {/* Buka Mode Siswa di Tab Baru (Terisolasi Sepenuhnya dari Guru) */}
             <button
               onClick={() => {
-                const url = `${window.location.origin}${window.location.pathname}?mode=student&code=${encodeURIComponent(activeExam.code)}`;
+                const url = buildStudentLaunchUrl(activeExam.code, false);
                 window.open(url, "_blank");
               }}
               className="p-2 sm:px-3 sm:py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-md shadow-indigo-950 shrink-0"
@@ -1779,7 +1790,7 @@ export default function App() {
           {/* Quick Sandbox Trial Launcher in New Tab */}
           <button
             onClick={() => {
-              const url = `${window.location.origin}${window.location.pathname}?mode=student&code=${encodeURIComponent(activeExam.code)}&trial=true`;
+              const url = buildStudentLaunchUrl(activeExam.code, true);
               window.open(url, "_blank");
             }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-amber-300 bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/20 transition-all cursor-pointer ml-3 shrink-0"
@@ -1820,7 +1831,7 @@ export default function App() {
             <div className="pt-2 border-t border-slate-800/80 space-y-2">
               <button
                 onClick={() => {
-                  const url = `${window.location.origin}${window.location.pathname}?mode=student&code=${encodeURIComponent(activeExam.code)}`;
+                  const url = buildStudentLaunchUrl(activeExam.code, false);
                   window.open(url, "_blank");
                   setIsMobileMenuOpen(false);
                 }}
@@ -1833,7 +1844,7 @@ export default function App() {
 
               <button
                 onClick={() => {
-                  const url = `${window.location.origin}${window.location.pathname}?mode=student&code=${encodeURIComponent(activeExam.code)}&trial=true`;
+                  const url = buildStudentLaunchUrl(activeExam.code, true);
                   window.open(url, "_blank");
                   setIsMobileMenuOpen(false);
                 }}
@@ -1863,7 +1874,7 @@ export default function App() {
             <div className="flex flex-col gap-2 pt-2">
               <button
                 onClick={() => {
-                  const url = `${window.location.origin}${window.location.pathname}?mode=student&code=${encodeURIComponent(activeExam.code)}`;
+                  const url = buildStudentLaunchUrl(activeExam.code, false);
                   window.open(url, "_blank");
                 }}
                 className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer flex items-center justify-center gap-2"
@@ -1905,11 +1916,11 @@ export default function App() {
             activeExam={activeExam}
             onUpdateExam={handleUpdateActiveExam}
             onPreviewSlides={() => {
-              const url = `${window.location.origin}${window.location.pathname}?mode=student&code=${encodeURIComponent(activeExam.code)}`;
+              const url = buildStudentLaunchUrl(activeExam.code, false);
               window.open(url, "_blank");
             }}
             onStartTeacherTrial={() => {
-              const url = `${window.location.origin}${window.location.pathname}?mode=student&code=${encodeURIComponent(activeExam.code)}&trial=true`;
+              const url = buildStudentLaunchUrl(activeExam.code, true);
               window.open(url, "_blank");
             }}
             onOpenGeminiModal={() => setIsGeminiModalOpen(true)}

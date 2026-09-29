@@ -54,6 +54,7 @@ import { validateExamToken, normalizeToken, deduplicateStudentTokens } from "../
 import { getStudentTokens, saveActiveStudentSession } from "../utils/storage";
 import { broadcastLiveSession, subscribeToSessionResets } from "../utils/liveSync";
 import { syncStudentSessionToGAS, pingStudentDevice } from "../utils/gasService";
+import { getStudentDeviceFingerprint } from "../utils/deviceDetector";
 import {
   playExamTimeWarningSound,
   isSoundNotificationEnabled,
@@ -107,18 +108,9 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
   onSwitchExam,
   requestedExamCode,
 }) => {
-  // Persistent Unique Device ID per browser session for accurate proctor detection
-  const deviceIdRef = useRef<string>(() => {
-    if (typeof window !== "undefined") {
-      let stored = sessionStorage.getItem("slideexam_device_id");
-      if (!stored) {
-        stored = `dev-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
-        sessionStorage.setItem("slideexam_device_id", stored);
-      }
-      return stored;
-    }
-    return `dev-${Date.now()}`;
-  });
+  // Deterministic Unique Student Device Fingerprint based on navigator.userAgent + screen resolution + platform
+  const deviceFingerprint = React.useMemo(() => getStudentDeviceFingerprint(), []);
+  const deviceIdRef = useRef<string>(deviceFingerprint.deviceId);
 
   // Available registered students roster from profile data (strictly deduplicated & isolated to current exam code and grade level)
   const availableStudents = React.useMemo(() => {
@@ -554,6 +546,12 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
       const elapsed = Math.max(0, exam.durationMinutes * 60 - secondsRemaining);
       const updatedHeartbeat: StudentExamSession = {
         ...activeSess,
+        deviceId: activeSess.deviceId || deviceFingerprint.deviceId,
+        deviceType: activeSess.deviceType || deviceFingerprint.deviceType,
+        screenResolution: activeSess.screenResolution || deviceFingerprint.screenResolution,
+        deviceInfo: activeSess.deviceInfo || deviceFingerprint.userAgent,
+        isDeviceConnected: true,
+        lastHeartbeatAt: new Date().toISOString(),
         currentSlideIndex,
         timeSpentSeconds: elapsed,
       };
@@ -583,15 +581,16 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [isLoggedIn, isSubmitted, session?.id, currentSlideIndex, secondsRemaining, isTeacherTrial, exam.durationMinutes]);
+  }, [isLoggedIn, isSubmitted, session?.id, currentSlideIndex, secondsRemaining, isTeacherTrial, exam.durationMinutes, deviceFingerprint]);
 
   // Active Student Device Detection & Presence Heartbeat
   // Runs IMMEDIATELY from the moment the exam link is opened (even before login/start!)
   useEffect(() => {
     if (isTeacherTrial) return;
 
-    const deviceId = typeof deviceIdRef.current === "function" ? (deviceIdRef.current as any)() : deviceIdRef.current;
-    const deviceType = detectDeviceType();
+    const deviceId = deviceFingerprint.deviceId;
+    const deviceType = deviceFingerprint.deviceType;
+    const screenResolution = deviceFingerprint.screenResolution;
     const effectiveToken = loginToken || initialToken || exam.sessionToken || "";
 
     const sendDevicePresencePing = () => {
@@ -606,7 +605,7 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
       const nisnVal = loginNisn.trim() || (activeSess ? activeSess.nisn : "");
       const classVal = loginClass || (activeSess ? activeSess.className : "");
 
-      // 1. Send device ping to Express server & GAS
+      // 1. Send device ping to Express server & GAS with full device telemetry
       pingStudentDevice({
         deviceId,
         examCode: exam.code,
@@ -616,7 +615,8 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
         nisn: nisnVal,
         className: classVal,
         deviceType,
-        browser: typeof navigator !== "undefined" ? navigator.userAgent : "",
+        screenResolution,
+        browser: deviceFingerprint.userAgent,
         status: currentStatus,
       });
 
@@ -624,11 +624,12 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
       if (!isLoggedIn) {
         broadcastLiveSession({
           id: `dev-${deviceId}`,
+          deviceId,
           examId: exam.id,
           examCode: exam.code,
           examTitle: exam.title,
           subject: exam.teacherProfile?.subject || "",
-          studentName: studentNameVal || "Siswa (Terhubung)",
+          studentName: studentNameVal || `Siswa (${deviceType})`,
           nisn: nisnVal,
           className: classVal,
           token: effectiveToken,
@@ -642,6 +643,8 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
           percentage: 0,
           passed: false,
           deviceType,
+          screenResolution,
+          deviceInfo: deviceFingerprint.userAgent,
           isDeviceConnected: true,
           lastHeartbeatAt: new Date().toISOString(),
         } as any);
@@ -868,6 +871,12 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
       nisn: loginNisn.trim() || "0078" + Math.floor(100000 + Math.random() * 900000),
       className: loginClass,
       token: loginToken.trim().toUpperCase(),
+      deviceId: deviceFingerprint.deviceId,
+      deviceType: deviceFingerprint.deviceType,
+      screenResolution: deviceFingerprint.screenResolution,
+      deviceInfo: deviceFingerprint.userAgent,
+      isDeviceConnected: true,
+      lastHeartbeatAt: new Date().toISOString(),
       currentSlideIndex: 0,
       answers: {},
       startTime: new Date().toISOString(),
@@ -1178,6 +1187,12 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
 
     const finalizedSession: StudentExamSession = {
       ...currentActiveSession,
+      deviceId: currentActiveSession.deviceId || deviceFingerprint.deviceId,
+      deviceType: currentActiveSession.deviceType || deviceFingerprint.deviceType,
+      screenResolution: currentActiveSession.screenResolution || deviceFingerprint.screenResolution,
+      deviceInfo: currentActiveSession.deviceInfo || deviceFingerprint.userAgent,
+      isDeviceConnected: true,
+      lastHeartbeatAt: new Date().toISOString(),
       answers: mergedAnswers,
       status,
       submitTime: new Date().toISOString(),

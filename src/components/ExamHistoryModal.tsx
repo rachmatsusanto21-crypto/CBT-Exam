@@ -140,7 +140,7 @@ export const ExamHistoryModal: React.FC<ExamHistoryModalProps> = ({
     const currentUrl = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
     const baseUrl = currentUrl.endsWith("/") ? currentUrl.slice(0, -1) : currentUrl;
     const gasCfg = getGasConfig();
-    const gasUrl = gasCfg?.connected && gasCfg.webAppUrl ? gasCfg.webAppUrl : undefined;
+    const gasUrl = gasCfg?.webAppUrl?.trim() || undefined;
     const studentUrl = generateShortStudentUrl(baseUrl, examItem, examItem.sessionToken, true, gasUrl);
     navigator.clipboard.writeText(studentUrl);
     setCopiedStudentExamId(examItem.id);
@@ -155,7 +155,7 @@ export const ExamHistoryModal: React.FC<ExamHistoryModalProps> = ({
     const currentUrl = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
     const baseUrl = currentUrl.endsWith("/") ? currentUrl.slice(0, -1) : currentUrl;
     const gasCfg = getGasConfig();
-    const gasUrl = gasCfg?.connected && gasCfg.webAppUrl ? gasCfg.webAppUrl : undefined;
+    const gasUrl = gasCfg?.webAppUrl?.trim() || undefined;
     const driveUrl = generateDriveStudentUrl(baseUrl, examItem, examItem.sessionToken, gasUrl);
     navigator.clipboard.writeText(driveUrl);
     setCopiedDriveExamId(examItem.id);
