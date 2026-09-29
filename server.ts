@@ -217,6 +217,24 @@ interface ResetSessionRecord {
 }
 const resetSessionsRegistry = new Map<string, ResetSessionRecord>();
 
+// Real-time Connected Student Devices Registry (Active Pings)
+export interface ConnectedDeviceRecord {
+  deviceId: string;
+  examCode: string;
+  examId?: string;
+  token?: string;
+  studentName?: string;
+  nisn?: string;
+  className?: string;
+  deviceType?: string;
+  browser?: string;
+  status: "standby" | "in_progress" | "submitted";
+  lastSeenAt: string;
+  lastSeenTimestamp: number;
+  ip?: string;
+}
+const connectedDevicesRegistry = new Map<string, ConnectedDeviceRecord>();
+
 // Health check
 app.get("/api/health", (req, res) => {
   res.json({
@@ -224,6 +242,7 @@ app.get("/api/health", (req, res) => {
     examsCount: sharedExamsRegistry.size,
     gdriveCount: gdriveExamsRegistry.size,
     sessionsCount: studentSessionsRegistry.size,
+    devicesCount: connectedDevicesRegistry.size,
     timestamp: new Date().toISOString(),
   });
 });
@@ -781,6 +800,83 @@ app.get("/api/sessions/status/:sessionId", (req, res) => {
   });
 });
 
+// Device presence heartbeat from student devices (phone, tablet, laptop)
+app.post("/api/devices/ping", (req, res) => {
+  try {
+    const {
+      deviceId,
+      examCode,
+      examId,
+      token,
+      studentName,
+      nisn,
+      className,
+      deviceType,
+      browser,
+      status = "standby",
+    } = req.body || {};
+
+    const cleanDeviceId = String(deviceId || req.ip || `dev-${Date.now()}`).trim();
+    const cleanCode = String(examCode || "").trim().toUpperCase();
+    const now = Date.now();
+
+    const record: ConnectedDeviceRecord = {
+      deviceId: cleanDeviceId,
+      examCode: cleanCode,
+      examId: String(examId || "").trim(),
+      token: String(token || "").trim().toUpperCase(),
+      studentName: String(studentName || "").trim(),
+      nisn: String(nisn || "").trim(),
+      className: String(className || "").trim(),
+      deviceType: String(deviceType || "Smartphone").trim(),
+      browser: String(browser || "").trim(),
+      status: status === "in_progress" ? "in_progress" : status === "submitted" ? "submitted" : "standby",
+      lastSeenAt: new Date().toISOString(),
+      lastSeenTimestamp: now,
+      ip: req.ip || (req.headers["x-forwarded-for"] as string) || "",
+    };
+
+    connectedDevicesRegistry.set(cleanDeviceId, record);
+
+    // Prune devices not seen for > 2 minutes
+    connectedDevicesRegistry.forEach((dev, key) => {
+      if (now - dev.lastSeenTimestamp > 120000) {
+        connectedDevicesRegistry.delete(key);
+      }
+    });
+
+    res.json({ success: true, deviceId: cleanDeviceId, activeCount: connectedDevicesRegistry.size });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err?.message || "Failed to record device ping" });
+  }
+});
+
+// Get active connected devices for an exam
+app.get("/api/devices/by-exam/:codeOrId", (req, res) => {
+  const target = (req.params.codeOrId || "").trim().toUpperCase();
+  const now = Date.now();
+  const activeDevices: ConnectedDeviceRecord[] = [];
+
+  connectedDevicesRegistry.forEach((dev) => {
+    // Only return devices active in last 45 seconds
+    if (now - dev.lastSeenTimestamp <= 45000) {
+      const dCode = (dev.examCode || "").trim().toUpperCase();
+      const dId = (dev.examId || "").trim().toUpperCase();
+      if (
+        target === "ALL" ||
+        !target ||
+        dCode === target ||
+        dId === target ||
+        dCode.replace(/-/g, "") === target.replace(/-/g, "")
+      ) {
+        activeDevices.push(dev);
+      }
+    }
+  });
+
+  res.json({ success: true, count: activeDevices.length, devices: activeDevices });
+});
+
 // Get all student sessions or filter by exam code / exam ID
 app.get("/api/sessions", (req, res) => {
   const allSessions = Array.from(studentSessionsRegistry.values());
@@ -789,15 +885,50 @@ app.get("/api/sessions", (req, res) => {
 
 app.get("/api/sessions/by-exam/:codeOrId", (req, res) => {
   const target = (req.params.codeOrId || "").trim().toUpperCase();
+  const altCode = String(req.query.examCode || req.query.code || "").trim().toUpperCase();
+  const altId = String(req.query.examId || req.query.id || "").trim().toUpperCase();
   const matched: any[] = [];
+
   studentSessionsRegistry.forEach((session) => {
     const sId = (session.examId || "").trim().toUpperCase();
     const sCode = (session.examCode || "").trim().toUpperCase();
-    if (target === "ALL" || !target || sId === target || sCode === target) {
+
+    const targetMatch =
+      target === "ALL" ||
+      !target ||
+      sId === target ||
+      sCode === target ||
+      sCode.replace(/-/g, "") === target.replace(/-/g, "");
+
+    const altMatch =
+      (altCode && (sCode === altCode || sCode.replace(/-/g, "") === altCode.replace(/-/g, ""))) ||
+      (altId && sId === altId);
+
+    if (targetMatch || altMatch) {
       matched.push(session);
     }
   });
-  res.json({ success: true, sessions: matched });
+
+  // Also include active connected devices
+  const now = Date.now();
+  const activeDevices: ConnectedDeviceRecord[] = [];
+  connectedDevicesRegistry.forEach((dev) => {
+    if (now - dev.lastSeenTimestamp <= 45000) {
+      const dCode = (dev.examCode || "").trim().toUpperCase();
+      const dId = (dev.examId || "").trim().toUpperCase();
+      if (
+        target === "ALL" ||
+        !target ||
+        dCode === target ||
+        dId === target ||
+        (altCode && dCode === altCode)
+      ) {
+        activeDevices.push(dev);
+      }
+    }
+  });
+
+  res.json({ success: true, sessions: matched, devices: activeDevices });
 });
 
 // Delete or reset student session

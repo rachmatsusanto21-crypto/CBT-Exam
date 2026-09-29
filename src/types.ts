@@ -99,8 +99,25 @@ export interface StudentTokenItem {
   nisn: string;
   className: string;
   seatNumber?: string;
-  status: "belum_mulai" | "sedang_mengerjakan" | "selesai";
+  status: "belum_mulai" | "sedang_mengerjakan" | "selesai" | "standby";
   generatedAt: string;
+  connectedDevice?: ConnectedDeviceItem;
+}
+
+export interface ConnectedDeviceItem {
+  deviceId: string;
+  examCode: string;
+  examId?: string;
+  token?: string;
+  studentName?: string;
+  nisn?: string;
+  className?: string;
+  deviceType?: string;
+  browser?: string;
+  status: "standby" | "in_progress" | "submitted";
+  lastSeenAt: string;
+  lastSeenTimestamp?: number;
+  ip?: string;
 }
 
 export interface StudentAnswerItem {
@@ -139,13 +156,16 @@ export interface StudentExamSession {
   maxScore: number;
   percentage: number;
   passed: boolean;
-  status: "in_progress" | "submitted" | "timed_out";
+  status: "in_progress" | "submitted" | "timed_out" | "standby";
   shuffledQuestions?: Question[];
   aiRemediation?: string;
   aiEnrichment?: string;
   aiDiagnosis?: string;
   aiStructuredAnalysis?: AiDiagnosticResult;
   deviceInfo?: string;
+  deviceType?: string;
+  isDeviceConnected?: boolean;
+  lastHeartbeatAt?: string;
   cheatViolations?: CheatingViolationLog[];
   violationCount?: number;
 }

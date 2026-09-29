@@ -114,7 +114,14 @@ function doPost(e) {
 
     switch (action) {
       case "ping":
-        result = { success: true, message: "PONG - GAS Backend Online", timestamp: new Date().toISOString() };
+      case "devicePing":
+        result = {
+          success: true,
+          status: "success",
+          message: "PONG - GAS Backend Online (Perangkat Terdeteksi)",
+          deviceId: payload.deviceId || "",
+          timestamp: new Date().toISOString()
+        };
         break;
 
       case "initFolders":

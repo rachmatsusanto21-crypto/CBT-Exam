@@ -1022,82 +1022,42 @@ export async function listExamsFromGoogleDrive(accessToken: string): Promise<Goo
     });
 }
 
+import {
+  fetchGoogleDriveJsonViaProxy as fetchViaProxyModule,
+  fetchExamPackageViaProxy,
+  extractDriveFileId,
+  isGoogleDriveUrlOrId,
+  ProxyRequestOptions,
+  ProxyResponse,
+} from "./googleDriveProxy";
+
+export {
+  fetchExamPackageViaProxy,
+  extractDriveFileId,
+  isGoogleDriveUrlOrId,
+};
+export type { ProxyRequestOptions, ProxyResponse };
+
 /**
  * Performs a server-side proxy request for Google Drive JSON content (e.g. ExamPackage),
  * bypassing browser CORS, cookie, and Google Workspace tenant restrictions for student devices (phones, tablets, laptops).
+ * Delegates to the dedicated `src/utils/googleDriveProxy.ts` module with multi-tier failover.
  *
  * @param fileIdOrUrl Google Drive file ID or full Google Drive URL
- * @param accessTokenOrNull Optional OAuth access token if available (teacher auth), otherwise falls back to public access
+ * @param accessTokenOrOptions Optional OAuth access token or ProxyRequestOptions
  * @returns Parsed JSON content / ExamPackage or null if not found
  */
 export async function fetchGoogleDriveJsonViaProxy<T = ExamPackage>(
   fileIdOrUrl: string,
-  accessTokenOrNull?: string | null
+  accessTokenOrOptions?: string | null | ProxyRequestOptions
 ): Promise<T | null> {
-  const cleanInput = (fileIdOrUrl || "").trim();
-  if (!cleanInput) return null;
+  const options: ProxyRequestOptions =
+    typeof accessTokenOrOptions === "object" && accessTokenOrOptions !== null
+      ? accessTokenOrOptions
+      : { accessToken: typeof accessTokenOrOptions === "string" ? accessTokenOrOptions : undefined };
 
-  // Extract fileId if full Google Drive link or query was provided
-  const extracted = extractGoogleDriveFileId(cleanInput);
-  const targetFileId = extracted.fileId || cleanInput;
-
-  if (!targetFileId) return null;
-
-  try {
-    const proxyHeaders: Record<string, string> = {
-      Accept: "application/json, text/plain, */*",
-    };
-    if (accessTokenOrNull) {
-      proxyHeaders.Authorization = `Bearer ${accessTokenOrNull}`;
-    }
-
-    // 1. Try primary server-side proxy route: /api/gdrive/exam/:fileId
-    let proxyRes = await fetch(`/api/gdrive/exam/${encodeURIComponent(targetFileId)}`, {
-      headers: proxyHeaders,
-    });
-
-    // If failed with token, retry proxy without token (for public sharing links)
-    if (!proxyRes.ok && accessTokenOrNull) {
-      proxyRes = await fetch(`/api/gdrive/exam/${encodeURIComponent(targetFileId)}`, {
-        headers: { Accept: "application/json, text/plain, */*" },
-      });
-    }
-
-    // 2. Fallback to /api/gdrive/proxy?fileId=... route if not ok
-    if (!proxyRes.ok) {
-      proxyRes = await fetch(`/api/gdrive/proxy?fileId=${encodeURIComponent(targetFileId)}`, {
-        headers: proxyHeaders,
-      });
-    }
-
-    if (proxyRes.ok) {
-      const data = await proxyRes.json();
-      if (data) {
-        const payload: any = data.exam || (Array.isArray(data.questions) ? data : null) || (data.item?.exam ? data.item.exam : null) || data;
-        if (payload && (Array.isArray(payload.questions) || payload.title || payload.id)) {
-          const completeResult = {
-            ...payload,
-            gdriveFileId: targetFileId,
-            gdriveSyncedAt: payload.gdriveSyncedAt || new Date().toISOString(),
-          };
-
-          // Cache locally for subsequent instant loads and offline resilience
-          try {
-            localStorage.setItem(`gdrive_cache_${targetFileId}`, JSON.stringify(completeResult));
-            if (completeResult.code) {
-              localStorage.setItem(`gdrive_code_${String(completeResult.code).toUpperCase()}`, JSON.stringify(completeResult));
-            }
-          } catch {}
-
-          return completeResult as T;
-        }
-      }
-    }
-  } catch (err) {
-    console.warn(`[fetchGoogleDriveJsonViaProxy] Server proxy request failed for fileId: ${targetFileId}:`, err);
-  }
-
-  return null;
+  const res = await fetchViaProxyModule<T>(fileIdOrUrl, options);
+  return res.data;
 }
 
 /**

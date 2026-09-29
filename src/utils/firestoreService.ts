@@ -114,7 +114,8 @@ export async function fetchExamSessions(
   _examIdOrOptions?: any,
   _optionsOrIncludeDeleted?: any
 ): Promise<StudentExamSession[]> {
-  return await fetchSessionsGAS(examCodeOrId);
+  const fallback = typeof _examIdOrOptions === "string" ? _examIdOrOptions : undefined;
+  return await fetchSessionsGAS(examCodeOrId, fallback);
 }
 
 /**

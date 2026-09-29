@@ -28,13 +28,17 @@ import {
   Check,
   RotateCcw,
   AlertTriangle,
-  FolderSync
+  FolderSync,
+  Smartphone,
+  Wifi,
+  Laptop
 } from "lucide-react";
-import { ExamPackage, SchoolProfile, StudentExamSession, StudentTokenItem } from "../types";
+import { ExamPackage, SchoolProfile, StudentExamSession, StudentTokenItem, ConnectedDeviceItem } from "../types";
 import { exportGradebookToExcel, exportItemAnalysisToExcel } from "../utils/sheetExport";
 import { generateStudentExamPdfReport, generateBatchStudentsPdfReport } from "../utils/studentPdfReport";
 import { deduplicateStudentTokens } from "../utils/tokenValidator";
 import { fetchExamSessions, reconcileAndMergeExamSessions } from "../utils/firestoreService";
+import { fetchConnectedDevices } from "../utils/gasService";
 import { getStudentTokens } from "../utils/storage";
 import { subscribeToLiveSessions } from "../utils/liveSync";
 import { LiveStudentEditModal, StudentRowItem } from "./LiveStudentEditModal";
@@ -113,6 +117,7 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isReconciling, setIsReconciling] = useState(false);
+  const [connectedDevices, setConnectedDevices] = useState<ConnectedDeviceItem[]>([]);
 
   // Detect any student sessions that share this exam's ID but have disparate/mismatched exam codes
   const disparateCodeSessions = useMemo(() => {
@@ -130,7 +135,7 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
     setIsReconciling(true);
     try {
       const res = await reconcileAndMergeExamSessions(exam.id, exam.code);
-      const remoteSessions = await fetchExamSessions(exam.id, exam.code);
+      const remoteSessions = await fetchExamSessions(exam.code || exam.id, exam.id);
       if (remoteSessions && remoteSessions.length > 0 && onUpdateHistory) {
         onUpdateHistory(remoteSessions);
       } else if (onUpdateHistory) {
@@ -160,7 +165,11 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
     try {
       // Reconcile and unify any fragmented codes during sync
       const reconcileRes = await reconcileAndMergeExamSessions(exam.id, exam.code);
-      const remoteSessions = await fetchExamSessions(exam.id, exam.code);
+      const remoteSessions = await fetchExamSessions(exam.code || exam.id, exam.id);
+      const devs = await fetchConnectedDevices(exam.code || exam.id);
+      if (Array.isArray(devs)) {
+        setConnectedDevices(devs);
+      }
       if (remoteSessions && remoteSessions.length > 0 && onUpdateHistory) {
         onUpdateHistory(remoteSessions);
         if (reconcileRes.mergedSessionsCount > 0) {
@@ -240,10 +249,18 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
 
     // 3. Periodic heartbeat poll every 3 seconds
     const interval = setInterval(() => {
-      fetchExamSessions(exam.id, exam.code)
+      fetchExamSessions(exam.code || exam.id, exam.id)
         .then((remoteSessions) => {
           if (remoteSessions && remoteSessions.length > 0 && onUpdateHistory) {
             onUpdateHistory(remoteSessions);
+          }
+        })
+        .catch(() => {});
+
+      fetchConnectedDevices(exam.code || exam.id)
+        .then((devs) => {
+          if (Array.isArray(devs)) {
+            setConnectedDevices(devs);
           }
         })
         .catch(() => {});
@@ -328,24 +345,64 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
   const studentRows: StudentRowItem[] = uniqueExamTokens.map((tokenItem) => {
     const activeSession = examSessions.find(
       (s) =>
-        s.token === tokenItem.token ||
-        s.nisn === tokenItem.nisn ||
-        s.studentName.toLowerCase().trim() === tokenItem.studentName.toLowerCase().trim()
+        (s.token && tokenItem.token && s.token.toUpperCase() === tokenItem.token.toUpperCase()) ||
+        (s.nisn && tokenItem.nisn && s.nisn === tokenItem.nisn) ||
+        (s.studentName && tokenItem.studentName && s.studentName.toLowerCase().trim() === tokenItem.studentName.toLowerCase().trim())
     );
 
-    const effectiveStatus: "belum_mulai" | "sedang_mengerjakan" | "selesai" = activeSession
+    const matchedDevice = connectedDevices.find(
+      (d) =>
+        (d.token && tokenItem.token && d.token.toUpperCase() === tokenItem.token.toUpperCase()) ||
+        (d.nisn && tokenItem.nisn && d.nisn === tokenItem.nisn) ||
+        (d.studentName && tokenItem.studentName && d.studentName.toLowerCase().trim() === tokenItem.studentName.toLowerCase().trim())
+    );
+
+    const isStandby = (activeSession && (activeSession as any).status === "standby") || (matchedDevice && matchedDevice.status === "standby");
+
+    const effectiveStatus: "belum_mulai" | "sedang_mengerjakan" | "selesai" | "standby" = activeSession
       ? activeSession.status === "submitted"
         ? "selesai"
+        : isStandby
+        ? "standby"
         : "sedang_mengerjakan"
+      : matchedDevice
+      ? "standby"
       : "belum_mulai";
 
     return {
       tokenItem: {
         ...tokenItem,
         status: effectiveStatus,
+        connectedDevice: matchedDevice,
       },
       session: activeSession || null,
     };
+  });
+
+  // Also include any connected devices not yet in pre-generated token list
+  connectedDevices.forEach((dev) => {
+    const isAlreadyListed = studentRows.some(
+      (row) =>
+        (dev.token && row.tokenItem.token && row.tokenItem.token.toUpperCase() === dev.token.toUpperCase()) ||
+        (dev.studentName && row.tokenItem.studentName.toLowerCase().trim() === dev.studentName.toLowerCase().trim()) ||
+        (dev.deviceId && row.tokenItem.id === `dev-${dev.deviceId}`)
+    );
+    if (!isAlreadyListed) {
+      studentRows.push({
+        tokenItem: {
+          id: `dev-${dev.deviceId}`,
+          examCode: dev.examCode || exam.code,
+          token: dev.token || "ONLINE",
+          studentName: dev.studentName || `Perangkat Siswa (${dev.deviceType || "Smartphone"})`,
+          nisn: dev.nisn || "-",
+          className: dev.className || exam.teacherProfile?.gradeLevel || "-",
+          status: dev.status === "in_progress" ? "sedang_mengerjakan" : "standby",
+          generatedAt: dev.lastSeenAt,
+          connectedDevice: dev,
+        },
+        session: null,
+      });
+    }
   });
 
   // Also include any sessions not in pre-generated token list (e.g. dynamic/manual student inputs)
@@ -353,9 +410,11 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
     const isAlreadyListed = studentRows.some(
       (row) =>
         row.session?.id === s.id ||
+        (s.id.startsWith("dev-") && row.tokenItem.id === s.id) ||
         row.tokenItem.studentName.toLowerCase().trim() === s.studentName.toLowerCase().trim()
     );
     if (!isAlreadyListed) {
+      const isStandbySess = (s as any).status === "standby";
       studentRows.push({
         tokenItem: {
           id: `dyn-${s.id}`,
@@ -364,7 +423,7 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
           studentName: s.studentName,
           nisn: s.nisn,
           className: s.className,
-          status: s.status === "submitted" ? "selesai" : "sedang_mengerjakan",
+          status: s.status === "submitted" ? "selesai" : isStandbySess ? "standby" : "sedang_mengerjakan",
           generatedAt: s.startTime,
         },
         session: s,
@@ -382,9 +441,11 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
   });
 
   const totalRegistered = studentRows.length;
-  const completedCount = studentRows.filter((r) => r.session?.status === "submitted").length;
-  const inProgressCount = studentRows.filter((r) => r.session?.status === "in_progress").length;
-  const notStartedCount = totalRegistered - completedCount - inProgressCount;
+  const completedCount = studentRows.filter((r) => r.tokenItem.status === "selesai" || r.session?.status === "submitted").length;
+  const inProgressCount = studentRows.filter((r) => r.tokenItem.status === "sedang_mengerjakan" || r.session?.status === "in_progress").length;
+  const standbyCount = studentRows.filter((r) => r.tokenItem.status === "standby" || (r.session as any)?.status === "standby").length;
+  const onlineDevicesCount = connectedDevices.length > 0 ? connectedDevices.length : (inProgressCount + standbyCount);
+  const notStartedCount = Math.max(0, totalRegistered - completedCount - inProgressCount - standbyCount);
 
   const completedSessions = examSessions.filter((s) => s.status === "submitted");
   const averageScore = completedSessions.length > 0
@@ -746,49 +807,66 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
       )}
 
       {/* Summary KPI Grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-[#121214] rounded-2xl p-5 border border-slate-800 shadow-sm space-y-1">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5 sm:gap-4">
+        <div className="bg-[#121214] rounded-2xl p-4 sm:p-5 border border-slate-800 shadow-sm space-y-1">
           <div className="flex items-center justify-between text-xs text-slate-400 font-medium">
-            <span>Total Peserta Terdaftar</span>
+            <span>Total Siswa Terdaftar</span>
             <Users className="w-4 h-4 text-indigo-400" />
           </div>
-          <div className="text-2xl font-bold text-white">{totalRegistered} Siswa</div>
+          <div className="text-xl sm:text-2xl font-bold text-white">{totalRegistered} Siswa</div>
           <div className="text-[11px] text-slate-500">
-            {completedCount} Selesai • {inProgressCount} Mengerjakan • {notStartedCount} Belum
+            {completedCount} Selesai • {inProgressCount} Pengerjaan
           </div>
         </div>
 
-        <div className="bg-[#121214] rounded-2xl p-5 border border-slate-800 shadow-sm space-y-1">
+        {/* Live Connected Devices Card */}
+        <div className="bg-[#121214] rounded-2xl p-4 sm:p-5 border border-slate-800 shadow-sm space-y-1 relative overflow-hidden">
+          <div className="flex items-center justify-between text-xs text-emerald-400 font-medium">
+            <span className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+              <span>Perangkat Online</span>
+            </span>
+            <Smartphone className="w-4 h-4 text-emerald-400" />
+          </div>
+          <div className="text-xl sm:text-2xl font-bold text-emerald-300">
+            {onlineDevicesCount} <span className="text-xs font-normal text-slate-400">Perangkat</span>
+          </div>
+          <div className="text-[11px] text-slate-400">
+            {inProgressCount} Mengerjakan • {standbyCount} Standby Siap
+          </div>
+        </div>
+
+        <div className="bg-[#121214] rounded-2xl p-4 sm:p-5 border border-slate-800 shadow-sm space-y-1">
           <div className="flex items-center justify-between text-xs text-slate-400 font-medium">
-            <span>Rata-Rata Nilai Sementara</span>
+            <span>Rata-Rata Nilai</span>
             <Award className="w-4 h-4 text-amber-400" />
           </div>
-          <div className="text-2xl font-bold text-white">{averageScore} <span className="text-sm font-normal text-slate-500">/ 100</span></div>
+          <div className="text-xl sm:text-2xl font-bold text-white">{averageScore} <span className="text-sm font-normal text-slate-500">/ 100</span></div>
           <div className="text-[11px] text-slate-500">
-            Berdasarkan {completedCount} siswa yang sudah submit
+            {completedCount} siswa sudah submit
           </div>
         </div>
 
-        <div className="bg-[#121214] rounded-2xl p-5 border border-slate-800 shadow-sm space-y-1">
+        <div className="bg-[#121214] rounded-2xl p-4 sm:p-5 border border-slate-800 shadow-sm space-y-1">
           <div className="flex items-center justify-between text-xs text-slate-400 font-medium">
-            <span>Tingkat Ketuntasan (KKM)</span>
+            <span>Ketuntasan (KKM)</span>
             <GraduationCap className="w-4 h-4 text-emerald-400" />
           </div>
-          <div className="text-2xl font-bold text-emerald-400">{passRate}%</div>
+          <div className="text-xl sm:text-2xl font-bold text-emerald-400">{passRate}%</div>
           <div className="text-[11px] text-slate-500">
-            {passedCount} Tuntas • {completedCount - passedCount} Remedial
+            {passedCount} Tuntas • {Math.max(0, completedCount - passedCount)} Remedial
           </div>
         </div>
 
-        <div className="bg-[#121214] rounded-2xl p-5 border border-slate-800 shadow-sm space-y-1">
+        <div className="bg-[#121214] rounded-2xl p-4 sm:p-5 border border-slate-800 shadow-sm space-y-1 col-span-2 sm:col-span-1">
           <div className="flex items-center justify-between text-xs text-slate-400 font-medium">
-            <span>Status Sesi & Token</span>
+            <span>Token Sesi Ujian</span>
             <Clock className="w-4 h-4 text-indigo-400" />
           </div>
           <div className="text-xl font-bold text-indigo-300 font-mono">{exam.sessionToken}</div>
           <div className="text-[11px] text-emerald-400 font-medium flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            Permanen (Aktif Tanpa Batas Waktu)
+            Permanen (Aktif)
           </div>
         </div>
       </div>
@@ -947,8 +1025,9 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
               ) : (
                 filteredRows.map(({ tokenItem, session }, idx) => {
                   const isSelected = selectedIds.has(tokenItem.id);
-                  const isFinished = session?.status === "submitted";
-                  const isInProgress = session?.status === "in_progress";
+                  const isFinished = session?.status === "submitted" || tokenItem.status === "selesai";
+                  const isInProgress = session?.status === "in_progress" || tokenItem.status === "sedang_mengerjakan";
+                  const isStandby = tokenItem.status === "standby" || (session as any)?.status === "standby" || !!tokenItem.connectedDevice;
                   const answeredCount = session ? Object.keys(session.answers).length : 0;
                   const totalQ = exam.questions.length;
                   const progressPct = totalQ > 0 ? Math.round((answeredCount / totalQ) * 100) : 0;
@@ -1001,9 +1080,20 @@ export const LiveMonitoringDashboard: React.FC<LiveMonitoringDashboardProps> = (
                             <span>Selesai</span>
                           </span>
                         ) : isInProgress ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-full font-medium text-[11px] animate-pulse">
-                            <Clock className="w-3 h-3" />
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-amber-500/10 text-amber-300 border border-amber-500/30 rounded-full font-medium text-[11px] animate-pulse">
+                            <Clock className="w-3 h-3 text-amber-400" />
                             <span>Sedang Mengerjakan</span>
+                            {session?.currentSlideIndex !== undefined && (
+                              <span className="text-[10px] text-amber-200/80">({session.currentSlideIndex + 1}/{exam.questions.length})</span>
+                            )}
+                          </span>
+                        ) : isStandby ? (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 rounded-full font-semibold text-[11px]">
+                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                            <span>Terhubung (Standby)</span>
+                            <span className="text-[10px] text-emerald-400 font-normal">
+                              • {tokenItem.connectedDevice?.deviceType || (session as any)?.deviceType || "HP Siswa"}
+                            </span>
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-[#1a1a1c] text-slate-400 border border-slate-800 rounded-full font-normal text-[11px]">

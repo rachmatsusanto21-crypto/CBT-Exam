@@ -53,7 +53,7 @@ import { prepareStudentExamQuestions } from "../utils/shuffle";
 import { validateExamToken, normalizeToken, deduplicateStudentTokens } from "../utils/tokenValidator";
 import { getStudentTokens, saveActiveStudentSession } from "../utils/storage";
 import { broadcastLiveSession, subscribeToSessionResets } from "../utils/liveSync";
-import { syncStudentSessionToGAS } from "../utils/gasService";
+import { syncStudentSessionToGAS, pingStudentDevice } from "../utils/gasService";
 import {
   playExamTimeWarningSound,
   isSoundNotificationEnabled,
@@ -75,6 +75,24 @@ interface StudentSlideExamProps {
   requestedExamCode?: string | null;
 }
 
+/**
+ * Deteksi jenis perangkat siswa (HP Android, iPhone, Laptop, Tablet, Chromebook)
+ */
+function detectDeviceType(): string {
+  if (typeof navigator === "undefined") return "Perangkat Siswa";
+  const ua = navigator.userAgent || "";
+  if (/iPad|Tablet/i.test(ua)) return "Tablet";
+  if (/Android/i.test(ua)) {
+    return /Mobile/i.test(ua) ? "HP Android" : "Tablet Android";
+  }
+  if (/iPhone/i.test(ua)) return "iPhone";
+  if (/Windows/i.test(ua)) return "Laptop / PC Windows";
+  if (/Macintosh/i.test(ua)) return "MacBook / Mac";
+  if (/CrOS/i.test(ua)) return "Chromebook";
+  if (/Linux/i.test(ua)) return "Linux PC";
+  return "Smartphone";
+}
+
 export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
   exam,
   tokens,
@@ -89,6 +107,19 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
   onSwitchExam,
   requestedExamCode,
 }) => {
+  // Persistent Unique Device ID per browser session for accurate proctor detection
+  const deviceIdRef = useRef<string>(() => {
+    if (typeof window !== "undefined") {
+      let stored = sessionStorage.getItem("slideexam_device_id");
+      if (!stored) {
+        stored = `dev-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+        sessionStorage.setItem("slideexam_device_id", stored);
+      }
+      return stored;
+    }
+    return `dev-${Date.now()}`;
+  });
+
   // Available registered students roster from profile data (strictly deduplicated & isolated to current exam code and grade level)
   const availableStudents = React.useMemo(() => {
     let list: StudentTokenItem[] = [];
@@ -553,6 +584,91 @@ export const StudentSlideExam: React.FC<StudentSlideExamProps> = ({
 
     return () => clearInterval(interval);
   }, [isLoggedIn, isSubmitted, session?.id, currentSlideIndex, secondsRemaining, isTeacherTrial, exam.durationMinutes]);
+
+  // Active Student Device Detection & Presence Heartbeat
+  // Runs IMMEDIATELY from the moment the exam link is opened (even before login/start!)
+  useEffect(() => {
+    if (isTeacherTrial) return;
+
+    const deviceId = typeof deviceIdRef.current === "function" ? (deviceIdRef.current as any)() : deviceIdRef.current;
+    const deviceType = detectDeviceType();
+    const effectiveToken = loginToken || initialToken || exam.sessionToken || "";
+
+    const sendDevicePresencePing = () => {
+      const activeSess = sessionRef.current || session;
+      const currentStatus: "standby" | "in_progress" | "submitted" = isSubmitted
+        ? "submitted"
+        : isLoggedIn && activeSess
+        ? "in_progress"
+        : "standby";
+
+      const studentNameVal = loginStudentName.trim() || (activeSess ? activeSess.studentName : "");
+      const nisnVal = loginNisn.trim() || (activeSess ? activeSess.nisn : "");
+      const classVal = loginClass || (activeSess ? activeSess.className : "");
+
+      // 1. Send device ping to Express server & GAS
+      pingStudentDevice({
+        deviceId,
+        examCode: exam.code,
+        examId: exam.id,
+        token: effectiveToken,
+        studentName: studentNameVal,
+        nisn: nisnVal,
+        className: classVal,
+        deviceType,
+        browser: typeof navigator !== "undefined" ? navigator.userAgent : "",
+        status: currentStatus,
+      });
+
+      // 2. Local cross-tab broadcast for standby devices
+      if (!isLoggedIn) {
+        broadcastLiveSession({
+          id: `dev-${deviceId}`,
+          examId: exam.id,
+          examCode: exam.code,
+          examTitle: exam.title,
+          subject: exam.teacherProfile?.subject || "",
+          studentName: studentNameVal || "Siswa (Terhubung)",
+          nisn: nisnVal,
+          className: classVal,
+          token: effectiveToken,
+          status: "standby" as any,
+          currentSlideIndex: 0,
+          answers: {},
+          startTime: new Date().toISOString(),
+          timeSpentSeconds: 0,
+          totalScoreEarned: 0,
+          maxScore: 100,
+          percentage: 0,
+          passed: false,
+          deviceType,
+          isDeviceConnected: true,
+          lastHeartbeatAt: new Date().toISOString(),
+        } as any);
+      }
+    };
+
+    // Send immediate ping on load
+    sendDevicePresencePing();
+
+    // Heartbeat every 4 seconds
+    const interval = setInterval(sendDevicePresencePing, 4000);
+    return () => clearInterval(interval);
+  }, [
+    exam.code,
+    exam.id,
+    exam.sessionToken,
+    exam.title,
+    exam.teacherProfile?.subject,
+    initialToken,
+    loginToken,
+    loginStudentName,
+    loginNisn,
+    loginClass,
+    isLoggedIn,
+    isSubmitted,
+    isTeacherTrial,
+  ]);
 
   // Handle Timeout Auto-submit
   useEffect(() => {

@@ -541,22 +541,149 @@ export async function saveAiPengayaanRemidiToGAS(
 }
 
 /**
+ * Payload data kehadiran/heartbeat perangkat siswa
+ */
+export interface DevicePingPayload {
+  deviceId: string;
+  examCode: string;
+  examId?: string;
+  token?: string;
+  studentName?: string;
+  nisn?: string;
+  className?: string;
+  deviceType?: string;
+  browser?: string;
+  status: "standby" | "in_progress" | "submitted";
+}
+
+/**
+ * Kirim deteksi kehadiran perangkat siswa ke server dan GAS secara berkala
+ */
+export async function pingStudentDevice(info: DevicePingPayload): Promise<void> {
+  if (!info || !info.deviceId) return;
+
+  // 1. Rekam ke server lokal
+  try {
+    fetch("/api/devices/ping", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(info),
+    }).catch(() => {});
+  } catch {}
+
+  // 2. Jika GAS terhubung, kirim ping kehadiran perangkat ke Web App Google Apps Script
+  let targetGasUrl = cachedGasConfig.webAppUrl?.trim();
+  if (!targetGasUrl && typeof window !== "undefined") {
+    const searchParams = new URLSearchParams(window.location.search);
+    const urlGas = searchParams.get("gasUrl");
+    if (urlGas && urlGas.startsWith("http")) {
+      targetGasUrl = decodeURIComponent(urlGas).trim();
+      saveGasConfig({ webAppUrl: targetGasUrl, connected: true });
+    }
+  }
+
+  if (targetGasUrl) {
+    try {
+      callGasEndpoint("devicePing", info, "POST", targetGasUrl).catch(() => {});
+    } catch {}
+  }
+}
+
+/**
+ * Ambil daftar perangkat siswa yang sedang aktif/terhubung
+ */
+export async function fetchConnectedDevices(examCodeOrId?: string): Promise<any[]> {
+  const code = (examCodeOrId || "ALL").trim().toUpperCase();
+  try {
+    const res = await fetch(`/api/devices/by-exam/${encodeURIComponent(code)}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.success && Array.isArray(data.devices)) {
+        return data.devices;
+      }
+    }
+  } catch {}
+  return [];
+}
+
+/**
  * Ambil daftar sesi ujian siswa (Real-time Monitoring & Rekap Nilai)
+ * Mendukung pencarian dengan examCode resmi (misal 'PP-01') dan examId
  */
 export async function fetchExamSessions(
-  examCodeOrId?: string
+  examCodeOrId?: string,
+  fallbackIdOrCode?: string
 ): Promise<StudentExamSession[]> {
-  const code = (examCodeOrId || "ALL").trim().toUpperCase();
+  const param1 = (examCodeOrId || "").trim();
+  const param2 = (fallbackIdOrCode || "").trim();
+
+  // Pastikan kita mengetahui kode ujian yang sebenarnya (misal PP-01) vs ID internal (misal exam-172...)
+  let cleanCode = "ALL";
+  let cleanId = "";
+
+  if (param1 && !param1.startsWith("exam-") && !param1.startsWith("EXAM-") && param1 !== "ALL") {
+    cleanCode = param1.toUpperCase();
+    cleanId = param2;
+  } else if (param2 && !param2.startsWith("exam-") && !param2.startsWith("EXAM-")) {
+    cleanCode = param2.toUpperCase();
+    cleanId = param1;
+  } else if (param1) {
+    cleanCode = param1.toUpperCase();
+    cleanId = param2;
+  }
+
   const sessionMap = new Map<string, StudentExamSession>();
 
-  // 1. Ambil dari Server lokal
+  // 1. Ambil dari Server lokal dengan kedua parameter
   try {
-    const res = await fetch(`/api/sessions/by-exam/${encodeURIComponent(code)}`);
+    const queryUrl = `/api/sessions/by-exam/${encodeURIComponent(cleanCode)}?examCode=${encodeURIComponent(cleanCode)}&examId=${encodeURIComponent(cleanId)}`;
+    const res = await fetch(queryUrl);
     if (res.ok) {
       const data = await res.json();
       if (data.success && Array.isArray(data.sessions)) {
         data.sessions.forEach((s: StudentExamSession) => {
           if (s && s.id) sessionMap.set(s.id, s);
+        });
+      }
+
+      // Gabungkan perangkat standby jika belum ada sesi pengerjaan aktif
+      if (Array.isArray(data.devices)) {
+        data.devices.forEach((dev: any) => {
+          if (dev && dev.status === "standby") {
+            const devKey = `dev-${dev.deviceId}`;
+            // Cek apakah siswa dengan token/nama ini sudah punya sesi pengerjaan aktif
+            const hasActiveSession = Array.from(sessionMap.values()).some(
+              (s) =>
+                (dev.token && s.token && s.token.toUpperCase() === dev.token.toUpperCase()) ||
+                (dev.studentName && s.studentName && s.studentName.toLowerCase().trim() === dev.studentName.toLowerCase().trim())
+            );
+
+            if (!hasActiveSession && !sessionMap.has(devKey)) {
+              sessionMap.set(devKey, {
+                id: devKey,
+                examId: dev.examId || cleanId,
+                examCode: dev.examCode || cleanCode,
+                examTitle: "Ujian CBT (Standby)",
+                subject: "",
+                studentName: dev.studentName || "Siswa (Terhubung)",
+                nisn: dev.nisn || "",
+                className: dev.className || "",
+                token: dev.token || "",
+                currentSlideIndex: 0,
+                answers: {},
+                startTime: dev.lastSeenAt,
+                timeSpentSeconds: 0,
+                totalScoreEarned: 0,
+                maxScore: 100,
+                percentage: 0,
+                passed: false,
+                status: "standby" as any,
+                deviceType: dev.deviceType,
+                isDeviceConnected: true,
+                lastHeartbeatAt: dev.lastSeenAt,
+              } as any);
+            }
+          }
         });
       }
     }
@@ -567,7 +694,8 @@ export async function fetchExamSessions(
   // 2. Ambil dari Google Apps Script jika terhubung
   if (cachedGasConfig.connected && cachedGasConfig.webAppUrl) {
     try {
-      const gasData = await callGasEndpoint("getSessions", { examCode: code === "ALL" ? "" : code }, "GET");
+      const gasQueryCode = cleanCode === "ALL" ? "" : cleanCode;
+      const gasData = await callGasEndpoint("getSessions", { examCode: gasQueryCode }, "GET");
       if (gasData && gasData.success && Array.isArray(gasData.sessions)) {
         gasData.sessions.forEach((gs: any) => {
           if (gs && gs.id) {
